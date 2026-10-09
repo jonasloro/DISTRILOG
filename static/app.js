@@ -1735,23 +1735,31 @@ async function completeProcessing() {
 }
 
 async function renderDownstreamTab(sector) {
-  const key=sector==="ETIQUETAGEM"?"labeling":"storage", tabId=sector==="ETIQUETAGEM"?"tabLabelingBtn":"tabStorageBtn";
+  const key=sector==="ETIQUETAGEM"?"labeling":"storage",tabId=sector==="ETIQUETAGEM"?"tabLabelingBtn":"tabStorageBtn";
+  const wmsSector=sector==="ETIQUETAGEM"?"ET":"EC",sectorLabel=sector==="ETIQUETAGEM"?"Etiquetagem (ET)":"Estocagem (EC)";
   activateTab(tabId);
-  try { if(!downstreamUsers[sector].length) downstreamUsers[sector]=await api(`/api/downstream/users?sector=${sector}`); } catch(e){$("cardTab").innerHTML=`<div class="notice error">${esc(e.message)}</div>`;return;}
-  let op=cardData[key];
-  const allowed=[sector.toLowerCase(),"supervisor","admin"].includes(currentUser.role);
-  const importedItems=(cardData.items||[]).filter((item)=>item.source_stage===sector);
+  try{if(!downstreamUsers[sector].length)downstreamUsers[sector]=await api(`/api/downstream/users?sector=${sector}`);}
+  catch(e){$("cardTab").innerHTML=`<div class="notice error">${esc(e.message)}</div>`;return;}
+  const op=cardData[key],allowed=[sector.toLowerCase(),"supervisor","admin"].includes(currentUser.role);
+  const importedItems=(cardData.items||[]).filter(item=>item.source_stage===sector);
   if(!op?.id){
     if(cardData.source_snapshot_at&&cardData.current_sector!==sector&&!importedItems.length){renderImportedSectorSnapshot(tabId,[sector],`Itens localizados em ${sector==="ETIQUETAGEM"?"Etiquetagem":"Estocagem"}`);return;}
-    $("cardTab").innerHTML=`<div class="panel-body"><div class="notice"><b>${sector==="ETIQUETAGEM"?"Etiquetagem":"Estocagem"}</b><br>${cardData.purchase_mode==="GRADE"?"Cada colaborador assume um tamanho completo por vez.":"Saldo é dividido por quantidade geral, sem separar tamanhos."}${importedItems.length?`<br><b>${importedItems.length}</b> item(ns) disponível(is) nesta etapa; os demais itens da compra não serão alterados.`:""}</div>${allowed?`<div class="actions"><button class="primary" onclick="startDownstream('${sector}')">Iniciar controle</button></div>`:'<div class="notice warn">Entre com um perfil deste setor, Supervisor ou Administrador para iniciar.</div>'}</div>`; return;
+    $("cardTab").innerHTML=`<div class="panel-body"><div class="notice"><b>${sector==="ETIQUETAGEM"?"Etiquetagem":"Estocagem"}</b><br>
+      ${cardData.purchase_mode==="GRADE"?"Cada colaborador assume um tamanho completo por vez.":"Saldo é dividido por quantidade geral, sem separar tamanhos."}
+      ${importedItems.length?`<br><b>${importedItems.length}</b> item(ns) disponível(is) nesta etapa; os demais itens da compra não serão alterados.`:""}</div>
+      ${allowed?`<div class="actions"><button class="primary" onclick="startDownstream('${sector}')">Iniciar controle</button></div>`:'<div class="notice warn">Entre com um perfil deste setor, Supervisor ou Administrador para iniciar.</div>'}
+      <div class="wms-downstream-addresses"><h3 class="section-heading">Endereçamento WMS — ${sectorLabel}</h3><div id="posAllocBox" class="notice">Carregando endereços...</div></div></div>`;
+    loadPositionAllocator(cardData.id,wmsSector);return;
   }
-  const grade=op.purchase_mode==="GRADE", open=op.status==="ABERTO";
+  const grade=op.purchase_mode==="GRADE",open=op.status==="ABERTO";
   $("cardTab").innerHTML=`<div class="panel-body downstream-panel">
-    <div class="notice success-box"><b>${sector==="ETIQUETAGEM"?"Etiquetagem":"Estocagem"} • ${grade?"Grade":"Saldo"}</b><br>${grade?"Escolha e assuma somente um tamanho por vez. Tamanhos já assumidos ficam indisponíveis.":"Informe quantas peças deseja assumir do saldo geral disponível."}</div>
+    <div class="notice success-box"><b>${sector==="ETIQUETAGEM"?"Etiquetagem":"Estocagem"} • ${grade?"Grade":"Saldo"}</b><br>${grade?"Escolha e assuma somente um tamanho por vez. Tamanhos já assumidos ficam indisponíveis.":"Saldo é dividido por quantidade geral, sem separar tamanhos."}</div>
     <div class="summary-grid compact-summary"><div class="summary-box"><span>Prevista</span><strong>${op.totals.expected}</strong></div><div class="summary-box"><span>Assumida</span><strong>${op.totals.assigned}</strong></div><div class="summary-box"><span>Concluída</span><strong>${op.totals.completed}</strong></div><div class="summary-box"><span>Disponível</span><strong>${op.totals.available}</strong></div></div>
     ${open&&allowed?(grade?downstreamGradePicker(op,sector):downstreamSaldoPicker(op,sector)):""}
     <h3 class="section-heading">Em execução</h3>${op.assignments.length?op.assignments.map(a=>downstreamAssignmentHtml(a,sector,allowed&&open)).join(""):'<div class="notice">Nenhum material assumido.</div>'}
-    <div class="actions"><button class="success" ${op.totals.completed===op.totals.expected&&open&&allowed?"":"disabled"} onclick="completeDownstream(${op.id},'${sector}')">Concluir ${sector==="ETIQUETAGEM"?"Etiquetagem":"Estocagem"}</button></div></div>`;
+    <div class="actions"><button class="success" ${op.totals.completed===op.totals.expected&&open&&allowed?"":"disabled"} onclick="completeDownstream(${op.id},'${sector}')">Concluir ${sector==="ETIQUETAGEM"?"Etiquetagem":"Estocagem"}</button></div>
+    <div class="wms-downstream-addresses"><h3 class="section-heading">Endereçamento WMS — ${sectorLabel}</h3><div id="posAllocBox" class="notice">Carregando endereços...</div></div></div>`;
+  loadPositionAllocator(cardData.id,wmsSector);
 }
 
 function downstreamWorkerSelect(sector){
@@ -2462,7 +2470,10 @@ function itemAllocatedQty(itemId){
 }
 
 function globalItemAllocatedQty(itemId){
-  const rows=window.allocCtx?.status?.global_item_allocations||[];
+  const ctx=window.allocCtx;
+  const rows=ctx&&["ET","EC"].includes(ctx.setor)
+    ? (ctx.status?.item_allocations||[])
+    : (ctx?.status?.global_item_allocations||[]);
   const row=rows.find(function(r){return Number(r.item_id)===Number(itemId);});
   return Number(row?.total_alocado||0);
 }
@@ -2491,6 +2502,7 @@ function referenceSecondaryLabel(item){
 
 function renderAllocationItemPicker(){
   const ctx=window.allocCtx;
+  const unit=ctx&&["ET","EC"].includes(ctx.setor)?"peças":"volumes";
   const box=$("positionItemPicker");
   if(!ctx || !box) return;
   const items=allocationItemRows();
@@ -2510,7 +2522,7 @@ function renderAllocationItemPicker(){
           '<small>'+esc(referenceSecondaryLabel(item) || "Sem detalhe")+'</small>' +
         '</div>' +
         '<div class="allocation-item-numbers">' +
-          '<b>'+allocated.toLocaleString("pt-BR")+'</b><span>volumes alocados</span>' +
+          '<b>'+allocated.toLocaleString("pt-BR")+'</b><span>'+unit+' alocados</span>' +
           '<b>'+Number(item.expected_qty||0).toLocaleString("pt-BR")+'</b><span>peças da referência</span>' +
         '</div>' +
       '</button>';
@@ -2531,20 +2543,13 @@ function positionItemQty(address,itemId){
 
 
 function positionCellHtml(p,ctx){
-  const occupied=Number(p.ocupado||0);
-  const cardQty=positionCardQty(p.address);
-  const itemQty=ctx.selectedItemId ? positionItemQty(p.address,ctx.selectedItemId) : 0;
+  const occupied=Number(p.ocupado||0),unit=ctx&&["ET","EC"].includes(ctx.setor)?"peça(s)":"volume(s)";
+  const cardQty=positionCardQty(p.address),itemQty=ctx.selectedItemId?positionItemQty(p.address,ctx.selectedItemId):0;
   const selected=ctx.selectedAddress===p.address;
-  const classes=[
-    "position-cell",
-    occupied>0?"is-occupied":"is-free",
-    cardQty>0?"is-card":"",
-    itemQty>0?"is-item":"",
-    selected?"is-selected":""
-  ].filter(Boolean).join(" ");
-  const title=(ctx.selectedItemId && itemQty>0)
-    ? p.address+" • "+itemQty+" volume(s) desta referência • "+occupied+" volume(s) no setor"
-    : p.address+" • "+occupied+" volume(s) no setor";
+  const classes=["position-cell",occupied>0?"is-occupied":"is-free",cardQty>0?"is-card":"",itemQty>0?"is-item":"",selected?"is-selected":""].filter(Boolean).join(" ");
+  const title=(ctx.selectedItemId&&itemQty>0)
+    ?p.address+" • "+itemQty+" "+unit+" desta referência • "+occupied+" "+unit+" no setor"
+    :p.address+" • "+occupied+" "+unit+" no setor";
   return '<button type="button" class="'+classes+'" title="'+esc(title)+'" onclick="selectAllocationPosition(\''+esc(p.address)+'\')">' +
     '<span class="position-level">'+esc(p.nivel)+'</span>' +
     '<strong>'+esc(p.address)+'</strong>' +
@@ -2667,13 +2672,14 @@ async function loadPositionAllocator(cardId,setor){
   const opIds=(rcv.operation_items||[]).map(function(i){return Number(i.id);}).filter(Boolean);
   const sourceItems=opIds.length?items.filter(function(i){return opIds.includes(Number(i.id));}):items;
   const receivingVolumes=Number(rcv.volumes||0);
-  const sourceTotal=receivingVolumes;
+  const isPieceSector=["ET","EC"].includes(setor);
+  const sourceTotal=isPieceSector?sourceItems.reduce(function(sum,item){return sum+Number(item.expected_qty||0);},0):receivingVolumes;
   const firstAvailable=sourceItems[0] || null;
   const firstAllocated=status.item_allocations?.find(function(i){return Number(i.total_alocado||0)>0;}) || null;
 
   window.allocCtx={
-    cardId:cardId,setor:setor,
-    remaining:Math.max(0,sourceTotal-Number(status.global_total_alocado||0)),
+    cardId:cardId,setor:setor,sourceTotal:sourceTotal,
+    remaining:Math.max(0,sourceTotal-Number(isPieceSector?status.total_alocado:status.global_total_alocado||0)),
     positions:positions,status:status,suggestion:suggestion,
     selectedItemId:Number(firstAvailable?.id||firstAllocated?.item_id||0),
     selectedAddress:suggestion?.address||firstAllocated?.posicoes?.[0]?.address||"",
@@ -2685,18 +2691,18 @@ async function loadPositionAllocator(cardId,setor){
     '<div class="position-allocator">' +
       '<div class="position-allocator-head">' +
         '<div><div class="position-kicker">ENDEREÇAMENTO FÍSICO</div>' +
-          '<h3>'+({RM:"Alocar no Recebimento",QA:"Alocar na Qualidade",PR:"Alocar no Processamento"}[setor]||("Alocar no "+setor))+'</h3>' +
-          '<p>Escolha primeiro a referência, depois a posição. O controle desta etapa é feito em volumes da referência.</p>' +
+          '<h3>'+({RM:"Alocar no Recebimento",QA:"Alocar na Qualidade",PR:"Alocar no Processamento",ET:"Alocar na Etiquetagem",EC:"Alocar na Estocagem"}[setor]||("Alocar no "+setor))+'</h3>' +
+          '<p>Escolha primeiro a referência, depois a posição. O controle é feito em '+(isPieceSector?"peças":"volumes")+' da referência.</p>' +
           '<div class="position-dest"><label for="positionDestSetor">Destino</label>' +
             '<select id="positionDestSetor" onchange="changeAllocDestination(this.value)">'+
-              [["RM","Recebimento (RM)"],["QA","Qualidade (QA)"],["PR","Processamento (PR)"]].map(function(o){
+              [["RM","Recebimento (RM)"],["QA","Qualidade (QA)"],["PR","Processamento (PR)"],["ET","Etiquetagem (ET)"],["EC","Estocagem (EC)"]].map(function(o){
                 return '<option value="'+o[0]+'"'+(o[0]===setor?' selected':'')+'>'+o[1]+'</option>';
               }).join("")+
-            '</select><small>O saldo do Card é único: o que for alocado em qualquer destino sai do mesmo total.</small></div>' +
+            '</select><small>'+(isPieceSector?"Saldo em peças nesta área.":"Saldo em volumes compartilhado entre RM, QA e PR.")+'</small></div>' +
         '</div>' +
         '<div class="position-suggest">'+
           (suggestion?'<span>SUGESTÃO AUTOMÁTICA</span><b>'+esc(suggestion.address)+'</b><small>'+
-            Number(suggestion.ocupado||0).toLocaleString("pt-BR")+' volume(s) já ocupado(s)</small>':
+            Number(suggestion.ocupado||0).toLocaleString("pt-BR")+' '+(isPieceSector?"peça(s)":"volume(s)")+' já ocupado(s)</small>':
             '<span>SEM SUGESTÃO DISPONÍVEL</span>')+
         '</div>' +
       '</div>' +
@@ -2707,13 +2713,13 @@ async function loadPositionAllocator(cardId,setor){
       '</div>' +
 
       '<div class="position-stat-grid">' +
-        '<div class="position-stat"><span>Total alocado</span><strong id="positionAllocatedTotal">'+Number(status.global_total_alocado||0).toLocaleString("pt-BR")+
-          '</strong><small>volumes globais · RM '+Number(status.global_por_setor?.RM||0).toLocaleString("pt-BR")+
+        '<div class="position-stat"><span>Total alocado</span><strong id="positionAllocatedTotal">'+Number(isPieceSector?status.total_alocado:status.global_total_alocado||0).toLocaleString("pt-BR")+
+          '</strong><small>'+(isPieceSector?"peças alocadas em "+setor:"volumes globais · RM "+Number(status.global_por_setor?.RM||0).toLocaleString("pt-BR")+
           ' · QA '+Number(status.global_por_setor?.QA||0).toLocaleString("pt-BR")+
-          ' · PR '+Number(status.global_por_setor?.PR||0).toLocaleString("pt-BR")+'</small></div>' +
+          ' · PR '+Number(status.global_por_setor?.PR||0).toLocaleString("pt-BR"))+'</small></div>' +
         '<div class="position-stat"><span>Posições usadas</span><strong id="positionUsedCount">'+(status.posicoes?.length||0)+
           '</strong><small>endereços</small></div>' +
-        '<div class="position-stat"><span>Saldo da referência</span><strong id="positionReferenceRemainingStat">—</strong><small>volumes restantes</small></div>' +
+        '<div class="position-stat"><span>Saldo da referência</span><strong id="positionReferenceRemainingStat">—</strong><small>'+(isPieceSector?"peças restantes":"volumes restantes")+'</small></div>' +
       '</div>' +
 
       '<div class="position-controls">' +
@@ -2734,7 +2740,7 @@ async function loadPositionAllocator(cardId,setor){
           esc(firstAvailable?referenceDetailLabel(firstAvailable):"Nenhuma")+'</strong><small id="positionReferenceRemainingLabel"></small><em id="positionSelectedLabel">'+
           esc(window.allocCtx.selectedAddress||"Nenhuma")+'</em></div>' +
         '<div class="position-editor-fields">' +
-          '<div class="field"><label>Volumes nessa posição</label><input id="posQty" type="number" min="1" placeholder="Ex.: 30" oninput="updateAllocHint()"><small id="posHint" class="muted">Saldo da referência: '+(firstAvailable?itemRemainingQty(firstAvailable).toLocaleString("pt-BR"):"—")+' volumes</small></div>' +
+          '<div class="field"><label>'+(isPieceSector?"Peças nesta posição":"Volumes nessa posição")+'</label><input id="posQty" type="number" min="1" placeholder="Ex.: 30" oninput="updateAllocHint()"><small id="posHint" class="muted">Saldo da referência: '+(firstAvailable?itemRemainingQty(firstAvailable).toLocaleString("pt-BR"):"—")+' '+(isPieceSector?"peças":"volumes")+'</small></div>' +
           '<div class="position-editor-action"><button class="primary" onclick="submitAllocation('+cardId+',\''+setor+'\')">+ Alocar referência</button></div>' +
         '</div>' +
       '</div>' +
@@ -2760,16 +2766,18 @@ function changeAllocDestination(setor){
 function updateReferenceRemaining(){
   const ctx=window.allocCtx;
   const item=selectedAllocationItem();
-  if(!ctx||!item) return;
-  const remaining=itemRemainingQty(item);
-  if($("positionReferenceRemainingStat")) $("positionReferenceRemainingStat").textContent=globalItemAllocatedQty(item.id).toLocaleString("pt-BR");
-  if($("positionReferenceRemainingLabel")) $("positionReferenceRemainingLabel").textContent=globalItemAllocatedQty(item.id).toLocaleString("pt-BR")+" volumes alocados globalmente";
-  if($("positionSelectedItemLabel")) $("positionSelectedItemLabel").textContent=referenceDetailLabel(item);
+  if(!ctx||!item)return;
+  const allocated=globalItemAllocatedQty(item.id),remaining=itemRemainingQty(item);
+  const unit=["ET","EC"].includes(ctx.setor)?"peças":"volumes";
+  if($("positionReferenceRemainingStat"))$("positionReferenceRemainingStat").textContent=remaining.toLocaleString("pt-BR");
+  if($("positionReferenceRemainingLabel"))$("positionReferenceRemainingLabel").textContent=allocated.toLocaleString("pt-BR")+" "+unit+(unit==="peças"?" alocadas neste setor":" alocados globalmente");
+  if($("positionSelectedItemLabel"))$("positionSelectedItemLabel").textContent=referenceDetailLabel(item);
 }
 
 function renderCurrentItemAllocations(){
   const box=$("positionCurrentAllocations");
   const ctx=window.allocCtx;
+  const unit=ctx&&["ET","EC"].includes(ctx.setor)?"peças":"volumes";
   if(!box||!ctx) return;
   const rows=(ctx.status?.item_allocations||[]);
   if(!rows.length){
@@ -2779,69 +2787,43 @@ function renderCurrentItemAllocations(){
   box.innerHTML=rows.map(function(row){
     return '<div class="reference-allocation-summary">' +
       '<div><b>'+esc(referenceDetailLabel(row))+'</b><small>'+(row.product?esc(row.product):"")+'</small></div>' +
-      '<strong>'+Number(row.total_alocado||0).toLocaleString("pt-BR")+' volumes</strong>' +
+      '<strong>'+Number(row.total_alocado||0).toLocaleString("pt-BR")+' '+unit+'</strong>' +
       '<div class="reference-allocation-addresses">'+(row.posicoes||[]).map(function(p){
         return '<button type="button" onclick="selectAllocationItem('+Number(row.item_id)+');selectAllocationPosition(\''+esc(p.address)+'\')">'+
-          esc(p.address)+' · '+Number(p.quantidade||0).toLocaleString("pt-BR")+' volumes</button>';
+          esc(p.address)+' · '+Number(p.quantidade||0).toLocaleString("pt-BR")+' '+unit+'</button>';
       }).join("")+'</div>' +
     '</div>';
   }).join("");
 }
 
 function updateAllocHint(){
-  const el=$("posHint");
-  const ctx=window.allocCtx;
-  const item=selectedAllocationItem();
+  const el=$("posHint"),ctx=window.allocCtx,item=selectedAllocationItem();
   if(!el||!ctx||!item)return;
-  const raw=Number($("posQty")?.value||0);
-  el.textContent="Volumes restantes no Card: "+Number(ctx.remaining||0).toLocaleString("pt-BR");
-  if(raw>Number(ctx.remaining||0)) el.textContent+=" — quantidade acima do saldo do Card.";
+  const raw=Number($("posQty")?.value||0),unit=["ET","EC"].includes(ctx.setor)?"peças":"volumes";
+  el.textContent=(unit==="peças"?"Peças restantes nesta referência: ":"Volumes restantes no Card: ")+Number(ctx.remaining||0).toLocaleString("pt-BR");
+  if(raw>Number(ctx.remaining||0))el.textContent+=" — quantidade acima do saldo disponível.";
   updateReferenceRemaining();
 }
 
 async function submitAllocation(cardId,setor){
-  const ctx=window.allocCtx||{};
-  const item=selectedAllocationItem();
-  const address=ctx.selectedAddress||"";
-  const qty=Number($("posQty")?.value||0);
-  if(!item){
-    toast("Selecione a referência que será alocada.");
-    return;
-  }
-  if(!address){
-    toast("Clique em uma posição no mapa.");
-    return;
-  }
-  if(qty<=0){
-    toast("Informe a quantidade para esta referência.");
-    return;
-  }
-  if(ctx.remaining<=0){
-    toast("Não há mais volumes disponíveis para este Card.");
-    return;
-  }
-  if(qty>ctx.remaining){
-    toast("A quantidade ultrapassa o saldo de "+ctx.remaining.toLocaleString("pt-BR")+" volume(s) do Card.");
-    return;
-  }
+  const ctx=window.allocCtx||{},item=selectedAllocationItem(),address=ctx.selectedAddress||"",qty=Number($("posQty")?.value||0);
+  const isPieceSector=["ET","EC"].includes(setor),unit=isPieceSector?"peça(s)":"volume(s)";
+  if(!item){toast("Selecione a referência que será alocada.");return;}
+  if(!address){toast("Clique em uma posição no mapa.");return;}
+  if(qty<=0){toast("Informe a quantidade para esta referência.");return;}
+  if(ctx.remaining<=0){toast(isPieceSector?"Não há mais peças disponíveis nesta referência.":"Não há mais volumes disponíveis para este Card.");return;}
+  if(qty>ctx.remaining){toast("A quantidade ultrapassa o saldo de "+ctx.remaining.toLocaleString("pt-BR")+" "+unit+" disponíveis.");return;}
   try{
     const result=await api("/api/positions/cards/"+cardId+"/allocate",{
-      method:"POST",
-      body:JSON.stringify({
-        setor:setor,
-        responsavel:currentUser?.name,
-        allocations:[{item_id:Number(item.id),address:address,quantidade:qty}]
-      })
+      method:"POST",body:JSON.stringify({setor:setor,responsavel:currentUser?.name,allocations:[{item_id:Number(item.id),address:address,quantidade:qty}]})
     });
     ctx.status=result;
-    ctx.remaining=Math.max(0,Number(cardData?.receiving?.volumes||0)-Number(result.global_total_alocado||0));
+    ctx.remaining=Math.max(0,Number(ctx.sourceTotal||0)-Number(isPieceSector?result.total_alocado:result.global_total_alocado||0));
+    ctx.positions=await api("/api/positions?setor="+setor);
     $("posQty").value="";
-    toast("Referência "+referenceLabel(item)+" alocada em "+address+" com "+qty.toLocaleString("pt-BR")+" volume(s).");
-    renderAllocationItemPicker();
-    renderCurrentItemAllocations();
-    updateReferenceRemaining();
-    renderPositionMap();
-  }catch(e){
-    toast(e.message);
-  }
+    if($("positionAllocatedTotal"))$("positionAllocatedTotal").textContent=Number(isPieceSector?result.total_alocado:result.global_total_alocado||0).toLocaleString("pt-BR");
+    if($("positionUsedCount"))$("positionUsedCount").textContent=String(result.posicoes?.length||0);
+    toast("Referência "+referenceLabel(item)+" alocada em "+address+" com "+qty.toLocaleString("pt-BR")+" "+unit+".");
+    renderAllocationItemPicker();renderCurrentItemAllocations();updateReferenceRemaining();renderPositionMap();
+  }catch(e){toast(e.message);}
 }
