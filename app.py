@@ -1,28 +1,2342 @@
 from __future__ import annotations
 
+import json
+import math
 import os
+import re
+import sqlite3
+import unicodedata
+import uuid
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
+from typing import Any, Optional
 
-from fastapi import FastAPI
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+from openpyxl import load_workbook
+
+from quality_module import init_quality_db, quality_card_data, register_quality_routes
+from processing_module import init_processing_db, processing_card_data, register_processing_routes
+from downstream_module import downstream_card_data, init_downstream_db, register_downstream_routes
+from production_module import init_production_db, register_production_routes
+from processing_module import ensure_worker_function_column
+from goat_module import init_goat_db, register_goat_routes
+from positions_module import init_positions_db, register_positions_routes, total_allocated, item_allocation_totals
+from collab_module import init_collab_db, register_collab_routes
+from unified_module import init_unified_db, register_unified_routes
+from supabase_module import (
+    verificar_login_supabase,
+    seed_usuarios_supabase,
+    seed_warehouse_supabase,
+    bootstrap_card_persistence,
+    sync_all_cards_to_supabase,
+    sync_card_items_to_supabase,
+    sync_all_receiving_state_to_supabase,
+    delete_card_from_supabase,
+)
+from warehouse_structure import gerar_todos_casulos
 
 BASE_DIR = Path(__file__).resolve().parent
-app = FastAPI(title="DistriLog — interface demonstrativa", version="0.1.0")
+DATA_DIR = Path(os.getenv("OUTLOG_DATA_DIR", str(BASE_DIR / "data"))).resolve()
+UPLOAD_DIR = DATA_DIR / "uploads"
+DB_PATH = DATA_DIR / "controle_logistica.db"
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+app = FastAPI(title="DistriLog - Operação Logística Integrada", version="3.1.0")
+
+
+@app.middleware("http")
+async def disable_stale_interface_cache(request: Request, call_next):
+    response = await call_next(request)
+    if request.url.path == "/" or request.url.path.startswith("/static/"):
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
+
+
+@app.middleware("http")
+async def persist_card_state(request: Request, call_next):
+    allocation_card_id = None
+    allocation_path = request.method == "POST" and request.url.path.startswith("/api/positions/cards/") and request.url.path.endswith("/allocate")
+    if allocation_path:
+        try:
+            allocation_card_id = int(request.url.path.rstrip("/").split("/")[-2])
+        except (TypeError, ValueError):
+            allocation_card_id = None
+
+    if allocation_card_id:
+        try:
+            con = db_connect()
+            sync_card_items_to_supabase(con, allocation_card_id)
+            con.close()
+        except Exception as e:
+            print(f"[aviso] não consegui sincronizar os itens do Card {allocation_card_id} antes da alocação: {e}")
+
+    response = await call_next(request)
+    if (
+        request.method in {"POST", "PUT", "PATCH", "DELETE"}
+        and request.url.path.startswith("/api/")
+    ):
+        try:
+            con = db_connect()
+            sync_all_cards_to_supabase(
+                con,
+                include_items=request.url.path == "/api/import-excel",
+            )
+            sync_all_receiving_state_to_supabase(con)
+            con.close()
+        except Exception as e:
+            print(f"[aviso] não consegui sincronizar cards com o Supabase: {e}")
+    return response
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
+app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
+templates = Jinja2Templates(directory=BASE_DIR / "templates")
+
+KANBAN_TRANSITO = "1.3 Compras - Em Trânsito"
+
+STATUS_LABELS = {
+    "EM_TRANSITO": "Em trânsito",
+    "AGUARDANDO_RECEBIMENTO": "Aguardando recebimento",
+    "RECEBIMENTO_FISICO_CONCLUIDO_10_PENDENTE": "Recebimento físico concluído — 10% pendente",
+    "SEPARACAO_10_CONCLUIDA_RECEBIMENTO_PENDENTE": "10% concluído — recebimento físico pendente",
+    "RECEBIMENTO_CONCLUIDO": "Recebimento concluído",
+    "AGUARDANDO_QUALIDADE": "Aguardando inspeção",
+    "AGUARDANDO_DESPACHO_COSTURA": "Aguardando despacho para Costura",
+    "EM_COSTURA_CD01": "Em Costura",
+    "DESPACHO_CD02": "Despacho CD02",
+    "AGUARDANDO_RECEBIMENTO_RETORNO": "Aguardando recebimento do retorno",
+    "RETORNO_CONCLUIDO": "Retorno concluído — aguardando inspeção",
+    "RETORNO_FISICO_CONCLUIDO_10_PENDENTE": "Retorno recebido — separação dos 10% pendente",
+    "SEPARACAO_RETORNO_10_CONCLUIDA_FISICO_PENDENTE": "10% do retorno separados — recebimento pendente",
+    "AGUARDANDO_INSPECAO": "Aguardando inspeção",
+    "EM_INSPECAO": "Em inspeção",
+    "INSPECAO_PAUSADA": "Inspeção pausada",
+    "AGUARDANDO_CONCLUSAO_QUALIDADE": "Aguardando conclusão da Qualidade",
+    "AGUARDANDO_PROCESSAMENTO": "Aguardando Processamento",
+    "AGUARDANDO_INICIO_PROCESSAMENTO": "Aguardando início do Processamento",
+    "EM_PROCESSAMENTO": "Em Processamento",
+    "PROCESSAMENTO_PAUSADO": "Processamento pausado",
+    "AGUARDANDO_CONCLUSAO_PROCESSAMENTO": "Aguardando conclusão do Processamento",
+    "AGUARDANDO_TRIAGEM": "Aguardando Triagem",
+    "AGUARDANDO_ETIQUETAGEM": "Aguardando Etiquetagem",
+    "AGUARDANDO_ESTOCAGEM": "Aguardando Estocagem",
+    "FINALIZADO": "Finalizado",
+    "ORIGEM_FORNECEDOR": "No fornecedor",
+    "ORIGEM_TRANSITO": "Em trânsito",
+    "ORIGEM_QUALIDADE": "Na Qualidade",
+    "ORIGEM_PCP_CONFIGURAR": "PCP — configurar aviamento",
+    "ORIGEM_AGUARDANDO_COSTURA": "Aguardando envio à Costura",
+    "ORIGEM_COSTURA": "Em Costura",
+    "ORIGEM_RETORNO_COSTURA": "Retornou da Costura",
+    "ORIGEM_PROCESSAMENTO": "Área de Processamento",
+    "ORIGEM_ESTOCAGEM": "Em Estocagem",
+    "ORIGEM_MISTO": "Itens em etapas diferentes",
+}
+
+# Cards que ainda não chegaram ao CD: ficam na aba Recebimento até o operador marcar a chegada.
+TRANSIT_STATUSES = {"EM_TRANSITO", "ORIGEM_TRANSITO"}
+
+RECEIVING_STATUSES = {
+    "AGUARDANDO_RECEBIMENTO",
+    "RECEBIMENTO_FISICO_CONCLUIDO_10_PENDENTE",
+    "SEPARACAO_10_CONCLUIDA_RECEBIMENTO_PENDENTE",
+    "AGUARDANDO_DESPACHO_COSTURA",
+    "AGUARDANDO_RECEBIMENTO_RETORNO",
+    "RETORNO_FISICO_CONCLUIDO_10_PENDENTE",
+    "SEPARACAO_RETORNO_10_CONCLUIDA_FISICO_PENDENTE",
+}
 
 
-@app.get("/")
-def index() -> FileResponse:
-    return FileResponse(BASE_DIR / "templates" / "index.html")
+def db_connect() -> sqlite3.Connection:
+    con = sqlite3.connect(DB_PATH, timeout=10)
+    con.row_factory = sqlite3.Row
+    con.execute("PRAGMA foreign_keys=ON")
+    con.execute("PRAGMA journal_mode=WAL")
+    con.execute("PRAGMA synchronous=NORMAL")
+    return con
+
+
+def iso_now() -> str:
+    return datetime.now().replace(microsecond=0).isoformat()
+
+
+def normalize_text(value: Any) -> str:
+    text = "" if value is None else str(value).strip()
+    return "".join(
+        ch for ch in unicodedata.normalize("NFD", text.lower())
+        if unicodedata.category(ch) != "Mn"
+    )
+
+
+def normalize_header(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]", "", normalize_text(value))
+
+
+
+
+def _clean_sgo_quantity(value: Any) -> Optional[int]:
+    text = "" if value is None else str(value).strip()
+    if not text:
+        return None
+    compact = text.replace(" ", "")
+    # Quantidade humana do SGO: 2.136 = 2136, 2.136,5 não é usada
+    # como quantidade operacional de referência.
+    if re.fullmatch(r"\d{1,3}(?:\.\d{3})+", compact):
+        return int(compact.replace(".", ""))
+    if re.fullmatch(r"\d+", compact):
+        return int(compact)
+    return None
+
+
+def reference_blocks_from_copied_product(value: Any) -> list[dict[str, Any]]:
+    """Destrincha um bloco copiado do SGO em referências independentes.
+    
+    Exemplo esperado:
+        Lote 349.b
+        CONJUNTO Fem AUREAN ROAD MEL 22096-BLUSA
+        258.451.11.35.22096-BLUSA
+        No envio 456
+        ...
+    """
+    text = "" if value is None else str(value)
+    text = re.sub(r"<br\s*/?>", "\n", text, flags=re.I).replace("**", "")
+    lines = [line.strip(" |\t") for line in text.splitlines() if line.strip(" |\t")]
+    if not lines:
+        return []
+
+    def is_technical_code(label: str) -> bool:
+        return bool(re.fullmatch(r"(?:\d+[.]){2,}\d+(?:[-_/][A-Za-z0-9À-ÿ._/-]+)?", label))
+
+    def is_noise(label: str) -> bool:
+        normalized = normalize_text(label)
+        return (
+            not normalized
+            or normalized.startswith(("no envio", "lote ", "id=", "sku ",
+                                       "codigo ", "código ", "total "))
+            or normalized in {"produto", "referencia", "referência"}
+        )
+
+    ref_pattern = re.compile(
+        r"\b(?:\d{4,8}|[A-Za-zÀ-ÿ]{2,}\d{2,})-[A-Za-zÀ-ÿ0-9._/-]+\b"
+    )
+    blocks: list[dict[str, Any]] = []
+
+    for idx, line in enumerate(lines):
+        if is_noise(line) or is_technical_code(line):
+            continue
+        if not ref_pattern.search(line):
+            continue
+
+        block = {
+            "reference": line,
+            "sku": None,
+            "expected_qty": None,
+        }
+
+        for look in lines[idx + 1: idx + 8]:
+            if ref_pattern.search(look) and not is_technical_code(look):
+                break
+            if block["sku"] is None and is_technical_code(look):
+                block["sku"] = look
+                continue
+            match_qty = re.search(
+                r"\bno\s+envio\b\s*[:\-]?\s*([0-9][0-9.,]*)",
+                look,
+                flags=re.I,
+            )
+            if match_qty:
+                block["expected_qty"] = _clean_sgo_quantity(match_qty.group(1))
+                break
+            if block["sku"] is not None and re.fullmatch(r"\d{1,3}(?:\.\d{3})*|\d+", look):
+                block["expected_qty"] = _clean_sgo_quantity(look)
+                break
+
+        blocks.append(block)
+
+    return blocks
+
+
+def reference_from_copied_product(value: Any, explicit_reference: Any = "") -> str:
+    """Extrai uma única referência comercial de um texto bruto do SGO."""
+    blocks = reference_blocks_from_copied_product(value)
+    if blocks:
+        return blocks[0]["reference"]
+
+    text = "" if value is None else str(value)
+    text = re.sub(r"<br\s*/?>", "\n", text, flags=re.I).replace("**", "")
+
+    def is_technical_code(label: str) -> bool:
+        return bool(re.fullmatch(r"(?:\d+[.]){2,}\d+(?:[-_/][A-Za-z0-9À-ÿ._/-]+)?", label))
+
+    def is_source_noise(label: str) -> bool:
+        normalized = normalize_text(label)
+        return (
+            not normalized
+            or normalized.startswith(("no envio", "lote ", "id=", "sku ",
+                                       "codigo ", "código ", "total "))
+            or normalized in {"produto", "referencia", "referência"}
+            or bool(re.fullmatch(r"\d+", normalized))
+        )
+
+    for line in [line.strip(" |\t") for line in text.splitlines() if line.strip(" |\t")]:
+        if not is_technical_code(line) and not is_source_noise(line):
+            return line
+
+    fallback = "" if explicit_reference is None else str(explicit_reference).strip()
+    if fallback and not is_technical_code(fallback) and not is_source_noise(fallback):
+        return fallback
+    return ""
+
+
+def reference_from_import_row(row: tuple[Any, ...], headers: dict[str, int]) -> str:
+    """Procura a referência comercial em toda a linha importada."""
+    priority_names = (
+        "produto", "descricao", "descrição", "mercadoria",
+        "referencia", "referência", "grupo",
+    )
+    candidates: list[tuple[int, str]] = []
+
+    for name in priority_names:
+        idx = headers.get(normalize_header(name))
+        if idx is None or idx >= len(row):
+            continue
+        raw = row[idx]
+        candidate = reference_from_copied_product(raw)
+        if candidate:
+            score = 100
+            if re.search(r"\b(?:\d{4,8}|[A-Za-zÀ-ÿ]{2,}\d{2,})-[A-Za-zÀ-ÿ0-9._/-]+\b", candidate):
+                score += 50
+            candidates.append((score, candidate))
+
+    for raw in row:
+        candidate = reference_from_copied_product(raw)
+        if not candidate:
+            continue
+        score = 10
+        if re.search(r"\b(?:\d{4,8}|[A-Za-zÀ-ÿ]{2,}\d{2,})-[A-Za-zÀ-ÿ0-9._/-]+\b", candidate):
+            score += 80
+        if len(candidate.split()) >= 3:
+            score += 10
+        candidates.append((score, candidate))
+
+    if candidates:
+        candidates.sort(key=lambda pair: (-pair[0], -len(pair[1])))
+        return candidates[0][1]
+    return ""
+
+
+def kanban_matches(value: Any) -> bool:
+    return normalize_text(value) == normalize_text(KANBAN_TRANSITO)
+
+
+def purchase_mode_from_type(value: Any) -> Optional[str]:
+    text = normalize_text(value)
+    if "private label" in text or "privatelabel" in text:
+        return "GRADE"
+    if "saldo" in text:
+        return "SALDO"
+    return None
+
+
+def source_stage_from_row(values: dict[str, Any]) -> str:
+    kanban = normalize_text(values.get("status_kanban"))
+    logistics = normalize_text(values.get("status_logistics"))
+    pcp = normalize_text(values.get("status_pcp"))
+    quality = normalize_text(values.get("status_quality"))
+    lot = normalize_text(values.get("status_lot"))
+    purchase = normalize_text(values.get("status_purchase"))
+    phase = normalize_text(values.get("inspection_phase"))
+    if "em estocagem" in logistics or kanban.startswith("5.3"):
+        return "ESTOCAGEM"
+    if "area de processamento" in logistics or kanban.startswith("5.2"):
+        return "PROCESSAMENTO"
+    if "aguardando processamento" in logistics or kanban.startswith("5.1"):
+        return "AGUARDANDO_PROCESSAMENTO"
+    if "em aviamento" in pcp or kanban.startswith("3.3"):
+        return "EM_COSTURA"
+    if "aguardando envio" in pcp or kanban.startswith("3.2"):
+        return "AGUARDANDO_COSTURA"
+    if "configurar aviamento" in pcp or kanban.startswith("3.1"):
+        return "PCP_CONFIGURAR"
+    if "concluido" in pcp and phase == "customization":
+        return "RETORNO_COSTURA"
+    if "retrabalho" in quality or "retrabalho" in lot or kanban.startswith("2.0"):
+        return "QUALIDADE_RETRABALHO"
+    if "reprovado" in quality or "rejeitado" in lot or kanban.startswith("9.2"):
+        return "QUALIDADE_REJEITADO"
+    if "inspecao" in quality or "aguardando inspecao" in lot or kanban.startswith("2.1"):
+        return "QUALIDADE"
+    if kanban.startswith("1.3") or "transito" in purchase:
+        return "TRANSITO"
+    if kanban.startswith("1.2") or "fornecedor" in purchase:
+        return "FORNECEDOR"
+    if kanban.startswith("6.0") or "concluido" in logistics or "concluido" in purchase:
+        return "CONCLUIDO"
+    return "NAO_CLASSIFICADO"
+
+
+def card_source_status(stages: set[str]) -> tuple[str, str]:
+    active = {stage for stage in stages if stage not in {"CONCLUIDO", "NAO_CLASSIFICADO"}}
+    if len(active) > 1:
+        return "ORIGEM_MISTO", " / ".join(sorted(active))
+    stage = next(iter(active or stages or {"NAO_CLASSIFICADO"}))
+    mapping = {
+        "FORNECEDOR":"ORIGEM_FORNECEDOR", "TRANSITO":"ORIGEM_TRANSITO",
+        "QUALIDADE":"ORIGEM_QUALIDADE", "QUALIDADE_RETRABALHO":"ORIGEM_QUALIDADE",
+        "QUALIDADE_REJEITADO":"ORIGEM_QUALIDADE", "PCP_CONFIGURAR":"ORIGEM_PCP_CONFIGURAR",
+        "AGUARDANDO_COSTURA":"ORIGEM_AGUARDANDO_COSTURA", "EM_COSTURA":"ORIGEM_COSTURA",
+        "RETORNO_COSTURA":"ORIGEM_RETORNO_COSTURA", "AGUARDANDO_PROCESSAMENTO":"AGUARDANDO_PROCESSAMENTO",
+        "PROCESSAMENTO":"ORIGEM_PROCESSAMENTO", "ESTOCAGEM":"ORIGEM_ESTOCAGEM",
+        "CONCLUIDO":"FINALIZADO", "NAO_CLASSIFICADO":"AGUARDANDO_RECEBIMENTO",
+    }
+    return mapping.get(stage, "ORIGEM_MISTO"), stage
+
+
+def imported_card_route(stages: set[str]) -> tuple[str, str]:
+    """O Recebimento mantém a visão-mãe; os demais setores usam as etapas dos itens."""
+    status, _ = card_source_status(stages)
+    return "RECEBIMENTO", status
+
+
+def is_cd02(value: Any) -> bool:
+    return re.sub(r"[^a-z0-9]", "", normalize_text(value)) in {"cd2", "cd02"}
+
+
+def delete_card_with_downstream(con: sqlite3.Connection, card_id: int) -> None:
+    """Remove primeiro os registros V8, cujas tabelas antigas não possuíam cascade."""
+    operation_ids = [row["id"] for row in con.execute(
+        "SELECT id FROM downstream_operations WHERE card_id=?", (card_id,)
+    ).fetchall()]
+    if operation_ids:
+        marks = ",".join("?" for _ in operation_ids)
+        con.execute(f"DELETE FROM downstream_assignments WHERE operation_id IN ({marks})", operation_ids)
+        con.execute(f"DELETE FROM downstream_operations WHERE id IN ({marks})", operation_ids)
+    con.execute("DELETE FROM cards WHERE id=?", (card_id,))
+
+
+def has_local_workflow(con: sqlite3.Connection, card_id: int, current_sector: str) -> bool:
+    if current_sector != "RECEBIMENTO":
+        return True
+    checks = [
+        "SELECT 1 FROM quality_inspections WHERE card_id=? LIMIT 1",
+        "SELECT 1 FROM processing_records WHERE card_id=? LIMIT 1",
+        "SELECT 1 FROM downstream_operations WHERE card_id=? LIMIT 1",
+        "SELECT 1 FROM dispatches WHERE card_id=? LIMIT 1",
+        """SELECT 1 FROM receivings r WHERE r.card_id=? AND
+             (r.physical_status!='PENDENTE' OR r.ten_percent_status!='PENDENTE') LIMIT 1""",
+    ]
+    return any(con.execute(sql, (card_id,)).fetchone() for sql in checks)
+
+
+def clean_id(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value).strip()
+
+
+def clean_int(value: Any) -> int:
+    if value in (None, ""):
+        return 0
+    try:
+        return int(round(float(value)))
+    except Exception:
+        return 0
+
+
+def clean_date(value: Any) -> Optional[str]:
+    if value in (None, ""):
+        return None
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    return str(value).strip() or None
+
+
+def to_json(value: Any) -> str:
+    return json.dumps(value or [], ensure_ascii=False)
+
+
+def from_json(value: Optional[str], default: Any) -> Any:
+    if not value:
+        return default
+    try:
+        return json.loads(value)
+    except Exception:
+        return default
+
+
+def business_seconds_between(start: datetime, end: datetime) -> int:
+    if end <= start:
+        return 0
+    total = 0
+    day = start.date()
+    while day <= end.date():
+        weekday = day.weekday()
+        if weekday <= 3:
+            work_start = datetime.combine(day, time(8, 0))
+            work_end = datetime.combine(day, time(18, 0))
+        elif weekday == 4:
+            work_start = datetime.combine(day, time(8, 0))
+            work_end = datetime.combine(day, time(17, 0))
+        else:
+            day += timedelta(days=1)
+            continue
+        interval_start = max(start, work_start)
+        interval_end = min(end, work_end)
+        if interval_end > interval_start:
+            total += int((interval_end - interval_start).total_seconds())
+        day += timedelta(days=1)
+    return total
+
+
+def add_business_days(start_date: date, days: int) -> date:
+    current = start_date
+    added = 0
+    while added < days:
+        current += timedelta(days=1)
+        if current.weekday() < 5:
+            added += 1
+    return current
+
+
+def init_db() -> None:
+    con = db_connect()
+    con.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            password TEXT NOT NULL,
+            name TEXT NOT NULL,
+            role TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS cards (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            purchase_id TEXT UNIQUE NOT NULL,
+            source_created_date TEXT,
+            supplier TEXT,
+            original_type TEXT,
+            purchase_mode TEXT,
+            status_compra TEXT,
+            original_destination TEXT,
+            forecast_date TEXT,
+            qtd_itens INTEGER DEFAULT 0,
+            source_notes TEXT,
+            brand TEXT,
+            collection TEXT,
+            current_sector TEXT NOT NULL DEFAULT 'RECEBIMENTO',
+            status TEXT NOT NULL DEFAULT 'AGUARDANDO_RECEBIMENTO',
+            receiving_type TEXT NOT NULL DEFAULT 'NOVA',
+            quality_destination TEXT,
+            casulo_current TEXT,
+            source_location_summary TEXT,
+            source_snapshot_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            card_id INTEGER NOT NULL,
+            source_key TEXT NOT NULL,
+            product TEXT,
+            reference TEXT,
+            sku TEXT,
+            group_name TEXT,
+            collection TEXT,
+            brand TEXT,
+            gender TEXT,
+            color TEXT,
+            size TEXT,
+            capsule TEXT,
+            lot TEXT,
+            lot_id TEXT,
+            nf TEXT,
+            expected_qty INTEGER NOT NULL DEFAULT 0,
+            url_photo TEXT,
+            status_kanban TEXT,
+            source_stage TEXT,
+            source_status_purchase TEXT,
+            source_status_lot TEXT,
+            source_status_quality TEXT,
+            source_inspection_phase TEXT,
+            source_status_pcp TEXT,
+            source_seamstress TEXT,
+            source_status_logistics TEXT,
+            source_received_qty INTEGER DEFAULT 0,
+            UNIQUE(card_id, source_key),
+            FOREIGN KEY(card_id) REFERENCES cards(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS imports (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            filename TEXT NOT NULL,
+            total_rows INTEGER NOT NULL,
+            matched_rows INTEGER NOT NULL,
+            cards_created INTEGER NOT NULL,
+            cards_updated INTEGER NOT NULL,
+            items_created INTEGER NOT NULL,
+            items_updated INTEGER NOT NULL,
+            errors TEXT,
+            user_id INTEGER,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(user_id) REFERENCES users(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS receivings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            card_id INTEGER NOT NULL,
+            receiving_type TEXT NOT NULL,
+            physical_status TEXT NOT NULL DEFAULT 'PENDENTE',
+            volumes INTEGER,
+            received_qty INTEGER,
+            has_damage INTEGER,
+            damage_description TEXT,
+            notes TEXT,
+            photo_paths TEXT,
+            ten_percent_required INTEGER NOT NULL DEFAULT 0,
+            ten_percent_min INTEGER NOT NULL DEFAULT 0,
+            ten_percent_actual INTEGER,
+            ten_percent_status TEXT NOT NULL DEFAULT 'NAO_INICIADA',
+            physical_completed_by INTEGER,
+            physical_completed_at TEXT,
+            closed_at TEXT,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(card_id) REFERENCES cards(id) ON DELETE CASCADE,
+            FOREIGN KEY(physical_completed_by) REFERENCES users(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS timer_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            receiving_id INTEGER NOT NULL,
+            event_type TEXT NOT NULL,
+            event_at TEXT NOT NULL,
+            user_id INTEGER NOT NULL,
+            FOREIGN KEY(receiving_id) REFERENCES receivings(id) ON DELETE CASCADE,
+            FOREIGN KEY(user_id) REFERENCES users(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS dispatches (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            card_id INTEGER NOT NULL,
+            destination TEXT NOT NULL,
+            carrier TEXT,
+            seamstress_name TEXT,
+            dispatched_qty INTEGER,
+            volumes INTEGER,
+            photo_paths TEXT,
+            notes TEXT,
+            return_forecast TEXT,
+            completed_by INTEGER,
+            completed_at TEXT,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(card_id) REFERENCES cards(id) ON DELETE CASCADE,
+            FOREIGN KEY(completed_by) REFERENCES users(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS casulo_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            card_id INTEGER NOT NULL,
+            old_casulo TEXT,
+            new_casulo TEXT NOT NULL,
+            note TEXT,
+            user_id INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(card_id) REFERENCES cards(id) ON DELETE CASCADE,
+            FOREIGN KEY(user_id) REFERENCES users(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            card_id INTEGER NOT NULL,
+            user_id INTEGER,
+            event_type TEXT NOT NULL,
+            description TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(card_id) REFERENCES cards(id) ON DELETE CASCADE,
+            FOREIGN KEY(user_id) REFERENCES users(id)
+        );
+        """
+    )
+    # Cards/itens persistidos no Supabase são restaurados antes das migrações
+    # de estado abaixo, para que Recebimento/Qualidade/Processamento encontrem
+    # a mesma base lógica após um redeploy.
+    try:
+        persistence = bootstrap_card_persistence(con)
+        if persistence.get("mode") == "restored":
+            print(
+                f"[persistencia] {persistence.get('cards', 0)} card(s) e "
+                f"{persistence.get('items', 0)} item(ns) restaurados do Supabase."
+            )
+    except Exception as e:
+        print(f"[aviso] não consegui restaurar cards do Supabase ainda: {e}")
+
+    for username, password, name, role in [
+        ("admin", "1234", "Administrador", "admin"),
+        ("recebimento", "1234", "Operador do Recebimento", "recebimento"),
+        ("recebimento2", "1234", "Segundo Operador do Recebimento", "recebimento"),
+        ("consulta", "1234", "Usuário de Consulta", "consulta"),
+        ("qualidade1", "1234", "Inspetor da Qualidade 1", "qualidade"),
+        ("qualidade2", "1234", "Inspetor da Qualidade 2", "qualidade"),
+        ("supervisor", "1234", "Supervisor", "supervisor"),
+        ("processamento1", "1234", "Operador do Processamento 1", "processamento"),
+        ("processamento2", "1234", "Operador do Processamento 2", "processamento"),
+        ("etiquetagem1", "1234", "Operador da Etiquetagem 1", "etiquetagem"),
+        ("etiquetagem2", "1234", "Operador da Etiquetagem 2", "etiquetagem"),
+        ("estocagem1", "1234", "Operador da Estocagem 1", "estocagem"),
+        ("estocagem2", "1234", "Operador da Estocagem 2", "estocagem"),
+        ("planejamento1", "1234", "Planejamento SGO", "planejamento"),
+        ("expedicao1", "1234", "Operador da Expedição", "expedicao"),
+        ("devolucoes1", "1234", "Operador de Devoluções", "devolucoes"),
+    ]:
+        con.execute(
+            "INSERT OR IGNORE INTO users(username,password,name,role) VALUES(?,?,?,?)",
+            (username, password, name, role),
+        )
+    # Normaliza referências já existentes: a referência visual é o descritivo
+    # da primeira linha do Produto, não o código técnico 258.xxx...
+    existing_items = con.execute("SELECT id,product,reference FROM items").fetchall()
+    for item in existing_items:
+        normalized_reference = reference_from_copied_product(item["product"])
+        if normalized_reference and normalized_reference != (item["reference"] or "").strip():
+            con.execute("UPDATE items SET reference=? WHERE id=?", (normalized_reference, item["id"]))
+    # Migração funcional V4: Cards CD01 permanecem na aba Recebimento enquanto estão em Costura.
+    con.execute(
+        "UPDATE cards SET current_sector='RECEBIMENTO' WHERE status='EM_COSTURA_CD01'"
+    )
+    card_columns = {row["name"] for row in con.execute("PRAGMA table_info(cards)").fetchall()}
+    if "purchase_mode" not in card_columns:
+        con.execute("ALTER TABLE cards ADD COLUMN purchase_mode TEXT")
+    for name, definition in [("source_location_summary","TEXT"),("source_snapshot_at","TEXT")]:
+        if name not in card_columns:
+            con.execute(f"ALTER TABLE cards ADD COLUMN {name} {definition}")
+    item_columns = {row["name"] for row in con.execute("PRAGMA table_info(items)").fetchall()}
+    for name, definition in [
+        ("source_stage","TEXT"),("source_status_purchase","TEXT"),("source_status_lot","TEXT"),
+        ("source_status_quality","TEXT"),("source_inspection_phase","TEXT"),("source_status_pcp","TEXT"),
+        ("source_seamstress","TEXT"),("source_status_logistics","TEXT"),("source_received_qty","INTEGER DEFAULT 0"),
+    ]:
+        if name not in item_columns:
+            con.execute(f"ALTER TABLE items ADD COLUMN {name} {definition}")
+    receiving_columns = {row["name"] for row in con.execute("PRAGMA table_info(receivings)").fetchall()}
+    if "source_subset" not in receiving_columns:
+        con.execute("ALTER TABLE receivings ADD COLUMN source_subset INTEGER NOT NULL DEFAULT 0")
+    con.execute(
+        """CREATE TABLE IF NOT EXISTS receiving_operation_items (
+            receiving_id INTEGER NOT NULL,
+            item_id INTEGER NOT NULL,
+            PRIMARY KEY(receiving_id,item_id),
+            FOREIGN KEY(receiving_id) REFERENCES receivings(id) ON DELETE CASCADE,
+            FOREIGN KEY(item_id) REFERENCES items(id) ON DELETE CASCADE
+        )"""
+    )
+    con.execute("UPDATE receivings SET ten_percent_required=1 WHERE receiving_type='RETORNO' AND closed_at IS NULL")
+    open_returns = con.execute(
+        """SELECT r.id,r.received_qty,c.purchase_mode,c.id card_id
+           FROM receivings r JOIN cards c ON c.id=r.card_id
+           WHERE r.receiving_type='RETORNO' AND r.closed_at IS NULL"""
+    ).fetchall()
+    for receiving in open_returns:
+        base_qty = int(receiving["received_qty"] or 0)
+        item_count = con.execute(
+            "SELECT COUNT(*) n FROM items WHERE card_id=? AND expected_qty>0", (receiving["card_id"],)
+        ).fetchone()["n"]
+        minimum = max(math.ceil(base_qty * 0.10), item_count if receiving["purchase_mode"] == "GRADE" else 0)
+        con.execute("UPDATE receivings SET ten_percent_min=? WHERE id=?", (minimum, receiving["id"]))
+    con.execute("""UPDATE cards SET purchase_mode=CASE
+        WHEN lower(COALESCE(original_type,'')) LIKE '%private%label%' THEN 'GRADE'
+        WHEN lower(COALESCE(original_type,'')) LIKE '%saldo%' THEN 'SALDO'
+        ELSE purchase_mode END
+        WHERE purchase_mode IS NULL OR purchase_mode=''""")
+    # Ativa automaticamente os retornos da Costura já existentes na base.
+    returned_cards = con.execute(
+        """SELECT DISTINCT c.id FROM cards c JOIN items i ON i.card_id=c.id
+           WHERE c.source_snapshot_at IS NOT NULL AND i.source_stage='RETORNO_COSTURA'"""
+    ).fetchall()
+    for returned_card in returned_cards:
+        item_ids = [row["id"] for row in con.execute(
+            "SELECT id FROM items WHERE card_id=? AND source_stage='RETORNO_COSTURA' AND expected_qty>0 ORDER BY id",
+            (returned_card["id"],),
+        ).fetchall()]
+        if item_ids:
+            ensure_receiving(con, returned_card["id"], "RETORNO", item_ids)
+    # Cards que ainda estão na Costura também precisam de um controle de
+    # produção próprio, sem misturá-lo com o recebimento do futuro retorno.
+    costura_cards = con.execute(
+        """SELECT c.id FROM cards c
+           WHERE c.source_snapshot_at IS NOT NULL
+             AND EXISTS (SELECT 1 FROM items i WHERE i.card_id=c.id AND i.source_stage='EM_COSTURA')
+             AND NOT EXISTS (SELECT 1 FROM items i WHERE i.card_id=c.id AND i.source_stage!='EM_COSTURA')"""
+    ).fetchall()
+    for costura_card in costura_cards:
+        item_ids = [row["id"] for row in con.execute(
+            "SELECT id FROM items WHERE card_id=? AND source_stage='EM_COSTURA' AND expected_qty>0 ORDER BY id",
+            (costura_card["id"],),
+        ).fetchall()]
+        if item_ids:
+            con.execute(
+                "UPDATE cards SET receiving_type='COSTURA' WHERE id=?",
+                (costura_card["id"],),
+            )
+            ensure_receiving(con, costura_card["id"], "COSTURA", item_ids)
+    # Cards criados pelo GOAT antes da regra de chegada: sem andamento e sem chegada marcada → Em trânsito.
+    con.execute(
+        """UPDATE cards SET status='EM_TRANSITO' WHERE current_sector='RECEBIMENTO' AND status='AGUARDANDO_RECEBIMENTO'
+           AND EXISTS (SELECT 1 FROM history h WHERE h.card_id=cards.id AND h.event_type='CRIACAO_GOAT')
+           AND NOT EXISTS (SELECT 1 FROM history h WHERE h.card_id=cards.id AND h.event_type='CHEGADA_CONFIRMADA')
+           AND NOT EXISTS (SELECT 1 FROM receivings r WHERE r.card_id=cards.id AND
+                (r.physical_status!='PENDENTE' OR r.ten_percent_status!='NAO_INICIADA'
+                 OR r.volumes IS NOT NULL OR r.received_qty IS NOT NULL))"""
+    )
+    # Cards em trânsito já existentes (ex.: criados pelo GOAT) sem registro de Recebimento.
+    for orphan in con.execute(
+        """SELECT c.id FROM cards c WHERE c.current_sector='RECEBIMENTO' AND c.status='AGUARDANDO_RECEBIMENTO'
+           AND NOT EXISTS (SELECT 1 FROM receivings r WHERE r.card_id=c.id AND r.closed_at IS NULL)"""
+    ).fetchall():
+        ensure_pending_receiving(con, orphan["id"])
+    con.commit()
+    con.close()
+
+
+def add_history(con: sqlite3.Connection, card_id: int, event_type: str, description: str, user_id: Optional[int] = None) -> None:
+    con.execute(
+        "INSERT INTO history(card_id,user_id,event_type,description,created_at) VALUES(?,?,?,?,?)",
+        (card_id, user_id, event_type, description, iso_now()),
+    )
+
+
+def get_user(con: sqlite3.Connection, user_id: int) -> sqlite3.Row:
+    user = con.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
+    if not user:
+        raise HTTPException(401, "Usuário inválido.")
+    return user
+
+
+def require_role(con: sqlite3.Connection, user_id: int, allowed: set[str]) -> sqlite3.Row:
+    user = get_user(con, user_id)
+    if user["role"] not in allowed:
+        raise HTTPException(403, "Seu perfil não possui permissão para esta ação.")
+    return user
+
+
+def ensure_receiving(
+    con: sqlite3.Connection, card_id: int, receiving_type: str, item_ids: Optional[list[int]] = None
+) -> int:
+    row = con.execute(
+        """SELECT id FROM receivings WHERE card_id=? AND receiving_type=? AND closed_at IS NULL
+           ORDER BY id DESC LIMIT 1""",
+        (card_id, receiving_type),
+    ).fetchone()
+    normalized_ids = sorted({int(item_id) for item_id in (item_ids or []) if int(item_id) > 0})
+    if normalized_ids:
+        marks = ",".join("?" for _ in normalized_ids)
+        totals = con.execute(
+            f"""SELECT COALESCE(SUM(expected_qty),0) total,COUNT(*) n FROM items
+                WHERE card_id=? AND expected_qty>0 AND id IN ({marks})""",
+            (card_id, *normalized_ids),
+        ).fetchone()
+        total = int(totals["total"] or 0)
+        item_count = int(totals["n"] or 0)
+    else:
+        total = con.execute(
+            "SELECT COALESCE(SUM(expected_qty),0) total FROM items WHERE card_id=?",
+            (card_id,),
+        ).fetchone()["total"]
+        item_count = con.execute(
+            "SELECT COUNT(*) n FROM items WHERE card_id=? AND expected_qty>0", (card_id,)
+        ).fetchone()["n"]
+    required = 1
+    mode = con.execute("SELECT purchase_mode FROM cards WHERE id=?", (card_id,)).fetchone()["purchase_mode"]
+    minimum = max(math.ceil(total * 0.10), item_count if mode == "GRADE" else 0)
+    if row:
+        receiving_id = int(row["id"])
+        if normalized_ids:
+            con.execute(
+                "UPDATE receivings SET source_subset=1,ten_percent_required=1,ten_percent_min=? WHERE id=?",
+                (minimum, receiving_id),
+            )
+            con.execute("DELETE FROM receiving_operation_items WHERE receiving_id=?", (receiving_id,))
+            con.executemany(
+                "INSERT INTO receiving_operation_items(receiving_id,item_id) VALUES(?,?)",
+                [(receiving_id, item_id) for item_id in normalized_ids],
+            )
+        return receiving_id
+    cur = con.execute(
+        """INSERT INTO receivings(card_id,receiving_type,ten_percent_required,ten_percent_min,source_subset,created_at)
+           VALUES(?,?,?,?,?,?)""",
+        (card_id, receiving_type, required, minimum, 1 if normalized_ids else 0, iso_now()),
+    )
+    receiving_id = int(cur.lastrowid)
+    if normalized_ids:
+        con.executemany(
+            "INSERT INTO receiving_operation_items(receiving_id,item_id) VALUES(?,?)",
+            [(receiving_id, item_id) for item_id in normalized_ids],
+        )
+    return receiving_id
+
+
+def awaiting_arrival(con: sqlite3.Connection, card_id: int) -> bool:
+    """True enquanto o Card está em trânsito e o operador ainda não marcou a chegada.
+
+    Cards antigos que já têm andamento no recebimento (volumes, quantidade, 10% ou
+    conclusão física) são tratados como já recebidos, para não esconder trabalho feito.
+    """
+    card = con.execute(
+        "SELECT current_sector,status FROM cards WHERE id=?", (card_id,)
+    ).fetchone()
+    if not card or card["current_sector"] != "RECEBIMENTO" or card["status"] not in TRANSIT_STATUSES:
+        return False
+    rec = con.execute(
+        "SELECT * FROM receivings WHERE card_id=? AND closed_at IS NULL ORDER BY id DESC LIMIT 1", (card_id,)
+    ).fetchone()
+    if rec and (
+        rec["physical_status"] != "PENDENTE" or rec["ten_percent_status"] != "NAO_INICIADA"
+        or rec["volumes"] is not None or rec["received_qty"] is not None
+    ):
+        return False
+    return True
+
+
+def ensure_pending_receiving(con: sqlite3.Connection, card_id: int) -> bool:
+    """Garante o registro de Recebimento de um Card que aguarda recebimento.
+
+    Cards em trânsito criados fora da importação (ex.: card do GOAT) nascem sem
+    registro em `receivings`; sem ele a tela não tem onde gravar volumes, 10% e
+    conclusão física, e os botões de ação não aparecem.
+    """
+    card = con.execute(
+        "SELECT current_sector,status,receiving_type FROM cards WHERE id=?", (card_id,)
+    ).fetchone()
+    if not card or card["current_sector"] != "RECEBIMENTO" or card["status"] != "AGUARDANDO_RECEBIMENTO":
+        return False
+    if con.execute(
+        "SELECT 1 FROM receivings WHERE card_id=? AND closed_at IS NULL LIMIT 1", (card_id,)
+    ).fetchone():
+        return False
+    receiving_type = card["receiving_type"] if card["receiving_type"] in ("NOVA", "RETORNO") else "NOVA"
+    ensure_receiving(con, card_id, receiving_type)
+    return True
+
+
+def timer_events(con: sqlite3.Connection, receiving_id: int) -> list[sqlite3.Row]:
+    return con.execute(
+        "SELECT * FROM timer_events WHERE receiving_id=? ORDER BY id",
+        (receiving_id,),
+    ).fetchall()
+
+
+def timer_summary(con: sqlite3.Connection, receiving_id: int) -> dict[str, Any]:
+    events = timer_events(con, receiving_id)
+    state = "NAO_INICIADA"
+    first_start: Optional[datetime] = None
+    open_start: Optional[datetime] = None
+    pause_start: Optional[datetime] = None
+    final_end: Optional[datetime] = None
+    active_business = 0
+    paused_real = 0
+    for event in events:
+        dt = datetime.fromisoformat(event["event_at"])
+        kind = event["event_type"]
+        if kind == "START":
+            state = "EM_ANDAMENTO"
+            first_start = first_start or dt
+            open_start = dt
+        elif kind == "PAUSE" and open_start:
+            active_business += business_seconds_between(open_start, dt)
+            open_start = None
+            pause_start = dt
+            state = "PAUSADA"
+        elif kind == "RESUME":
+            if pause_start:
+                paused_real += int((dt - pause_start).total_seconds())
+            pause_start = None
+            open_start = dt
+            state = "EM_ANDAMENTO"
+        elif kind == "FINISH":
+            if open_start:
+                active_business += business_seconds_between(open_start, dt)
+                open_start = None
+            if pause_start:
+                paused_real += int((dt - pause_start).total_seconds())
+                pause_start = None
+            final_end = dt
+            state = "CONCLUIDA"
+    now_dt = datetime.now().replace(microsecond=0)
+    if state == "EM_ANDAMENTO" and open_start:
+        active_business += business_seconds_between(open_start, now_dt)
+    if state == "PAUSADA" and pause_start:
+        paused_real += int((now_dt - pause_start).total_seconds())
+    permanence = int(((final_end or now_dt) - first_start).total_seconds()) if first_start else 0
+    return {
+        "state": state,
+        "business_seconds": max(active_business, 0),
+        "paused_seconds": max(paused_real, 0),
+        "permanence_seconds": max(permanence, 0),
+        "started_at": first_start.isoformat() if first_start else None,
+        "finished_at": final_end.isoformat() if final_end else None,
+        "events": [dict(e) for e in events],
+    }
+
+
+def timer_action(con: sqlite3.Connection, receiving_id: int, action: str, user_id: int) -> dict[str, Any]:
+    summary = timer_summary(con, receiving_id)
+    state = summary["state"]
+    map_action = {
+        "start": ("NAO_INICIADA", "START"),
+        "pause": ("EM_ANDAMENTO", "PAUSE"),
+        "resume": ("PAUSADA", "RESUME"),
+        "finish": (("EM_ANDAMENTO", "PAUSADA"), "FINISH"),
+    }
+    if action not in map_action:
+        raise HTTPException(400, "Ação inválida.")
+    allowed, event_type = map_action[action]
+    valid = state in allowed if isinstance(allowed, tuple) else state == allowed
+    if not valid:
+        raise HTTPException(400, f"Ação incompatível com o estado atual: {state}.")
+    con.execute(
+        "INSERT INTO timer_events(receiving_id,event_type,event_at,user_id) VALUES(?,?,?,?)",
+        (receiving_id, event_type, iso_now(), user_id),
+    )
+    return timer_summary(con, receiving_id)
+
+
+def current_receiving(con: sqlite3.Connection, card_id: int) -> Optional[dict[str, Any]]:
+    row = con.execute(
+        """SELECT r.*,u.name physical_completed_by_name
+           FROM receivings r
+           JOIN cards c ON c.id=r.card_id
+           LEFT JOIN users u ON u.id=r.physical_completed_by
+           WHERE r.card_id=?
+           ORDER BY (r.closed_at IS NULL) DESC,
+                    (r.receiving_type=c.receiving_type) DESC,
+                    r.id DESC LIMIT 1""",
+        (card_id,),
+    ).fetchone()
+    if not row:
+        return None
+    data = dict(row)
+    data["photo_paths"] = from_json(data.get("photo_paths"), [])
+    data["timer"] = timer_summary(con, data["id"]) if data["ten_percent_required"] else None
+    data["operation_items"] = [dict(item) for item in con.execute(
+        """SELECT i.id,i.product,i.reference,i.sku,i.color,i.size,i.expected_qty,i.source_stage
+           FROM receiving_operation_items roi JOIN items i ON i.id=roi.item_id
+           WHERE roi.receiving_id=? ORDER BY i.product,i.color,i.size,i.id""",
+        (data["id"],),
+    ).fetchall()]
+    plan_items = data["operation_items"]
+    if not plan_items:
+        plan_items = [dict(item) for item in con.execute(
+            """SELECT id,product,reference,sku,color,size,expected_qty,source_stage
+               FROM items WHERE card_id=? AND expected_qty>0
+               ORDER BY product,color,size,id""",
+            (card_id,),
+        ).fetchall()]
+    target = int(data.get("ten_percent_min") or 0)
+    mode = con.execute("SELECT purchase_mode FROM cards WHERE id=?", (card_id,)).fetchone()["purchase_mode"]
+    if str(mode or "").upper() == "GRADE" and plan_items:
+        allocations = {int(item["id"]): 1 for item in plan_items}
+        capacities = {int(item["id"]): max(0, int(item["expected_qty"] or 0) - 1) for item in plan_items}
+        remaining = max(0, target - len(plan_items))
+        active = [int(item["id"]) for item in plan_items if capacities[int(item["id"])] > 0]
+        while remaining > 0 and active:
+            share = max(1, remaining // len(active))
+            next_active: list[int] = []
+            for item_id in active:
+                if remaining <= 0:
+                    break
+                added = min(share, capacities[item_id], remaining)
+                allocations[item_id] += added
+                capacities[item_id] -= added
+                remaining -= added
+                if capacities[item_id] > 0:
+                    next_active.append(item_id)
+            active = next_active
+        data["sample_plan"] = [item | {"sample_qty": allocations[int(item["id"])]} for item in plan_items]
+    else:
+        data["sample_plan"] = [{
+            "id": None, "product": "Quantidade geral", "reference": None, "sku": None,
+            "color": None, "size": None,
+            "expected_qty": sum(int(item["expected_qty"] or 0) for item in plan_items),
+            "sample_qty": target,
+        }] if target > 0 else []
+    return data
+
+
+def current_dispatch(con: sqlite3.Connection, card_id: int) -> Optional[dict[str, Any]]:
+    row = con.execute(
+        """SELECT d.*,u.name completed_by_name FROM dispatches d
+           LEFT JOIN users u ON u.id=d.completed_by
+           WHERE d.card_id=? ORDER BY d.id DESC LIMIT 1""",
+        (card_id,),
+    ).fetchone()
+    if not row:
+        return None
+    data = dict(row)
+    data["photo_paths"] = from_json(data.get("photo_paths"), [])
+    return data
+
+
+def update_new_receiving_flow(con: sqlite3.Connection, receiving_id: int, user_id: Optional[int] = None) -> str:
+    rec = con.execute("SELECT * FROM receivings WHERE id=?", (receiving_id,)).fetchone()
+    if not rec:
+        raise HTTPException(404, "Recebimento não encontrado.")
+    physical_done = rec["physical_status"] == "CONCLUIDO"
+    sample_done = rec["ten_percent_status"] == "CONCLUIDA"
+    if rec["receiving_type"] == "COSTURA":
+        return con.execute("SELECT status FROM cards WHERE id=?", (rec["card_id"],)).fetchone()["status"]
+    if physical_done and sample_done:
+        is_return = rec["receiving_type"] == "RETORNO"
+        if rec["source_subset"]:
+            mapped_ids = [row["item_id"] for row in con.execute(
+                "SELECT item_id FROM receiving_operation_items WHERE receiving_id=?", (receiving_id,)
+            ).fetchall()]
+            if mapped_ids:
+                marks = ",".join("?" for _ in mapped_ids)
+                con.execute(
+                    f"""UPDATE items SET source_stage='QUALIDADE',source_status_quality='Pendente'
+                        WHERE id IN ({marks})""",
+                    mapped_ids,
+                )
+            status = "ORIGEM_MISTO"
+            con.execute(
+                "UPDATE cards SET current_sector='RECEBIMENTO',status=?,updated_at=? WHERE id=?",
+                (status, iso_now(), rec["card_id"]),
+            )
+            con.execute("UPDATE receivings SET closed_at=? WHERE id=?", (iso_now(), receiving_id))
+            if rec["receiving_type"] == "RETORNO":
+                event_type = "RECEBIMENTO_RETORNO_CONCLUIDO"
+                description = "Itens retornados da Costura recebidos e nova amostra de 10% separada. Somente esses itens foram encaminhados à Inspeção 2."
+            else:
+                event_type = "RECEBIMENTO_PARCIAL_CONCLUIDO"
+                description = "Itens em trânsito recebidos e com amostra de 10% separada. Somente esses itens foram encaminhados à Qualidade."
+            add_history(con, rec["card_id"], event_type, description, user_id)
+            return status
+        status = "RETORNO_CONCLUIDO" if is_return else "AGUARDANDO_QUALIDADE"
+        con.execute(
+            "UPDATE cards SET current_sector='QUALIDADE',status=?,updated_at=? WHERE id=?",
+            (status, iso_now(), rec["card_id"]),
+        )
+        con.execute("UPDATE receivings SET closed_at=? WHERE id=?", (iso_now(), receiving_id))
+        add_history(
+            con,
+            rec["card_id"],
+            "RECEBIMENTO_CONCLUIDO",
+            ("Retorno CD01 recebido e nova amostra de 10% separada. Card encaminhado à Inspeção 2."
+             if is_return else
+             "Recebimento físico e separação dos 10% concluídos. Card encaminhado automaticamente à Qualidade."),
+            user_id,
+        )
+    elif physical_done:
+        status = ("RETORNO_FISICO_CONCLUIDO_10_PENDENTE" if rec["receiving_type"] == "RETORNO"
+                  else "RECEBIMENTO_FISICO_CONCLUIDO_10_PENDENTE")
+        con.execute(
+            "UPDATE cards SET current_sector='RECEBIMENTO',status=?,updated_at=? WHERE id=?",
+            (status, iso_now(), rec["card_id"]),
+        )
+    elif sample_done:
+        status = ("SEPARACAO_RETORNO_10_CONCLUIDA_FISICO_PENDENTE" if rec["receiving_type"] == "RETORNO"
+                  else "SEPARACAO_10_CONCLUIDA_RECEBIMENTO_PENDENTE")
+        con.execute(
+            "UPDATE cards SET current_sector='RECEBIMENTO',status=?,updated_at=? WHERE id=?",
+            (status, iso_now(), rec["card_id"]),
+        )
+    else:
+        status = "AGUARDANDO_RECEBIMENTO"
+    return status
+
+
+@app.on_event("startup")
+def startup() -> None:
+    init_db()
+    # Após a normalização das referências na base local, replica cards e itens
+    # para o Supabase para manter o espelho atualizado entre redeploys.
+    try:
+        con = db_connect()
+        sync_all_cards_to_supabase(con, include_items=True)
+        sync_all_receiving_state_to_supabase(con)
+        con.close()
+    except Exception as e:
+        print(f"[aviso] não consegui sincronizar cards/itens no startup: {e}")
+    init_quality_db()
+    init_processing_db()
+    ensure_worker_function_column()
+    init_downstream_db()
+    init_production_db()
+    init_goat_db()
+    init_positions_db()
+    init_collab_db()
+    init_unified_db()
+
+    # Popula os 16 usuários padrão no Supabase (só na primeira vez — se já
+    # existirem lá, não faz nada). Se o Supabase ainda não estiver
+    # configurado (variável SUPABASE_DATABASE_URL ausente) ou fora do ar,
+    # não derruba o app inteiro por causa disso — só o login fica indisponível
+    # até isso ser resolvido; o resto (cards, tarefas, qualidade etc.,
+    # todos no SQLite local) continua funcionando normalmente.
+    try:
+        seed_usuarios_supabase([
+            ("admin", "1234", "admin"),
+            ("recebimento", "1234", "recebimento"),
+            ("recebimento2", "1234", "recebimento"),
+            ("consulta", "1234", "consulta"),
+            ("qualidade1", "1234", "qualidade"),
+            ("qualidade2", "1234", "qualidade"),
+            ("supervisor", "1234", "supervisor"),
+            ("processamento1", "1234", "processamento"),
+            ("processamento2", "1234", "processamento"),
+            ("etiquetagem1", "1234", "etiquetagem"),
+            ("etiquetagem2", "1234", "etiquetagem"),
+            ("estocagem1", "1234", "estocagem"),
+            ("estocagem2", "1234", "estocagem"),
+            ("planejamento1", "1234", "planejamento"),
+            ("expedicao1", "1234", "expedicao"),
+            ("devolucoes1", "1234", "devolucoes"),
+        ])
+    except Exception as e:
+        print(f"[aviso] não consegui popular usuarios no Supabase ainda: {e}")
+
+    # Popula os 19.582 casulos no Supabase (só na primeira vez — se a
+    # estrutura já existir lá, não mexe em nada). Mesma proteção contra
+    # Supabase indisponível: não derruba o app inteiro.
+    try:
+        seed_warehouse_supabase(gerar_todos_casulos)
+    except Exception as e:
+        print(f"[aviso] não consegui popular a estrutura de casulos no Supabase ainda: {e}")
+
+
+@app.get("/", response_class=HTMLResponse)
+def index(request: Request):
+    return templates.TemplateResponse("index.html", {"request": request})
+
+
+@app.post("/api/login")
+async def login(request: Request):
+    data = await request.json()
+    usuario = data.get("username", "")
+    senha = data.get("password", "")
+
+    if not os.getenv("SUPABASE_DATABASE_URL"):
+        raise HTTPException(503, "Configure SUPABASE_DATABASE_URL nas variáveis do Render para habilitar o login seguro.")
+
+    # A senha é conferida no Supabase (hash de verdade, PBKDF2 — não é mais
+    # texto puro). O id/nome/papel que o resto do app usa (tarefas, cards,
+    # etc.) continua vindo do SQLite local, pra não quebrar nada que já
+    # depende desse id — os dois ficam sincronizados pelo username.
+    try:
+        confirmado = verificar_login_supabase(usuario, senha)
+    except Exception as e:
+        raise HTTPException(500, f"Não foi possível conectar no banco de autenticação: {e}")
+    if not confirmado:
+        raise HTTPException(401, "Usuário ou senha inválidos.")
+
+    con = db_connect()
+    user = con.execute(
+        "SELECT id,username,name,role FROM users WHERE username=?",
+        (usuario,),
+    ).fetchone()
+    con.close()
+    if not user:
+        raise HTTPException(401, "Usuário existe no Supabase mas não está cadastrado localmente — fale com o administrador.")
+    return dict(user)
+
+
+@app.get("/api/users")
+def list_users():
+    con = db_connect()
+    rows = con.execute("SELECT id,username,name,role FROM users ORDER BY name").fetchall()
+    con.close()
+    return [dict(r) for r in rows]
+
+
+@app.post("/api/uploads")
+async def upload_files(files: list[UploadFile] = File(...)):
+    saved: list[str] = []
+    for file in files:
+        suffix = Path(file.filename or "arquivo").suffix.lower()
+        safe = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}{suffix}"
+        path = UPLOAD_DIR / safe
+        path.write_bytes(await file.read())
+        saved.append(f"/uploads/{safe}")
+    return {"paths": saved}
+
+
+@app.post("/api/import-excel")
+async def import_excel(request: Request, file: UploadFile = File(...)):
+    user_id = int(request.query_params.get("user_id", "0") or 0)
+    if not (file.filename or "").lower().endswith((".xlsx", ".xlsm")):
+        raise HTTPException(400, "Envie um arquivo Excel .xlsx ou .xlsm.")
+    content = await file.read()
+    temp = DATA_DIR / f"import_{uuid.uuid4().hex}.xlsx"
+    temp.write_bytes(content)
+    wb = None
+    try:
+        wb = load_workbook(temp, read_only=True, data_only=True)
+        if "Relatorio de Compras" not in wb.sheetnames:
+            raise HTTPException(400, "A aba 'Relatorio de Compras' não foi encontrada.")
+        ws = wb["Relatorio de Compras"]
+        iterator = ws.iter_rows(values_only=True)
+        raw_headers = next(iterator, None)
+        if not raw_headers:
+            raise HTTPException(400, "A planilha está vazia.")
+        headers = {normalize_header(v): i for i, v in enumerate(raw_headers)}
+        required = ["idcompra", "statuscompra", "statuskanban", "tipo", "produto", "qtdesperada"]
+        missing = [name for name in required if name not in headers]
+        if missing:
+            raise HTTPException(400, "Colunas obrigatórias ausentes: " + ", ".join(missing))
+
+        def cell(row: tuple[Any, ...], name: str, default: Any = None) -> Any:
+            idx = headers.get(name)
+            return default if idx is None or idx >= len(row) else row[idx]
+
+        con = db_connect()
+        if user_id:
+            require_role(con, user_id, {"admin"})
+        total_rows = matched_rows = cards_created = cards_updated = items_created = items_updated = cards_removed_cd02 = 0
+        touched_cards: set[int] = set()
+        removed_card_ids: list[int] = []
+        errors: list[str] = []
+        for line_no, row in enumerate(iterator, start=2):
+            total_rows += 1
+            # O relatório mistura compras finalizadas e futuras. Para o painel operacional,
+            # importamos integralmente as compras em trânsito ou já dentro da Operação.
+            purchase_status = normalize_text(cell(row, "statuscompra", ""))
+            if purchase_status not in {"transito", "operacoes"}:
+                continue
+            matched_rows += 1
+            try:
+                purchase_id = clean_id(cell(row, "idcompra"))
+                if not purchase_id:
+                    raise ValueError("ID Compra vazio")
+                existing = con.execute("SELECT * FROM cards WHERE purchase_id=?", (purchase_id,)).fetchone()
+                original_type = str(cell(row, "tipo", "") or "").strip()
+                purchase_mode = purchase_mode_from_type(original_type)
+                if not purchase_mode:
+                    raise ValueError(f"Tipo da compra não reconhecido: {original_type or 'vazio'}")
+                card_data = (
+                    clean_date(cell(row, "datacriacao")),
+                    str(cell(row, "fornecedor", "") or "").strip(),
+                    original_type,
+                    purchase_mode,
+                    str(cell(row, "statuscompra", "") or "").strip(),
+                    str(cell(row, "destino", "") or "").strip(),
+                    clean_date(cell(row, "dataentregaprevista")),
+                    clean_int(cell(row, "qtditens")),
+                    str(cell(row, "observacoes", "") or "").strip(),
+                    str(cell(row, "marca", "") or "").strip(),
+                    str(cell(row, "colecao", "") or "").strip(),
+                )
+                if existing:
+                    con.execute(
+                        """UPDATE cards SET source_created_date=?,supplier=?,original_type=?,purchase_mode=?,status_compra=?,
+                           original_destination=?,forecast_date=?,qtd_itens=?,source_notes=?,brand=?,collection=?,updated_at=?
+                           WHERE id=?""",
+                        (*card_data, iso_now(), existing["id"]),
+                    )
+                    card_id = existing["id"]
+                    if card_id not in touched_cards:
+                        cards_updated += 1
+                else:
+                    cur = con.execute(
+                        """INSERT INTO cards(purchase_id,source_created_date,supplier,original_type,purchase_mode,status_compra,
+                           original_destination,forecast_date,qtd_itens,source_notes,brand,collection,current_sector,status,
+                           receiving_type,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        (purchase_id, *card_data, "RECEBIMENTO", "AGUARDANDO_RECEBIMENTO", "NOVA", iso_now(), iso_now()),
+                    )
+                    card_id = cur.lastrowid
+                    cards_created += 1
+                    add_history(con, card_id, "IMPORTACAO", f"Compra {purchase_id} importada diretamente para Recebimento.", user_id or None)
+                touched_cards.add(card_id)
+
+                product = str(cell(row, "produto", "") or "").strip()
+                sku = str(cell(row, "sku", "") or "").strip()
+                explicit_reference = str(cell(row, "referencia", "") or "").strip()
+                row_expected_qty = clean_int(cell(row, "qtdesperada"))
+                color_value = str(cell(row, "cor", "") or "").strip()
+                size_value = str(cell(row, "tamanho", "") or "").strip()
+                lot_id_value = clean_id(cell(row, "idlote"))
+
+                parsed_blocks = reference_blocks_from_copied_product(product)
+                if not parsed_blocks:
+                    fallback_reference = reference_from_import_row(row, headers) or reference_from_copied_product(product, explicit_reference)
+                    parsed_blocks = [{
+                        "reference": fallback_reference,
+                        "sku": sku or None,
+                        "expected_qty": row_expected_qty,
+                    }]
+                elif len(parsed_blocks) == 1 and parsed_blocks[0].get("expected_qty") is None:
+                    parsed_blocks[0]["expected_qty"] = row_expected_qty
+
+                source_values = {
+                    "status_kanban": cell(row, "statuskanban", ""),
+                    "status_purchase": cell(row, "statuscompra", ""),
+                    "status_lot": cell(row, "statuslote", ""),
+                    "status_quality": cell(row, "statusqualidade", ""),
+                    "inspection_phase": cell(row, "faseinspecao", ""),
+                    "status_pcp": cell(row, "statuspcp", ""),
+                    "status_logistics": cell(row, "statuslogistica", ""),
+                }
+
+                for parsed in parsed_blocks:
+                    reference = str(parsed.get("reference") or "").strip()
+                    if not reference:
+                        raise ValueError("Referência comercial não encontrada no Produto/Descrição do SGO.")
+
+                    item_sku = str(parsed.get("sku") or sku or "").strip()
+                    expected_qty = (
+                        int(parsed["expected_qty"])
+                        if parsed.get("expected_qty") is not None
+                        else row_expected_qty
+                    )
+                    item_product = reference if len(parsed_blocks) > 1 else product
+
+                    source_key = "|".join([
+                        purchase_id,
+                        reference,
+                        item_sku or item_product,
+                        color_value,
+                        size_value,
+                    ])
+                    legacy_source_key = "|".join([
+                        purchase_id,
+                        lot_id_value,
+                        sku or product,
+                        color_value,
+                        size_value,
+                        explicit_reference,
+                    ])
+
+                    item_values = (
+                        item_product,
+                        reference,
+                        item_sku,
+                        str(cell(row, "grupo", "") or "").strip(),
+                        str(cell(row, "colecao", "") or "").strip(),
+                        str(cell(row, "marca", "") or "").strip(),
+                        str(cell(row, "genero", "") or "").strip(),
+                        color_value,
+                        size_value,
+                        str(cell(row, "capsula", "") or "").strip(),
+                        str(cell(row, "lote", "") or "").strip(),
+                        lot_id_value,
+                        str(cell(row, "nf", "") or "").strip(),
+                        expected_qty,
+                        str(cell(row, "urlfoto", "") or "").strip(),
+                        str(cell(row, "statuskanban", "") or "").strip(),
+                        source_stage_from_row(source_values),
+                        str(source_values["status_purchase"] or "").strip(),
+                        str(source_values["status_lot"] or "").strip(),
+                        str(source_values["status_quality"] or "").strip(),
+                        str(source_values["inspection_phase"] or "").strip(),
+                        str(source_values["status_pcp"] or "").strip(),
+                        str(cell(row, "costureiro", "") or "").strip(),
+                        str(source_values["status_logistics"] or "").strip(),
+                        clean_int(cell(row, "qtdrecebida")),
+                    )
+
+                    item = con.execute(
+                        "SELECT id FROM items WHERE card_id=? AND source_key=?",
+                        (card_id, source_key),
+                    ).fetchone()
+                    if not item and legacy_source_key != source_key and len(parsed_blocks) == 1:
+                        item = con.execute(
+                            "SELECT id FROM items WHERE card_id=? AND source_key=?",
+                            (card_id, legacy_source_key),
+                        ).fetchone()
+                        if item:
+                            con.execute(
+                                "UPDATE items SET source_key=? WHERE id=?",
+                                (source_key, item["id"]),
+                            )
+
+                    if item:
+                        con.execute(
+                            """UPDATE items SET product=?,reference=?,sku=?,group_name=?,collection=?,brand=?,gender=?,color=?,
+                               size=?,capsule=?,lot=?,lot_id=?,nf=?,expected_qty=?,url_photo=?,status_kanban=?,source_stage=?,
+                               source_status_purchase=?,source_status_lot=?,source_status_quality=?,source_inspection_phase=?,
+                               source_status_pcp=?,source_seamstress=?,source_status_logistics=?,source_received_qty=? WHERE id=?""",
+                            (*item_values, item["id"]),
+                        )
+                        items_updated += 1
+                    else:
+                        con.execute(
+                            """INSERT INTO items(card_id,source_key,product,reference,sku,group_name,collection,brand,gender,
+                               color,size,capsule,lot,lot_id,nf,expected_qty,url_photo,status_kanban,source_stage,
+                               source_status_purchase,source_status_lot,source_status_quality,source_inspection_phase,
+                               source_status_pcp,source_seamstress,source_status_logistics,source_received_qty)
+                               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                            (card_id, source_key, *item_values),
+                        )
+                        items_created += 1
+
+            except Exception as exc:
+                errors.append(f"Linha {line_no}: {exc}")
+
+        for card_id in touched_cards:
+            stages = {row["source_stage"] for row in con.execute("SELECT source_stage FROM items WHERE card_id=?", (card_id,)).fetchall()}
+            status, summary = card_source_status(stages)
+            card = con.execute("SELECT original_destination,current_sector,status FROM cards WHERE id=?", (card_id,)).fetchone()
+            if card and is_cd02(card["original_destination"]) and "TRANSITO" not in stages:
+                delete_card_with_downstream(con, card_id)
+                removed_card_ids.append(card_id)
+                cards_removed_cd02 += 1
+                continue
+            sector, status = imported_card_route(stages)
+            receiving_type = (
+                "RETORNO" if "RETORNO_COSTURA" in stages
+                else "COSTURA" if stages == {"EM_COSTURA"}
+                else "NOVA"
+            )
+            if card and has_local_workflow(con, card_id, card["current_sector"]):
+                con.execute("""UPDATE cards SET source_location_summary=?,source_snapshot_at=?,updated_at=?
+                    WHERE id=?""", (summary, iso_now(), iso_now(), card_id))
+            else:
+                con.execute("""UPDATE cards SET current_sector=?,status=?,receiving_type=?,
+                    source_location_summary=?,source_snapshot_at=?,updated_at=? WHERE id=?""",
+                    (sector, status, receiving_type, summary, iso_now(), iso_now(), card_id))
+            # O controle é aberto sobre os itens da etapa correspondente. Assim uma
+            # compra mista não movimenta tamanhos que já estão em outros setores.
+            if "RETORNO_COSTURA" in stages:
+                con.execute("UPDATE cards SET receiving_type='RETORNO' WHERE id=?", (card_id,))
+                return_item_ids = [row["id"] for row in con.execute(
+                    """SELECT id FROM items WHERE card_id=? AND source_stage='RETORNO_COSTURA'
+                       AND expected_qty>0 ORDER BY id""", (card_id,)
+                ).fetchall()]
+                ensure_receiving(con, card_id, "RETORNO", return_item_ids)
+            elif "TRANSITO" in stages:
+                transit_item_ids = [row["id"] for row in con.execute(
+                    """SELECT id FROM items WHERE card_id=? AND source_stage='TRANSITO'
+                       AND expected_qty>0 ORDER BY id""", (card_id,)
+                ).fetchall()]
+                ensure_receiving(
+                    con, card_id, "NOVA",
+                    transit_item_ids if stages != {"TRANSITO"} else None,
+                )
+            elif stages == {"EM_COSTURA"}:
+                con.execute("UPDATE cards SET receiving_type='COSTURA' WHERE id=?", (card_id,))
+                costura_item_ids = [row["id"] for row in con.execute(
+                    """SELECT id FROM items WHERE card_id=? AND source_stage='EM_COSTURA'
+                       AND expected_qty>0 ORDER BY id""", (card_id,)
+                ).fetchall()]
+                ensure_receiving(con, card_id, "COSTURA", costura_item_ids)
+        con.execute(
+            """INSERT INTO imports(filename,total_rows,matched_rows,cards_created,cards_updated,items_created,items_updated,
+               errors,user_id,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)""",
+            (file.filename, total_rows, matched_rows, cards_created, cards_updated, items_created, items_updated,
+             "\n".join(errors[:50]), user_id or None, iso_now()),
+        )
+        con.commit()
+        con.close()
+        for removed_card_id in removed_card_ids:
+            try:
+                delete_card_from_supabase(removed_card_id)
+            except Exception as e:
+                print(f"[aviso] não consegui remover card {removed_card_id} do Supabase: {e}")
+        return {
+            "total_rows": total_rows,
+            "matched_rows": matched_rows,
+            "cards_created": cards_created,
+            "cards_updated": cards_updated,
+            "items_created": items_created,
+            "items_updated": items_updated,
+            "cards_removed_cd02": cards_removed_cd02,
+            "errors": errors[:20],
+        }
+    finally:
+        if wb is not None:
+            wb.close()
+        temp.unlink(missing_ok=True)
+
+
+@app.get("/api/imports")
+def imports():
+    con = db_connect()
+    rows = con.execute("SELECT * FROM imports ORDER BY id DESC LIMIT 30").fetchall()
+    con.close()
+    return [dict(r) for r in rows]
+
+
+@app.get("/api/dashboard")
+def dashboard():
+    con = db_connect()
+    status_rows = con.execute("SELECT status,COUNT(*) n FROM cards GROUP BY status").fetchall()
+    counts = {r["status"]: r["n"] for r in status_rows}
+    recent = con.execute(
+        """SELECT c.id,c.purchase_id,c.supplier,c.brand,c.purchase_mode,c.current_sector,c.status,c.casulo_current,c.updated_at,
+           COALESCE(SUM(i.expected_qty),0) expected_total
+           FROM cards c LEFT JOIN items i ON i.card_id=c.id
+           GROUP BY c.id ORDER BY c.updated_at DESC LIMIT 12"""
+    ).fetchall()
+    totals = {
+        "cards": con.execute("SELECT COUNT(*) n FROM cards").fetchone()["n"],
+        "receiving": con.execute("SELECT COUNT(*) n FROM cards WHERE current_sector='RECEBIMENTO' OR source_snapshot_at IS NOT NULL").fetchone()["n"],
+        "pending_10": counts.get("RECEBIMENTO_FISICO_CONCLUIDO_10_PENDENTE", 0),
+        "pending_physical": counts.get("SEPARACAO_10_CONCLUIDA_RECEBIMENTO_PENDENTE", 0),
+        "awaiting_dispatch": counts.get("AGUARDANDO_DESPACHO_COSTURA", 0),
+        "awaiting_return": counts.get("AGUARDANDO_RECEBIMENTO_RETORNO", 0),
+        "quality": con.execute("""SELECT COUNT(*) n FROM cards c WHERE c.current_sector='QUALIDADE'
+            OR EXISTS (SELECT 1 FROM items i WHERE i.card_id=c.id AND i.source_stage IN
+            ('QUALIDADE','QUALIDADE_RETRABALHO','QUALIDADE_REJEITADO'))""").fetchone()["n"],
+        "quality_in_progress": counts.get("EM_INSPECAO", 0) + counts.get("INSPECAO_PAUSADA", 0),
+        "processing": con.execute("""SELECT COUNT(*) n FROM cards c WHERE c.current_sector='PROCESSAMENTO'
+            OR EXISTS (SELECT 1 FROM items i WHERE i.card_id=c.id AND i.source_stage IN
+            ('AGUARDANDO_PROCESSAMENTO','PROCESSAMENTO'))""").fetchone()["n"],
+        "storage": con.execute("""SELECT COUNT(*) n FROM cards c WHERE c.current_sector='ESTOCAGEM'
+            OR EXISTS (SELECT 1 FROM items i WHERE i.card_id=c.id AND i.source_stage='ESTOCAGEM')""").fetchone()["n"],
+        "processing_in_progress": counts.get("EM_PROCESSAMENTO", 0) + counts.get("PROCESSAMENTO_PAUSADO", 0),
+    }
+    def sum_expected(filter_sql: str) -> int:
+        row = con.execute(
+            f"""SELECT COALESCE(SUM(i.expected_qty),0) total FROM cards c
+                LEFT JOIN items i ON i.card_id=c.id WHERE {filter_sql}"""
+        ).fetchone()
+        return int(row["total"] or 0)
+
+    totals["receiving_qty"] = sum_expected(
+        "c.current_sector='RECEBIMENTO' OR c.source_snapshot_at IS NOT NULL"
+    )
+    totals["quality_qty"] = sum_expected(
+        "c.current_sector='QUALIDADE' OR EXISTS (SELECT 1 FROM items si WHERE si.card_id=c.id "
+        "AND si.source_stage IN ('QUALIDADE','QUALIDADE_RETRABALHO','QUALIDADE_REJEITADO'))"
+    )
+    totals["processing_qty"] = sum_expected(
+        "c.current_sector IN ('PROCESSAMENTO','TRIAGEM') OR EXISTS (SELECT 1 FROM items si WHERE si.card_id=c.id "
+        "AND si.source_stage IN ('AGUARDANDO_PROCESSAMENTO','PROCESSAMENTO'))"
+    )
+    capacity_row = con.execute(
+        """SELECT COALESCE(SUM(l.capacity),0) total FROM warehouse_locations l
+           JOIN warehouse_zones z ON z.id=l.zone_id WHERE z.active=1"""
+    ).fetchone()
+    totals["warehouse_capacity"] = int(capacity_row["total"] or 0)
+    con.close()
+    return {
+        "totals": totals,
+        "status_counts": [
+            {"status": status, "label": STATUS_LABELS.get(status, status), "value": value}
+            for status, value in counts.items()
+        ],
+        "recent": [dict(r) | {"status_label": STATUS_LABELS.get(r["status"], r["status"])} for r in recent],
+    }
+
+
+def manual_card_reference(source_notes: Any) -> str:
+    marker = "Referência criada manualmente:"
+    text_value = str(source_notes or "")
+    if marker not in text_value:
+        return ""
+    value = text_value.split(marker, 1)[1].split(" | ", 1)[0].strip()
+    return value
+
+
+@app.get("/api/cards")
+def list_cards(scope: str = "receiving", search: str = ""):
+    con = db_connect()
+    sql = """SELECT c.id,c.purchase_id,c.supplier,c.original_type,c.purchase_mode,c.brand,c.forecast_date,c.current_sector,c.status,
+             c.receiving_type,c.quality_destination,c.casulo_current,c.source_location_summary,c.source_snapshot_at,c.source_notes,c.updated_at,
+             (SELECT r.ten_percent_status FROM receivings r WHERE r.card_id=c.id ORDER BY r.id DESC LIMIT 1) receiving_activity,
+             COALESCE(SUM(i.expected_qty),0) expected_total,COUNT(i.id) item_count,
+             GROUP_CONCAT(DISTINCT NULLIF(TRIM(i.reference),'')) reference_list,
+             GROUP_CONCAT(DISTINCT COALESCE(i.product,'') || ' ' || COALESCE(i.reference,'') || ' ' || COALESCE(i.sku,'')) material_search
+             FROM cards c LEFT JOIN items i ON i.card_id=c.id WHERE 1=1"""
+    params: list[Any] = []
+    if scope == "receiving":
+        sql += " AND (c.current_sector='RECEBIMENTO' OR c.source_snapshot_at IS NOT NULL)"
+    elif scope == "quality":
+        sql += " AND (c.current_sector='QUALIDADE' OR EXISTS (SELECT 1 FROM items si WHERE si.card_id=c.id AND si.source_stage IN ('QUALIDADE','QUALIDADE_RETRABALHO','QUALIDADE_REJEITADO')))"
+    elif scope == "processing":
+        sql += " AND (c.current_sector='PROCESSAMENTO' OR EXISTS (SELECT 1 FROM items si WHERE si.card_id=c.id AND si.source_stage IN ('AGUARDANDO_PROCESSAMENTO','PROCESSAMENTO')))"
+    elif scope == "labeling":
+        sql += " AND (c.current_sector='ETIQUETAGEM' OR EXISTS (SELECT 1 FROM items si WHERE si.card_id=c.id AND si.source_stage='ETIQUETAGEM'))"
+    elif scope == "storage":
+        sql += " AND (c.current_sector='ESTOCAGEM' OR EXISTS (SELECT 1 FROM items si WHERE si.card_id=c.id AND si.source_stage='ESTOCAGEM'))"
+    elif scope == "outside":
+        sql += " AND c.current_sector NOT IN ('RECEBIMENTO','QUALIDADE','PROCESSAMENTO')"
+    if search:
+        sql += " AND (c.purchase_id LIKE ? OR c.supplier LIKE ? OR c.brand LIKE ? OR c.casulo_current LIKE ? OR i.product LIKE ? OR i.reference LIKE ? OR i.sku LIKE ?)"
+        q = f"%{search}%"
+        params.extend([q, q, q, q, q, q, q])
+    sql += " GROUP BY c.id ORDER BY c.updated_at DESC"
+    rows = con.execute(sql, params).fetchall()
+    transit = {r["id"]: awaiting_arrival(con, r["id"]) for r in rows if r["status"] in TRANSIT_STATUSES}
+    con.close()
+    result = []
+    for r in rows:
+        item = dict(r)
+        if not str(item.get("reference_list") or "").strip():
+            fallback_reference = manual_card_reference(item.get("source_notes"))
+            if fallback_reference:
+                item["reference_list"] = fallback_reference
+                item["material_search"] = " ".join(
+                    value for value in [item.get("material_search"), fallback_reference] if value
+                )
+        item["status_label"] = STATUS_LABELS.get(item["status"], item["status"])
+        item["in_transit"] = transit.get(item["id"], False)
+        result.append(item)
+    return result
+
+
+
+def repair_stored_reference_items(con: sqlite3.Connection, card_id: int) -> bool:
+    """Corrige cards antigos quando o Produto salvo ainda contém o bloco bruto do SGO."""
+    card = con.execute(
+        "SELECT id,current_sector FROM cards WHERE id=?",
+        (card_id,),
+    ).fetchone()
+    if not card or card["current_sector"] != "RECEBIMENTO":
+        return False
+
+    changed = False
+    items = con.execute(
+        "SELECT * FROM items WHERE card_id=? ORDER BY id",
+        (card_id,),
+    ).fetchall()
+
+    for item in items:
+        blocks = reference_blocks_from_copied_product(item["product"])
+        if not blocks:
+            continue
+
+        if len(blocks) == 1:
+            block = blocks[0]
+            reference = str(block.get("reference") or "").strip()
+            if reference and reference != str(item["reference"] or "").strip():
+                fields = ["reference=?"]
+                values: list[Any] = [reference]
+                if block.get("sku") and not str(item["sku"] or "").strip():
+                    fields.append("sku=?")
+                    values.append(str(block["sku"]).strip())
+                if block.get("expected_qty") is not None and str(item["reference"] or "").strip().lower().startswith("lote "):
+                    fields.append("expected_qty=?")
+                    values.append(int(block["expected_qty"]))
+                values.append(item["id"])
+                con.execute(
+                    "UPDATE items SET " + ",".join(fields) + " WHERE id=?",
+                    values,
+                )
+                changed = True
+            continue
+
+        # Só destrincha automaticamente quando a fonte traz uma quantidade
+        # explícita para cada referência. Não inventamos distribuição.
+        if any(block.get("expected_qty") is None for block in blocks):
+            continue
+
+        blocked = False
+        checks = [
+            ("SELECT 1 FROM quality_sample_items WHERE item_id=? LIMIT 1", (item["id"],)),
+            ("SELECT 1 FROM processing_item_quantities WHERE item_id=? LIMIT 1", (item["id"],)),
+            ("""SELECT 1 FROM downstream_assignments da
+                JOIN downstream_operations dop ON dop.id=da.operation_id
+                WHERE da.item_id=? LIMIT 1""", (item["id"],)),
+        ]
+        for sql, args in checks:
+            try:
+                if con.execute(sql, args).fetchone():
+                    blocked = True
+                    break
+            except sqlite3.OperationalError:
+                pass
+        if blocked:
+            continue
+
+        card_purchase = con.execute(
+            "SELECT purchase_id FROM cards WHERE id=?",
+            (card_id,),
+        ).fetchone()
+        purchase_id = str(card_purchase["purchase_id"] if card_purchase else "").strip()
+        receiving_links = [
+            row["receiving_id"]
+            for row in con.execute(
+                "SELECT receiving_id FROM receiving_operation_items WHERE item_id=?",
+                (item["id"],),
+            ).fetchall()
+        ]
+
+        columns = [column for column in item.keys() if column != "id"]
+        placeholders = ",".join("?" for _ in columns)
+        new_ids: list[int] = []
+
+        for block in blocks:
+            reference = str(block["reference"]).strip()
+            item_sku = str(block.get("sku") or item["sku"] or "").strip()
+            source_key = "|".join([
+                purchase_id,
+                reference,
+                item_sku or reference,
+                str(item["color"] or "").strip(),
+                str(item["size"] or "").strip(),
+            ])
+            existing = con.execute(
+                "SELECT id FROM items WHERE card_id=? AND source_key=? AND id<>?",
+                (card_id, source_key, item["id"]),
+            ).fetchone()
+            if existing:
+                new_id = int(existing["id"])
+            else:
+                values_by_column = {column: item[column] for column in columns}
+                values_by_column.update({
+                    "source_key": source_key,
+                    "product": reference,
+                    "reference": reference,
+                    "sku": item_sku,
+                    "expected_qty": int(block["expected_qty"]),
+                })
+                new_id = int(con.execute(
+                    f"INSERT INTO items ({','.join(columns)}) VALUES ({placeholders})",
+                    [values_by_column[column] for column in columns],
+                ).lastrowid)
+            new_ids.append(new_id)
+
+        # O recebimento continua enxergando o conjunto correto de itens.
+        if receiving_links:
+            for receiving_id in receiving_links:
+                con.execute(
+                    "DELETE FROM receiving_operation_items WHERE receiving_id=? AND item_id=?",
+                    (receiving_id, item["id"]),
+                )
+                con.executemany(
+                    "INSERT OR IGNORE INTO receiving_operation_items(receiving_id,item_id) VALUES(?,?)",
+                    [(receiving_id, new_id) for new_id in new_ids],
+                )
+
+        con.execute("DELETE FROM items WHERE id=?", (item["id"],))
+        changed = True
+
+    return changed
+
+
+@app.get("/api/cards/{card_id}")
+def get_card(card_id: int):
+    con = db_connect()
+    repaired = repair_stored_reference_items(con, card_id)
+    if repaired:
+        con.commit()
+        try:
+            sync_card_items_to_supabase(con, card_id)
+        except Exception as exc:
+            print(f"[aviso] não consegui sincronizar os itens reparados do Card {card_id}: {exc}")
+    row = con.execute("SELECT * FROM cards WHERE id=?", (card_id,)).fetchone()
+    if not row:
+        con.close()
+        raise HTTPException(404, "Card não encontrado.")
+    if ensure_pending_receiving(con, card_id):
+        con.commit()
+    card = dict(row)
+    card["status_label"] = STATUS_LABELS.get(card["status"], card["status"])
+    card["manual_reference"] = manual_card_reference(card.get("source_notes"))
+    card["items"] = [dict(r) for r in con.execute("SELECT * FROM items WHERE card_id=? ORDER BY product,color,size,id", (card_id,)).fetchall()]
+    card["expected_total"] = sum(item["expected_qty"] for item in card["items"])
+    card["rm_item_volumes"] = {str(item_id): qty for item_id, qty in item_allocation_totals(card_id, "RM").items()}
+    card["receiving"] = current_receiving(con, card_id)
+    card["in_transit"] = awaiting_arrival(con, card_id)
+    card["dispatch"] = current_dispatch(con, card_id)
+    card["quality"] = quality_card_data(con, card_id)
+    card["processing"] = processing_card_data(con, card_id)
+    card["labeling"] = downstream_card_data(con, card_id, "ETIQUETAGEM")
+    card["storage"] = downstream_card_data(con, card_id, "ESTOCAGEM")
+    card["casulo_history"] = [dict(r) for r in con.execute(
+        """SELECT ch.*,u.name user_name FROM casulo_history ch JOIN users u ON u.id=ch.user_id
+           WHERE ch.card_id=? ORDER BY ch.id DESC""", (card_id,)).fetchall()]
+    card["history"] = [dict(r) for r in con.execute(
+        """SELECT h.*,u.name user_name FROM history h LEFT JOIN users u ON u.id=h.user_id
+           WHERE h.card_id=? ORDER BY h.id DESC""", (card_id,)).fetchall()]
+    con.close()
+    return card
+
+
+@app.patch("/api/receivings/{receiving_id}")
+async def save_receiving(receiving_id: int, request: Request):
+    data = await request.json()
+    user_id = int(data.get("user_id") or 0)
+    con = db_connect()
+    require_role(con, user_id, {"recebimento"})
+    rec = con.execute("SELECT * FROM receivings WHERE id=?", (receiving_id,)).fetchone()
+    if not rec:
+        con.close()
+        raise HTTPException(404, "Recebimento não encontrado.")
+    card = con.execute("SELECT * FROM cards WHERE id=?", (rec["card_id"],)).fetchone()
+    if card["current_sector"] != "RECEBIMENTO":
+        con.close()
+        raise HTTPException(400, "O Card não está no Recebimento.")
+    if awaiting_arrival(con, rec["card_id"]):
+        con.close()
+        raise HTTPException(400, "A mercadoria ainda está em trânsito. Marque como recebida quando ela chegar.")
+
+    def incoming(name: str, current: Any) -> Any:
+        return data[name] if name in data else current
+
+    damage = incoming("has_damage", rec["has_damage"])
+    if damage is True:
+        damage = 1
+    elif damage is False:
+        damage = 0
+    values = (
+        incoming("volumes", rec["volumes"]),
+        incoming("received_qty", rec["received_qty"]),
+        damage,
+        incoming("damage_description", rec["damage_description"]),
+        incoming("notes", rec["notes"]),
+        to_json(incoming("photo_paths", from_json(rec["photo_paths"], []))),
+        incoming("ten_percent_actual", rec["ten_percent_actual"]),
+        receiving_id,
+    )
+    con.execute(
+        """UPDATE receivings SET volumes=?,received_qty=?,has_damage=?,damage_description=?,notes=?,photo_paths=?,
+           ten_percent_actual=? WHERE id=?""",
+        values,
+    )
+    received_qty = incoming("received_qty", rec["received_qty"])
+    if received_qty is not None:
+        if rec["source_subset"]:
+            item_count = con.execute(
+                """SELECT COUNT(*) n FROM receiving_operation_items roi
+                   JOIN items i ON i.id=roi.item_id
+                   WHERE roi.receiving_id=? AND i.expected_qty>0""", (receiving_id,)
+            ).fetchone()["n"]
+        else:
+            item_count = con.execute(
+                "SELECT COUNT(*) n FROM items WHERE card_id=? AND expected_qty>0", (rec["card_id"],)
+            ).fetchone()["n"]
+        minimum = max(math.ceil(int(received_qty) * 0.10), item_count if card["purchase_mode"] == "GRADE" else 0)
+        con.execute("UPDATE receivings SET ten_percent_min=? WHERE id=?", (minimum, receiving_id))
+    add_history(con, rec["card_id"], "RECEBIMENTO_SALVO", "Dados do Recebimento atualizados.", user_id)
+    con.commit()
+    con.close()
+    return {"ok": True}
+
+
+@app.post("/api/receivings/{receiving_id}/physical-complete")
+async def complete_physical(receiving_id: int, request: Request):
+    data = await request.json()
+    user_id = int(data.get("user_id") or 0)
+    con = db_connect()
+    user = require_role(con, user_id, {"recebimento"})
+    rec = con.execute("SELECT * FROM receivings WHERE id=?", (receiving_id,)).fetchone()
+    if not rec:
+        con.close()
+        raise HTTPException(404, "Recebimento não encontrado.")
+    card = con.execute("SELECT * FROM cards WHERE id=?", (rec["card_id"],)).fetchone()
+    if card["current_sector"] != "RECEBIMENTO":
+        con.close()
+        raise HTTPException(400, "O Card não está no Recebimento.")
+    if awaiting_arrival(con, rec["card_id"]):
+        con.close()
+        raise HTTPException(400, "A mercadoria ainda está em trânsito. Marque como recebida quando ela chegar.")
+    if rec["physical_status"] == "CONCLUIDO":
+        con.close()
+        raise HTTPException(400, "O recebimento físico já foi concluído.")
+    if rec["volumes"] is None or rec["received_qty"] is None:
+        con.close()
+        raise HTTPException(400, "Informe a quantidade de volumes e a quantidade recebida.")
+    if rec["has_damage"] is None:
+        con.close()
+        raise HTTPException(400, "Informe se existem danos ou avarias.")
+    if rec["has_damage"] and not (rec["damage_description"] or "").strip():
+        con.close()
+        raise HTTPException(400, "Descreva os danos ou avarias.")
+    alocado = total_allocated("RM", rec["card_id"])
+    if alocado < rec["volumes"]:
+        con.close()
+        raise HTTPException(
+            400,
+            f"Aloque o endereço físico (casulo) antes de concluir — {alocado}/{rec['volumes']} volumes alocados (RM + Qualidade + Processamento).",
+        )
+    con.execute(
+        """UPDATE receivings SET physical_status='CONCLUIDO',physical_completed_by=?,physical_completed_at=?
+           WHERE id=?""",
+        (user_id, iso_now(), receiving_id),
+    )
+    add_history(con, rec["card_id"], "RECEBIMENTO_FISICO_CONCLUIDO", f"{user['name']} concluiu o recebimento físico.", user_id)
+    next_status = update_new_receiving_flow(con, receiving_id, user_id)
+    con.commit()
+    con.close()
+    return {"ok": True, "next_status": next_status}
+
+
+@app.post("/api/receivings/{receiving_id}/timer/{action}")
+async def sample_timer(receiving_id: int, action: str, request: Request):
+    data = await request.json()
+    user_id = int(data.get("user_id") or 0)
+    con = db_connect()
+    require_role(con, user_id, {"recebimento"})
+    rec = con.execute("SELECT * FROM receivings WHERE id=?", (receiving_id,)).fetchone()
+    if not rec:
+        con.close()
+        raise HTTPException(404, "Recebimento não encontrado.")
+    card = con.execute("SELECT * FROM cards WHERE id=?", (rec["card_id"],)).fetchone()
+    if card["current_sector"] != "RECEBIMENTO":
+        con.close()
+        raise HTTPException(400, "O Card não está no Recebimento.")
+    if awaiting_arrival(con, rec["card_id"]):
+        con.close()
+        raise HTTPException(400, "A mercadoria ainda está em trânsito. Marque como recebida quando ela chegar.")
+    if not rec["ten_percent_required"]:
+        con.close()
+        raise HTTPException(400, "Este recebimento não exige separação dos 10%.")
+    if action == "finish":
+        rec = con.execute("SELECT * FROM receivings WHERE id=?", (receiving_id,)).fetchone()
+        if rec["ten_percent_actual"] is None:
+            con.close()
+            message = ("Informe a quantidade produzida." if rec["receiving_type"] == "COSTURA"
+                       else "Informe a quantidade efetivamente separada.")
+            raise HTTPException(400, message)
+        if rec["receiving_type"] != "COSTURA" and rec["ten_percent_actual"] < rec["ten_percent_min"]:
+            con.close()
+            raise HTTPException(400, f"A quantidade separada deve ser no mínimo {rec['ten_percent_min']} peças.")
+    summary = timer_action(con, receiving_id, action, user_id)
+    status_map = {"start": "EM_ANDAMENTO", "pause": "PAUSADA", "resume": "EM_ANDAMENTO", "finish": "CONCLUIDA"}
+    con.execute("UPDATE receivings SET ten_percent_status=? WHERE id=?",
+                (status_map[action],receiving_id))
+    verbs = {"start": "iniciou", "pause": "pausou", "resume": "retomou", "finish": "concluiu"}
+    activity = (
+        "o controle de produção da Costura" if rec["receiving_type"] == "COSTURA"
+        else "a separação dos 10%" if rec["receiving_type"] == "NOVA"
+        else "a separação da nova amostra de 10% do retorno CD01"
+    )
+    add_history(con, rec["card_id"], "SEPARACAO_10", f"Operador {verbs[action]} {activity}.", user_id)
+    next_status = None
+    if action == "finish" and rec["receiving_type"] != "COSTURA":
+        next_status = update_new_receiving_flow(con, receiving_id, user_id)
+    con.commit()
+    con.close()
+    return summary | {"next_status": next_status}
+@app.delete("/api/cards/{card_id}")
+async def delete_card(card_id: int, request: Request):
+    user_id = int(request.query_params.get("user_id", "0") or 0)
+    con = db_connect()
+    require_role(con, user_id, {"admin"})
+    card = con.execute("SELECT id,purchase_id FROM cards WHERE id=?", (card_id,)).fetchone()
+    if not card:
+        con.close()
+        raise HTTPException(404, "Card não encontrado.")
+    purchase_id = card["purchase_id"]
+    try:
+        delete_card_from_supabase(card_id)
+    except Exception as exc:
+        con.close()
+        raise HTTPException(503, f"Não foi possível remover o Card do armazenamento persistente: {exc}")
+    delete_card_with_downstream(con, card_id)
+    con.commit()
+    con.close()
+    return {"ok": True, "card_id": card_id, "purchase_id": purchase_id}
+
+@app.post("/api/cards/{card_id}/purchase-mode")
+async def set_purchase_mode(card_id: int, request: Request):
+    """Define manualmente Grade/Saldo quando o tipo não foi reconhecido na importação."""
+    data = await request.json()
+    user_id = int(data.get("user_id") or 0)
+    mode = str(data.get("purchase_mode") or "").strip().upper()
+    if mode not in {"GRADE", "SALDO"}:
+        raise HTTPException(400, "Selecione o tipo da compra: Grade ou Saldo.")
+    con = db_connect()
+    user = require_role(con, user_id, {"recebimento", "qualidade", "supervisor", "admin"})
+    card = con.execute("SELECT id,purchase_mode FROM cards WHERE id=?", (card_id,)).fetchone()
+    if not card:
+        con.close()
+        raise HTTPException(404, "Card não encontrado.")
+    if str(card["purchase_mode"] or "").upper() in {"GRADE", "SALDO"}:
+        con.close()
+        raise HTTPException(400, "O tipo da compra já foi definido e não pode ser alterado.")
+    con.execute("UPDATE cards SET purchase_mode=?,updated_at=? WHERE id=?", (mode, iso_now(), card_id))
+    for rec in con.execute("SELECT id,received_qty,source_subset FROM receivings WHERE card_id=? AND closed_at IS NULL", (card_id,)).fetchall():
+        if rec["source_subset"]:
+            base = con.execute("""SELECT COALESCE(SUM(i.expected_qty),0) t,COUNT(*) n FROM receiving_operation_items roi
+                JOIN items i ON i.id=roi.item_id WHERE roi.receiving_id=? AND i.expected_qty>0""", (rec["id"],)).fetchone()
+        else:
+            base = con.execute("SELECT COALESCE(SUM(expected_qty),0) t,COUNT(*) n FROM items WHERE card_id=? AND expected_qty>0", (card_id,)).fetchone()
+        qty = int(rec["received_qty"]) if rec["received_qty"] is not None else int(base["t"] or 0)
+        minimum = max(math.ceil(qty * 0.10), int(base["n"] or 0) if mode == "GRADE" else 0)
+        con.execute("UPDATE receivings SET ten_percent_min=? WHERE id=?", (minimum, rec["id"]))
+    add_history(con, card_id, "TIPO_COMPRA_MANUAL",
+                f"{user['name']} informou manualmente o tipo da compra: {'Grade' if mode == 'GRADE' else 'Saldo'}.", user_id)
+    con.commit()
+    con.close()
+    return {"ok": True, "purchase_mode": mode}
+
+@app.post("/api/cards/{card_id}/mark-arrived")
+async def mark_arrived(card_id: int, request: Request):
+    """Marca que a mercadoria em trânsito chegou ao CD e libera o trabalho do Recebimento."""
+    data = await request.json()
+    user_id = int(data.get("user_id") or 0)
+    con = db_connect()
+    user = require_role(con, user_id, {"recebimento"})
+    if not con.execute("SELECT 1 FROM cards WHERE id=?", (card_id,)).fetchone():
+        con.close()
+        raise HTTPException(404, "Card não encontrado.")
+    if not awaiting_arrival(con, card_id):
+        con.close()
+        raise HTTPException(400, "Este Card não está aguardando chegada.")
+    ensure_receiving(con, card_id, "NOVA")
+    con.execute(
+        "UPDATE cards SET status='AGUARDANDO_RECEBIMENTO',receiving_type='NOVA',updated_at=? WHERE id=?",
+        (iso_now(), card_id),
+    )
+    add_history(con, card_id, "CHEGADA_CONFIRMADA",
+                f"{user['name']} marcou a mercadoria como recebida (chegou ao CD). Recebimento físico e separação dos 10% liberados.",
+                user_id)
+    con.commit()
+    con.close()
+    return {"ok": True, "status": "AGUARDANDO_RECEBIMENTO"}
+
+
+@app.post("/api/cards/{card_id}/casulo")
+async def update_casulo(card_id: int, request: Request):
+    data = await request.json()
+    user_id = int(data.get("user_id") or 0)
+    new_casulo = str(data.get("new_casulo") or "").strip()
+    note = str(data.get("note") or "").strip()
+    if not new_casulo:
+        raise HTTPException(400, "Informe o novo Casulo.")
+    con = db_connect()
+    user = require_role(con, user_id, {"recebimento"})
+    card = con.execute("SELECT * FROM cards WHERE id=?", (card_id,)).fetchone()
+    if not card:
+        con.close()
+        raise HTTPException(404, "Card não encontrado.")
+    if card["current_sector"] != "RECEBIMENTO":
+        con.close()
+        raise HTTPException(400, "O Casulo só pode ser alterado enquanto o Card estiver no Recebimento.")
+    old = card["casulo_current"] or ""
+    con.execute("UPDATE cards SET casulo_current=?,updated_at=? WHERE id=?", (new_casulo, iso_now(), card_id))
+    con.execute(
+        """INSERT INTO casulo_history(card_id,old_casulo,new_casulo,note,user_id,created_at)
+           VALUES(?,?,?,?,?,?)""",
+        (card_id, old, new_casulo, note, user_id, iso_now()),
+    )
+    add_history(
+        con,
+        card_id,
+        "CASULO_ALTERADO",
+        f"{user['name']} alterou o Casulo de '{old or 'não informado'}' para '{new_casulo}'.",
+        user_id,
+    )
+    con.commit()
+    con.close()
+    return {"ok": True}
+
+
+@app.post("/api/cards/{card_id}/dispatch")
+async def complete_dispatch(card_id: int, request: Request):
+    data = await request.json()
+    user_id = int(data.get("user_id") or 0)
+    carrier = str(data.get("carrier") or "").strip()
+    seamstress = str(data.get("seamstress_name") or "").strip()
+    dispatched_qty = data.get("dispatched_qty")
+    volumes = data.get("volumes")
+    notes = str(data.get("notes") or "").strip()
+    photo_paths = data.get("photo_paths") or []
+    requested_item_ids = sorted({int(value) for value in (data.get("item_ids") or []) if str(value).isdigit() and int(value) > 0})
+    if not carrier or not seamstress:
+        raise HTTPException(400, "Informe a transportadora e o nome do costureiro.")
+    if dispatched_qty in (None, "") or volumes in (None, ""):
+        raise HTTPException(400, "Informe a quantidade despachada e os volumes.")
+    con = db_connect()
+    user = require_role(con, user_id, {"recebimento"})
+    card = con.execute("SELECT * FROM cards WHERE id=?", (card_id,)).fetchone()
+    if not card:
+        con.close()
+        raise HTTPException(404, "Card não encontrado.")
+    if card["current_sector"] != "RECEBIMENTO" or card["status"] != "AGUARDANDO_DESPACHO_COSTURA":
+        con.close()
+        raise HTTPException(400, "O Card não está aguardando despacho no Recebimento.")
+    destination = card["quality_destination"]
+    if destination not in ("CD01", "CD02"):
+        con.close()
+        raise HTTPException(400, "O destino da Qualidade não está definido.")
+
+    operation_items = con.execute(
+        """SELECT i.id,i.expected_qty
+           FROM receivings r
+           JOIN receiving_operation_items roi ON roi.receiving_id=r.id
+           JOIN items i ON i.id=roi.item_id
+           WHERE r.card_id=? AND r.receiving_type='COSTURA' AND r.closed_at IS NULL
+           ORDER BY i.id""",
+        (card_id,),
+    ).fetchall()
+    operation_ids = {int(row["id"]) for row in operation_items}
+    item_ids = requested_item_ids or sorted(operation_ids)
+    if operation_ids and not set(item_ids).issubset(operation_ids):
+        con.close()
+        raise HTTPException(400, "Há referências selecionadas para despacho que não pertencem ao controle da Costura.")
+    if not item_ids:
+        con.close()
+        raise HTTPException(400, "Nenhuma referência foi disponibilizada para o despacho da Costura.")
+
+    return_forecast = add_business_days(date.today(), 7).isoformat() if destination == "CD01" else None
+    con.execute(
+        """INSERT INTO dispatches(card_id,destination,carrier,seamstress_name,dispatched_qty,volumes,photo_paths,
+           notes,return_forecast,completed_by,completed_at,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (card_id, destination, carrier, seamstress, int(dispatched_qty), int(volumes), to_json(photo_paths),
+         notes, return_forecast, user_id, iso_now(), iso_now()),
+    )
+
+    marks = ",".join("?" for _ in item_ids)
+    if destination == "CD01":
+        con.execute(
+            f"""UPDATE items SET source_stage='EM_COSTURA',source_status_quality='Concluído'
+                WHERE card_id=? AND id IN ({marks})""",
+            (card_id, *item_ids),
+        )
+        next_sector, next_status = "RECEBIMENTO", "EM_COSTURA_CD01"
+        ensure_receiving(con, card_id, "COSTURA", item_ids)
+        description = (
+            f"{user['name']} despachou {len(item_ids)} referência(s) para Costura CD01 pela transportadora {carrier}, "
+            f"costureiro {seamstress}. Previsão de retorno: {return_forecast}."
+        )
+    else:
+        con.execute(
+            f"""UPDATE items SET source_stage='CONCLUIDO',source_status_quality='Concluído'
+                WHERE card_id=? AND id IN ({marks})""",
+            (card_id, *item_ids),
+        )
+        next_sector, next_status = "FORA_FLUXO", "DESPACHO_CD02"
+        description = (
+            f"{user['name']} despachou {len(item_ids)} referência(s) para Costura CD02 pela transportadora {carrier}, "
+            f"costureiro {seamstress}. Card encerrado no fluxo interno."
+        )
+
+    con.execute(
+        "UPDATE cards SET current_sector=?,status=?,receiving_type=?,updated_at=? WHERE id=?",
+        (next_sector, next_status, "COSTURA" if destination == "CD01" else card["receiving_type"], iso_now(), card_id),
+    )
+    add_history(con, card_id, "DESPACHO_COSTURA", description, user_id)
+    con.commit()
+    con.close()
+    return {"ok": True, "next_status": next_status, "item_ids": item_ids}
+
+
+@app.post("/api/test/cards/{card_id}/quality-return")
+async def simulate_quality_return(card_id: int, request: Request):
+    data = await request.json()
+    user_id = int(data.get("user_id") or 0)
+    destination = str(data.get("destination") or "").strip().upper()
+    if destination not in ("CD01", "CD02"):
+        raise HTTPException(400, "Selecione CD01 ou CD02.")
+    con = db_connect()
+    require_role(con, user_id, {"admin"})
+    card = con.execute("SELECT * FROM cards WHERE id=?", (card_id,)).fetchone()
+    if not card:
+        con.close()
+        raise HTTPException(404, "Card não encontrado.")
+    if card["current_sector"] != "QUALIDADE":
+        con.close()
+        raise HTTPException(400, "A simulação exige que o Card esteja encaminhado à Qualidade.")
+    con.execute(
+        """UPDATE cards SET current_sector='RECEBIMENTO',status='AGUARDANDO_DESPACHO_COSTURA',
+           quality_destination=?,receiving_type='NOVA',updated_at=? WHERE id=?""",
+        (destination, iso_now(), card_id),
+    )
+    add_history(
+        con,
+        card_id,
+        "SIMULACAO_QUALIDADE",
+        f"Ferramenta de teste: Inspeção 1 concluída com destino {destination}. Card devolvido ao Recebimento para despacho.",
+        user_id,
+    )
+    con.commit()
+    con.close()
+    return {"ok": True}
+
+
+@app.post("/api/test/cards/{card_id}/costura-return")
+async def simulate_costura_return(card_id: int, request: Request):
+    data = await request.json()
+    user_id = int(data.get("user_id") or 0)
+    con = db_connect()
+    require_role(con, user_id, {"admin"})
+    card = con.execute("SELECT * FROM cards WHERE id=?", (card_id,)).fetchone()
+    if not card:
+        con.close()
+        raise HTTPException(404, "Card não encontrado.")
+    if card["status"] != "EM_COSTURA_CD01":
+        con.close()
+        raise HTTPException(400, "Somente Cards em Costura CD01 podem retornar.")
+    returned_ids = [int(row["id"]) for row in con.execute(
+        "SELECT id FROM items WHERE card_id=? AND source_stage='EM_COSTURA' AND expected_qty>0 ORDER BY id",
+        (card_id,),
+    ).fetchall()]
+    if not returned_ids:
+        con.close()
+        raise HTTPException(400, "Nenhuma referência em Costura disponível para retornar.")
+    marks = ",".join("?" for _ in returned_ids)
+    con.execute(
+        f"UPDATE items SET source_stage='RETORNO_COSTURA' WHERE card_id=? AND id IN ({marks})",
+        (card_id, *returned_ids),
+    )
+    con.execute(
+        """UPDATE cards SET current_sector='RECEBIMENTO',status='AGUARDANDO_RECEBIMENTO_RETORNO',
+           receiving_type='RETORNO',updated_at=? WHERE id=?""",
+        (iso_now(), card_id),
+    )
+    ensure_receiving(con, card_id, "RETORNO", returned_ids)
+    add_history(
+        con,
+        card_id,
+        "SIMULACAO_RETORNO_COSTURA",
+        "Ferramenta de teste: retorno CD01 registrado. Card enviado ao Recebimento para conferência e nova tiragem de 10%.",
+        user_id,
+    )
+    con.commit()
+    con.close()
+    return {"ok": True}
+
+
+register_quality_routes(app)
+register_processing_routes(app)
+register_downstream_routes(app)
+register_production_routes(app)
+register_goat_routes(app)
+register_positions_routes(app)
+register_unified_routes(app)
+register_collab_routes(app)
+
+@app.post("/api/test/cards/{card_id}/send-processing")
+async def simulate_send_processing(card_id: int, request: Request):
+    data = await request.json()
+    user_id = int(data.get("user_id") or 0)
+    con = db_connect()
+    require_role(con, user_id, {"admin"})
+    card = con.execute("SELECT * FROM cards WHERE id=?", (card_id,)).fetchone()
+    if not card:
+        con.close()
+        raise HTTPException(404, "Card não encontrado.")
+    if card["status"] == "DESPACHO_CD02":
+        con.close()
+        raise HTTPException(400, "Cards CD02 permanecem fora do fluxo interno.")
+    mode = str(card["purchase_mode"] or "").upper()
+    if mode not in ("GRADE", "SALDO"):
+        # Ferramenta de teste: aceita o tipo informado ou assume Grade, para não travar o teste.
+        mode = str(data.get("purchase_mode") or "GRADE").strip().upper()
+        if mode not in ("GRADE", "SALDO"):
+            mode = "GRADE"
+    con.execute(
+        "UPDATE cards SET current_sector='PROCESSAMENTO',status='AGUARDANDO_PROCESSAMENTO',purchase_mode=?,updated_at=? WHERE id=?",
+        (mode, iso_now(), card_id),
+    )
+    add_history(con, card_id, "SIMULACAO_PROCESSAMENTO", "Ferramenta de teste: Card encaminhado diretamente ao Processamento.", user_id)
+    con.commit()
+    con.close()
+    return {"ok": True}
+
+@app.get("/api/history")
+def global_history(limit: int = 300):
+    con = db_connect()
+    rows = con.execute(
+        """SELECT h.*,c.purchase_id,u.name user_name FROM history h
+           JOIN cards c ON c.id=h.card_id LEFT JOIN users u ON u.id=h.user_id
+           ORDER BY h.id DESC LIMIT ?""",
+        (max(1, min(limit, 1000)),),
+    ).fetchall()
+    con.close()
+    return [dict(r) for r in rows]
 
 
 @app.get("/health")
 def health() -> dict[str, str]:
-    return {"status": "ok", "mode": "frontend-only", "persistence": "browser-local-storage"}
-
-
-if __name__ == "__main__":
-    import uvicorn
-
-    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", "8000")))
+    return {"status": "ok", "mode": "operacional", "database": "sqlite-with-optional-supabase"}

@@ -912,10 +912,3 @@ input:disabled,select:disabled,textarea:disabled{
 .position-dest select{min-width:190px}
 .position-dest small{flex-basis:100%;opacity:.7}
 
-
-
-/* Ajustes pequenos para os elementos da etapa de cards locais */
-.link-button{background:transparent;border:0;padding:0;color:var(--blue);font:inherit;font-weight:800;text-align:left;cursor:pointer}
-.link-button:hover{text-decoration:underline}
-.empty-cell{text-align:center;color:var(--muted);padding:24px!important}
-.dash-panel .panel-body p{line-height:1.55}

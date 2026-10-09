@@ -237,7 +237,7 @@ function collectManualGrade() {
 }
 
 async function processManualCard() {
-  const say = (message) => (typeof toast === "function" ? toast(message) : alert(message));
+  const say = (m) => (typeof toast === "function" ? toast(m) : alert(m));
   const reference = (document.getElementById("manualCardReference")?.value || "").trim();
   const supplier = (document.getElementById("manualCardSupplier")?.value || "").trim();
   const nf = (document.getElementById("manualCardNf")?.value || "").trim();
@@ -249,28 +249,19 @@ async function processManualCard() {
   if (!supplier) return say("Informe o fornecedor.");
   if (!manualGradeColors.some((row) => String(row.name || "").trim())) return say("Informe pelo menos uma cor.");
   if (!manualGradeSizes.some((col) => String(col.name || "").trim())) return say("Informe pelo menos um tamanho.");
-  if (grade.some((row) => !row.color || !row.size)) return say("Toda quantidade preenchida precisa ter cor e tamanho.");
+  const invalid = grade.find((row) => !row.color || !row.size);
+  if (invalid) return say("Toda quantidade preenchida precisa ter cor e tamanho.");
   if (!grade.length || total <= 0) return say("Informe pelo menos uma quantidade maior que zero na grade.");
 
-  const cards = JSON.parse(localStorage.getItem("distrilog_demo_cards") || "[]");
-  const id = Date.now();
-  const card = {
-    id, manual_reference: reference, reference, supplier, nf, lot,
-    purchase_id: lot || nf || ("MAN-" + String(id).slice(-6)),
-    brand: "", purchase_mode: "GRADE", product_type: "GRADE",
-    expected_total: total, items_count: grade.length,
-    items: grade.map((row, index) => ({
-      id: index + 1, reference, color: row.color, size: row.size,
-      quantity: row.quantity, expected_quantity: row.quantity
-    })),
-    grade, status: "AGUARDANDO_RECEBIMENTO",
-    status_label: "Aguardando recebimento", current_sector: "RECEBIMENTO",
-    casulo_current: "", receiving_activity: "AGUARDANDO",
-    created_at: new Date().toISOString()
-  };
-  cards.unshift(card);
-  localStorage.setItem("distrilog_demo_cards", JSON.stringify(cards));
-  closeGoatModal();
-  say("Card criado localmente para " + reference + " (" + total.toLocaleString("pt-BR") + " peças).");
-  if (typeof goTo === "function") goTo("receiving");
+  try {
+    const d = await api("/api/goat/create-card", {
+      method: "POST",
+      body: JSON.stringify({ reference, supplier, nf, lot, grade })
+    });
+    say("Card criado para a referência " + d.reference + " (" + Number(d.expected_total || 0).toLocaleString("pt-BR") + " peças).");
+    closeGoatModal();
+    if (typeof goTo === "function") goTo("receiving"); else location.reload();
+  } catch (err) {
+    say("Erro ao criar card: " + (err.message || err));
+  }
 }

@@ -1,51 +1,33 @@
-# DISTRILOG — primeira etapa: criação de cards
+# DISTRILOG — Recebimento e endereçamento WMS
 
-Esta versão preserva a interface visual do projeto de referência `Distribox-` e mantém o cadastro manual de cards com **1 card por referência**.
+O DISTRILOG usa como base operacional a lógica do repositório `Distribox-`, preservando a interface e removendo do menu Gestão: Indicadores (GOAT), Produção por Pessoa, Ferramentas de teste e Configurações. Cadastros permanece disponível.
 
-## O que funciona nesta etapa
+## Fluxos importados
+- Criação manual de card por referência, com grade de cores e tamanhos.
+- Recebimento físico, confirmação, contagem de volumes e quantidade recebida.
+- Regras de separação/conferência dos 10%.
+- Cronômetro de recebimento (iniciar, pausar e retomar).
+- Endereçamento WMS por RM, QA, PR, ET e EC; sugestão de posição, saldos e trilha de alocações.
+- Saldo global de alocação compartilhado entre RM + QA + PR.
+- SQLite local para testes isolados e espelhamento/persistência compartilhada quando Supabase estiver configurado.
 
-- Navegação e identidade visual base.
-- Login demonstrativo (não valida credenciais).
-- Cadastro manual de card com referência, fornecedor, NF opcional, lote opcional e grade de cores/tamanhos.
-- Cálculo automático dos totais por cor, tamanho e grade.
-- Visualização dos cards em Cadastros e Recebimento.
-- Persistência em `localStorage`: os cards continuam no mesmo navegador após atualizar a página.
+## Render
+O serviço usa o `Dockerfile` e `render.yaml`. Configure a variável `SUPABASE_DATABASE_URL` nas variáveis do Render com a connection string PostgreSQL de um projeto Supabase **dedicado ao DISTRILOG**, caso queira login seguro e persistência compartilhada entre redeploys. Não reutilize o banco do Distribox- sem querer compartilhar cards e operações.
 
-## O que ainda não está conectado
+Sem essa variável, criação e operações locais usam SQLite e o endereçamento gera as posições localmente, mas o login seguro fica indisponível e os dados locais podem ser perdidos quando o container é recriado. Não deixamos uma senha administrativa fixa habilitada no serviço online.
 
-Não há API de negócio, banco de dados, sincronização entre usuários ou fluxo operacional real. Os demais módulos permanecem como interface visual para serem implementados por setor.
+Após salvar a variável, publique o commit mais recente em **Manual Deploy → Deploy latest commit** ou aguarde o deploy automático. A rota `/health` é o health check.
 
-**Importante:** os cards ficam somente no armazenamento local do navegador. Limpar os dados do site ou usar outro navegador/dispositivo não levará os cards junto.
+## Endereços
+Zonas/casulos 01–20 e níveis A/B/C:
+- RM: zona 1
+- QA: zonas 1 e 2
+- PR: zona 1
+- ET: zona 1
+- EC: zonas 1 e 2 (Feminino/Masculino)
 
-## Publicar no Render
-
-O repositório inclui um `render.yaml` com os comandos de build e inicialização do serviço.
-
-### Criar um serviço novo pelo Blueprint
-
-1. No Render, escolha **New + → Blueprint**.
-2. Selecione o repositório `jonasloro/DISTRILOG`.
-3. O Render lerá o `render.yaml` e configurará o serviço.
-4. Aguarde o deploy e abra a URL gerada pelo Render.
-
-### Se o serviço Render já existe
-
-No painel do serviço, em **Settings**, confira estes comandos:
-
-- **Build Command:** `pip install -r requirements.txt`
-- **Start Command:** `uvicorn app:app --host 0.0.0.0 --port $PORT`
-
-A raiz do projeto deve ficar vazia (raiz do repositório). Salve as alterações e use **Manual Deploy → Deploy latest commit** caso o deploy não seja iniciado automaticamente após o commit.
-
-A rota `/health` retorna o estado do serviço e está configurada como health check no Blueprint.
-
-## Executar localmente
-
-Requer Python 3.10 ou superior.
-
+## Local
 ```bash
 pip install -r requirements.txt
 uvicorn app:app --reload
 ```
-
-Abra http://127.0.0.1:8000.
