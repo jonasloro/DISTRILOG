@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DistriLog — Operação Logística Integrada</title>
+  <link rel="stylesheet" href="/static/style.css?v=1.0.0">
+  <script src="/static/goat_card_modal.js?v=1.0.0"></script>
+</head>
+<body>
+  <section id="loginScreen" class="login-screen">
+    <div class="login-panel">
+      <div class="login-logo">DL</div>
+      <h1>DISTRILOG</h1>
+      <p>Produção, estoque, expedição e devoluções em um só lugar</p>
+      <label>Usuário</label>
+      <input id="loginUsername" autocomplete="username">
+      <label>Senha</label>
+      <input id="loginPassword" type="password" autocomplete="current-password">
+      <button class="primary full" onclick="doLogin()">Entrar</button>
+      <div id="loginError" class="error-message"></div>
+    </div>
+  </section>
+
+  <div id="appShell" class="app-shell hidden">
+    <aside class="sidebar">
+      <div class="brand-block">
+        <div class="brand-logo">DL</div>
+        <div><strong>DISTRI</strong><br>LOG <small>V3.1</small></div>
+      </div>
+      <nav>
+        <div class="nav-group">Operação</div>
+        <button class="nav-item active" data-view="dashboard" onclick="goTo('dashboard')"><span class="nav-icon">⌂</span>Central de Operações</button>
+        <button class="nav-item" data-view="receiving" onclick="goTo('receiving')"><span class="nav-icon">▣</span>Recebimento</button>
+        <button class="nav-item" data-view="painel-recebimento" onclick="goTo('painel-recebimento')"><span class="nav-icon">▦</span>Painel de Recebimento</button>
+        <button class="nav-item" data-view="quality" onclick="goTo('quality')"><span class="nav-icon">◇</span>Qualidade</button>
+        <button class="nav-item" data-view="processing" onclick="goTo('processing')"><span class="nav-icon">⚙</span>Processamento</button>
+        <button class="nav-item" data-view="labeling" onclick="goTo('labeling')"><span class="nav-icon">♢</span>Etiquetagem</button>
+        <button class="nav-item" data-view="storage-hub" onclick="goTo('storage-hub')"><span class="nav-icon">⌂</span>Estocagem</button>
+        <div class="nav-group">Saída e retorno</div>
+        <button class="nav-item" data-view="shipping" onclick="goTo('shipping')"><span class="nav-icon">♧</span>Expedição</button>
+        <button class="nav-item" data-view="returns-hub" onclick="goTo('returns-hub')"><span class="nav-icon">↩</span>Devoluções</button>
+        <div class="nav-group">Equipe</div>
+        <button class="nav-item" data-view="chat" onclick="goTo('chat')"><span class="nav-icon">✉</span>Conversas<span id="chatNavBadge"></span></button>
+        <button class="nav-item" data-view="calendar" onclick="goTo('calendar')"><span class="nav-icon">▤</span>Calendário</button>
+        <div class="nav-group">Gestão</div>
+        <button class="nav-item" data-view="goat-indicators" onclick="goTo('goat-indicators')"><span class="nav-icon">☑</span>Indicadores (GOAT)</button>
+        <button class="nav-item" data-view="production" onclick="goTo('production')"><span class="nav-icon">★</span>Produção por Pessoa</button>
+        <button class="nav-item" data-view="registrations" onclick="goTo('registrations')"><span class="nav-icon">▦</span>Cadastros</button>
+        <button class="nav-item" data-view="test" onclick="goTo('test')"><span class="nav-icon">⚙</span>Ferramentas de teste</button>
+        <button class="nav-item" data-view="settings" onclick="goTo('settings')"><span class="nav-icon">⚙</span>Configurações</button>
+      </nav>
+      <div class="sidebar-footer">
+        <div id="currentUser"></div>
+        <button onclick="logout()">Sair</button>
+      </div>
+    </aside>
+
+    <main class="main-area">
+      <header class="topbar">
+        <div>
+          <h2 id="pageTitle">Dashboard</h2>
+          <p id="pageSubtitle">Recebimento, Qualidade e Processamento</p>
+        </div>
+        <div class="topbar-actions">
+          <div class="global-search"><span>⌕</span><input id="globalSearch" placeholder="Buscar (Ctrl + K)" onkeydown="globalSearchKey(event)"></div>
+          <button class="top-icon" title="Atualizar" onclick="refreshCurrentView()">↻</button>
+          <button class="top-icon" title="Ajuda" onclick="showQuickHelp()">?</button>
+          <button class="top-icon" title="Sair" onclick="logout()">⇥</button>
+          <span id="clock" class="hidden"></span>
+        </div>
+      </header>
+      <section id="mainContent" class="content"></section>
+    </main>
+  </div>
+
+  <div id="modal" class="modal hidden">
+    <div class="modal-card">
+      <button class="modal-close" onclick="closeModal()">×</button>
+      <div id="modalBody"></div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+  <script src="/static/app.js?v=1.0.0"></script>
+</body>
+</html>
