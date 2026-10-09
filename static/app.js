@@ -2670,7 +2670,8 @@ async function loadPositionAllocator(cardId,setor){
   const rcv=cardData?.receiving||{};
   const items=(cardData.items||[]).filter(function(i){return Number(i.expected_qty||0)>0;});
   const opIds=(rcv.operation_items||[]).map(function(i){return Number(i.id);}).filter(Boolean);
-  const sourceItems=opIds.length?items.filter(function(i){return opIds.includes(Number(i.id));}):items;
+  const sectorItems=items.filter(function(i){return i.source_stage===(setor==="ET"?"ETIQUETAGEM":"ESTOCAGEM");});
+  const sourceItems=isPieceSector?(sectorItems.length?sectorItems:items):(opIds.length?items.filter(function(i){return opIds.includes(Number(i.id));}):items);
   const receivingVolumes=Number(rcv.volumes||0);
   const isPieceSector=["ET","EC"].includes(setor);
   const sourceTotal=isPieceSector?sourceItems.reduce(function(sum,item){return sum+Number(item.expected_qty||0);},0):receivingVolumes;
@@ -2812,6 +2813,8 @@ async function submitAllocation(cardId,setor){
   if(!address){toast("Clique em uma posição no mapa.");return;}
   if(qty<=0){toast("Informe a quantidade para esta referência.");return;}
   if(ctx.remaining<=0){toast(isPieceSector?"Não há mais peças disponíveis nesta referência.":"Não há mais volumes disponíveis para este Card.");return;}
+  const itemRemaining=itemRemainingQty(item);
+  if(isPieceSector&&qty>itemRemaining){toast("A referência possui apenas "+itemRemaining.toLocaleString("pt-BR")+" peça(s) disponíveis.");return;}
   if(qty>ctx.remaining){toast("A quantidade ultrapassa o saldo de "+ctx.remaining.toLocaleString("pt-BR")+" "+unit+" disponíveis.");return;}
   try{
     const result=await api("/api/positions/cards/"+cardId+"/allocate",{
