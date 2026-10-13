@@ -272,7 +272,8 @@ def allocate(card_id: int, payload: dict[str, Any]) -> dict[str, Any]:
                 valid = {p["address"] for p in list_positions(setor)}
                 now = iso_now()
                 is_global = setor in GLOBAL_ALLOCATION_SECTORS
-                total_volumes = _card_total_volumes(cur, card_id, receiving_id or None) if is_global else None
+                allocation_receiving_id = receiving_id if (setor == "RM" or is_ten_percent_sample) else None
+                total_volumes = _card_total_volumes(cur, card_id, allocation_receiving_id or None) if is_global else None
                 alocado_global = _global_allocated(cur, card_id) if is_global else 0
 
                 for a in allocations:
@@ -706,7 +707,8 @@ def _allocate_local(card_id: int, payload: dict[str, Any]) -> dict[str, Any]:
                     raise HTTPException(400,f"Antes de alocar no RM, enderece {ten_percent_target} volume(s) (10% dos volumes) na Qualidade. Já foram alocados {ten_percent_allocated}.")
         valid={r["address"] for r in con.execute("SELECT address FROM sector_positions WHERE setor=?",(setor,)).fetchall()}
         is_global=setor in GLOBAL_ALLOCATION_SECTORS
-        volumes=_local_card_volumes(con,card_id,receiving_id or None) if is_global else None
+        allocation_receiving_id=receiving_id if (setor=="RM" or is_ten_percent_sample) else None
+        volumes=_local_card_volumes(con,card_id,allocation_receiving_id or None) if is_global else None
         global_total=_local_global_allocated(con,card_id) if is_global else 0
         now=iso_now()
         for entry in allocations:
