@@ -239,6 +239,7 @@ def sync_all_receiving_state_to_supabase(sqlite_con) -> None:
         f" ON CONFLICT (id) DO UPDATE SET {receiving_updates}"
         " WHERE outlog_receivings.card_id=EXCLUDED.card_id"
         " AND outlog_receivings.receiving_type=EXCLUDED.receiving_type"
+        " AND outlog_receivings.created_at=EXCLUDED.created_at"
     )
     timer_sql = (
         f"INSERT INTO outlog_timer_events ({timer_columns_sql}) VALUES ({timer_marks})"
@@ -286,7 +287,7 @@ def restore_receiving_state_from_supabase(sqlite_con) -> int:
         local = sqlite_con.execute(
             "SELECT * FROM receivings WHERE id=?", (remote_id,)
         ).fetchone()
-        if local and int(local["card_id"]) == card_id and local["receiving_type"] == row["receiving_type"]:
+        if local and int(local["card_id"]) == card_id and local["receiving_type"] == row["receiving_type"] and local["created_at"] == row["created_at"]:
             local_id = remote_id
             # A completed positive sample is terminal for a receiving record. If the
             # local copy is incomplete, recover only the sample fields from Supabase.
