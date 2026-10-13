@@ -59,10 +59,8 @@ def add_history(
 
 
 def _processing_volume_total(card_id: int) -> int:
-    """Saldo global RM/QA/PR que segue para processamento, excluindo a amostra reservada na QA."""
-    allocated_global = total_allocated("RM", card_id)
-    qa_sample = total_volume_only_allocated("QA", card_id)
-    return max(0, allocated_global - qa_sample)
+    """Saldo global de volumes recebidos em RM/QA/PR; o bag extra da amostra já fica excluído no helper."""
+    return total_allocated("RM", card_id)
 
 
 def business_seconds_between(start: datetime, end: datetime) -> int:
