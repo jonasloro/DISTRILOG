@@ -8,7 +8,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, FastAPI, HTTPException, Request
 
-from positions_module import item_allocation_totals, total_allocated_in_sector
+from positions_module import item_allocation_totals, total_allocated_in_sector, total_volume_only_allocated
 
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = Path(os.getenv("OUTLOG_DATA_DIR", str(BASE_DIR / "data"))).resolve() / "controle_logistica.db"
@@ -447,6 +447,33 @@ async def create_processing(card_id: int, request: Request):
     if not card:
         con.close()
         raise HTTPException(404, "Card não encontrado.")
+    # Defesa no backend: os 10% precisam estar endereçados na QA antes do Processamento.
+    if not card["source_snapshot_at"] and card["current_sector"] == "PROCESSAMENTO":
+        receiving = con.execute(
+            """SELECT r.* FROM receivings r JOIN cards c ON c.id=r.card_id
+               WHERE r.card_id=?
+               ORDER BY (r.closed_at IS NULL) DESC,
+                        (r.receiving_type=c.receiving_type) DESC, r.id DESC LIMIT 1""",
+            (card_id,),
+        ).fetchone()
+        if receiving and receiving["receiving_type"] in {"NOVA", "RETORNO"} and receiving["ten_percent_required"]:
+            if receiving["ten_percent_status"] != "CONCLUIDA":
+                con.close()
+                raise HTTPException(400, "Conclua a tiragem dos 10% no Recebimento antes de iniciar o Processamento.")
+            total_volumes = int(receiving["volumes"] or 0)
+            if total_volumes <= 0:
+                con.close()
+                raise HTTPException(400, "Informe e salve os volumes recebidos para validar a amostra de 10%.")
+            sample_target = (total_volumes + 9) // 10
+            sample_allocated = total_volume_only_allocated("QA", card_id)
+            if sample_allocated < sample_target:
+                con.close()
+                raise HTTPException(
+                    400,
+                    f"Enderece os {sample_target} volume(s) da amostra na Qualidade antes de iniciar o Processamento. "
+                    f"Até agora foram alocados {sample_allocated}.",
+                )
+
     rm_volumes = item_allocation_totals(card_id, "RM")
     allocated_volume_total = total_allocated_in_sector("RM", card_id)
     volume_only = allocated_volume_total > sum(rm_volumes.values())
