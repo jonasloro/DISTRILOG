@@ -2067,8 +2067,15 @@ async function importStockGroupReport(input){if(!input.files?.[0])return;const f
 
 async function renderRegistrations(){
   setPage("Cadastros","");
-  const [users,analytics]=await Promise.all([safeApi("/api/users",[]),safeApi("/api/unified/stock-group-report/analytics",{groups:[],latest_report:null})]);
-  $("mainContent").innerHTML=`<div class="actions" style="margin-bottom:12px"><button class="primary" onclick="openGoatCardModal()">+ Criar Card</button></div><div class="dash-row registrations-grid">${dashboardPanel("♙","Usuários e perfis",`<span class="panel-count">${users.length}</span>`,`<table class="dash-table"><thead><tr><th>Nome</th><th>Usuário</th><th>Perfil</th></tr></thead><tbody>${users.map(u=>`<tr><td>${esc(u.name)}</td><td>${esc(u.username)}</td><td>${statusBadge(u.role)}</td></tr>`).join('')}</tbody></table>`)}${dashboardPanel("▣","Grupos do último relatório",analytics.latest_report?esc(analytics.latest_report.filename):"Sem relatório",analyticsBarsBody((analytics.groups||[]).map(g=>({label:g.group_name,value:g.quantity,hint:g.gender}))))}</div>;
+  const [users,analytics]=await Promise.all([
+    safeApi("/api/users",[]),
+    safeApi("/api/unified/stock-group-report/analytics",{groups:[],latest_report:null})
+  ]);
+  const usersMeta = `<span class="panel-count">${users.length}</span>`;
+  const usersTable = `<table class="dash-table"><thead><tr><th>Nome</th><th>Usuário</th><th>Perfil</th></tr></thead><tbody>${users.map(u => `<tr><td>${esc(u.name)}</td><td>${esc(u.username)}</td><td>${statusBadge(u.role)}</td></tr>`).join("")}</tbody></table>`;
+  const reportTitle = analytics.latest_report ? esc(analytics.latest_report.filename) : "Sem relatório";
+  const reportBody = analyticsBarsBody((analytics.groups||[]).map(g => ({label:g.group_name,value:g.quantity,hint:g.gender})));
+  $("mainContent").innerHTML = `<div class="actions" style="margin-bottom:12px"><button class="primary" onclick="openGoatCardModal()">+ Criar Card</button></div><div class="dash-row registrations-grid">${dashboardPanel("♙","Usuários e perfis",usersMeta,usersTable)}${dashboardPanel("▣","Grupos do último relatório",reportTitle,reportBody)}</div>`;
 }
 
 async function renderSettings(){setPage("Configurações","");$("mainContent").innerHTML=`<div class="settings-grid"><button onclick="goTo('import')"><b>⇧</b><strong>Importar compras</strong><span>Atualizar Cards a partir do relatório Excel.</span></button><button onclick="goTo('tasks')"><b>☑</b><strong>Quadro de tarefas</strong><span>Responsáveis, prioridades e andamento.</span></button><button onclick="goTo('test')"><b>⚙</b><strong>Administração e testes</strong><span>Ferramentas controladas para validação.</span></button><button onclick="goTo('history')"><b>◷</b><strong>Histórico global</strong><span>Rastreabilidade das movimentações.</span></button></div><div class="state-panel"><b>DistriLog V3</b><span>Uma interface, um backend e uma base SQLite. As regras congeladas de Recebimento, Qualidade e Processamento permanecem no motor operacional.</span></div>`;}
