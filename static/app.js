@@ -1110,10 +1110,26 @@ function qualitySampleHtml(q, isOpen, canOperate) {
         <div class="summary-box"><span>Disponível</span><strong>${row?.available_qty ?? q.totals.sample_target}</strong></div>
       </div>`;
   }
+  const rows = [...q.sample_items].sort((a,b) =>
+    String(a.product||"").localeCompare(String(b.product||""),"pt-BR") ||
+    String(a.reference||a.sku||"").localeCompare(String(b.reference||b.sku||""),"pt-BR") ||
+    String(a.color||"").localeCompare(String(b.color||""),"pt-BR") ||
+    String(a.size||"").localeCompare(String(b.size||""),"pt-BR", {numeric:true})
+  );
+  const groupKey = (row) => [row.product||"",row.reference||row.sku||"",row.color||""].join("\\u0000");
+  const groupedRows = rows.map((row,index) => {
+    const key = groupKey(row);
+    const previousKey = index > 0 ? groupKey(rows[index-1]) : null;
+    const nextKey = index + 1 < rows.length ? groupKey(rows[index+1]) : null;
+    const firstInGroup = key !== previousKey;
+    const groupSize = firstInGroup ? rows.slice(index).findIndex((candidate) => groupKey(candidate) !== key) : 0;
+    const rowSpan = firstInGroup ? (groupSize < 0 ? rows.length-index : groupSize) : 0;
+    return `<tr>${firstInGroup ? `<td rowspan="${rowSpan}">${esc(row.product||"—")}</td><td rowspan="${rowSpan}">${esc(row.reference||row.sku||"—")}</td><td class="quality-color-group" rowspan="${rowSpan}">${esc(row.color||"—")}</td>` : ""}<td><span class="size-token">${esc(row.size||"—")}</span></td><td>${row.expected_qty}</td><td><b>${row.sample_qty}</b></td><td>${row.assigned_total}</td><td>${row.inspected_total}</td><td>${row.available_qty}</td></tr>`;
+  }).join("");
   return `<h3 class="section-heading">Amostra automática — Grade</h3>
-    <div class="notice">A quantidade foi dividida automaticamente entre os itens. Quando os 10% eram menores que o número de itens, a amostra foi aumentada para garantir pelo menos uma peça de cada item.</div>
-    <div class="table-wrap"><table><thead><tr><th>Produto</th><th>Referência/SKU</th><th>Cor</th><th>Tamanho</th><th>Qtd. compra</th><th>Amostra</th><th>Atribuída</th><th>Inspecionada</th><th>Disponível</th></tr></thead><tbody>
-    ${q.sample_items.map((row)=>`<tr><td>${esc(row.product||"—")}</td><td>${esc(row.reference||row.sku||"—")}</td><td>${esc(row.color||"—")}</td><td>${esc(row.size||"—")}</td><td>${row.expected_qty}</td><td><b>${row.sample_qty}</b></td><td>${row.assigned_total}</td><td>${row.inspected_total}</td><td>${row.available_qty}</td></tr>`).join("") || '<tr><td colspan="9">A amostra ainda não foi definida.</td></tr>'}
+    <div class="notice">A amostra é organizada por produto e cor; cada tamanho continua em sua própria linha. Os totais mostram compra, amostra, peças atribuídas, inspecionadas e disponíveis.</div>
+    <div class="table-wrap"><table class="quality-grade-table"><thead><tr><th>Produto</th><th>Referência/SKU</th><th>Cor</th><th>Tamanho</th><th>Qtd. compra</th><th>Amostra</th><th>Atribuída</th><th>Inspecionada</th><th>Disponível</th></tr></thead><tbody>
+    ${groupedRows || '<tr><td colspan="9">A amostra ainda não foi definida.</td></tr>'}
     </tbody></table></div>`;
 }
 
