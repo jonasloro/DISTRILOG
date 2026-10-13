@@ -519,7 +519,6 @@ function qualityReadOnlyPreviewHtml() {
 function canOperateQuality() {
   if (!currentUser || !cardData) return false;
   if (!["qualidade", "supervisor", "admin"].includes(currentUser.role)) return false;
-  if (currentUser.role !== "qualidade") return false;
   if (cardData.current_sector === "QUALIDADE") return true;
   return Boolean(cardData.source_snapshot_at && (cardData.items || []).some((item) =>
     ["QUALIDADE", "QUALIDADE_RETRABALHO", "QUALIDADE_REJEITADO"].includes(item.source_stage) && Number(item.expected_qty || 0) > 0
