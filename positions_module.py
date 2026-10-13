@@ -269,6 +269,43 @@ def allocate(card_id: int, payload: dict[str, Any]) -> dict[str, Any]:
                                 f"Antes de alocar no RM, enderece {ten_percent_target} volume(s) (10% dos volumes) na Qualidade. "
                                 f"Já foram alocados {ten_percent_allocated}.",
                             )
+                if setor in {"QA", "PR"} and not is_ten_percent_sample:
+                    if receiving_id:
+                        cur.execute(
+                            """SELECT ten_percent_status,volumes,ten_percent_required,receiving_type
+                               FROM outlog_receivings WHERE id=%s AND card_id=%s""",
+                            (receiving_id, card_id),
+                        )
+                    else:
+                        cur.execute(
+                            """SELECT r.ten_percent_status,r.volumes,r.ten_percent_required,r.receiving_type
+                               FROM outlog_receivings r LEFT JOIN outlog_cards c ON c.id=r.card_id
+                               WHERE r.card_id=%s
+                               ORDER BY (r.closed_at IS NULL) DESC,
+                                        (r.receiving_type=c.receiving_type) DESC, r.id DESC LIMIT 1""",
+                            (card_id,),
+                        )
+                    sample_receiving = cur.fetchone()
+                    if (
+                        sample_receiving
+                        and sample_receiving["receiving_type"] in {"NOVA", "RETORNO"}
+                        and sample_receiving["ten_percent_required"]
+                    ):
+                        sample_target = _ten_percent_volume_target(sample_receiving["volumes"])
+                        cur.execute(
+                            """SELECT COALESCE(SUM(quantidade),0) total FROM card_allocations
+                               WHERE card_id=%s AND setor='QA' AND item_id IS NULL""",
+                            (card_id,),
+                        )
+                        sample_allocated = int(cur.fetchone()["total"] or 0)
+                        if sample_receiving["ten_percent_status"] != "CONCLUIDA" or sample_target <= 0:
+                            raise HTTPException(400, "Conclua a tiragem e informe os volumes recebidos antes de alocar na QA ou no PR.")
+                        if sample_allocated < sample_target:
+                            raise HTTPException(
+                                400,
+                                f"Primeiro, enderece na Qualidade os {sample_target} volume(s) da amostra de 10%. "
+                                f"Já foram alocados {sample_allocated}.",
+                            )
                 valid = {p["address"] for p in list_positions(setor)}
                 now = iso_now()
                 is_global = setor in GLOBAL_ALLOCATION_SECTORS
@@ -705,6 +742,30 @@ def _allocate_local(card_id: int, payload: dict[str, Any]) -> dict[str, Any]:
                     raise HTTPException(400,"Informe e salve os volumes recebidos antes de alocar no RM.")
                 if ten_percent_allocated<ten_percent_target:
                     raise HTTPException(400,f"Antes de alocar no RM, enderece {ten_percent_target} volume(s) (10% dos volumes) na Qualidade. Já foram alocados {ten_percent_allocated}.")
+        if setor in {"QA","PR"} and not is_ten_percent_sample:
+            if receiving_id:
+                sample_receiving=con.execute(
+                    "SELECT ten_percent_status,volumes,ten_percent_required,receiving_type FROM receivings WHERE id=? AND card_id=?",
+                    (receiving_id,card_id),
+                ).fetchone()
+            else:
+                sample_receiving=con.execute(
+                    """SELECT r.ten_percent_status,r.volumes,r.ten_percent_required,r.receiving_type
+                       FROM receivings r JOIN cards c ON c.id=r.card_id WHERE r.card_id=?
+                       ORDER BY (r.closed_at IS NULL) DESC,
+                                (r.receiving_type=c.receiving_type) DESC, r.id DESC LIMIT 1""",
+                    (card_id,),
+                ).fetchone()
+            if sample_receiving and sample_receiving["receiving_type"] in {"NOVA","RETORNO"} and sample_receiving["ten_percent_required"]:
+                sample_target=_ten_percent_volume_target(sample_receiving["volumes"])
+                sample_allocated=int(con.execute(
+                    "SELECT COALESCE(SUM(quantidade),0) total FROM card_allocations WHERE card_id=? AND setor='QA' AND item_id IS NULL",
+                    (card_id,),
+                ).fetchone()["total"] or 0)
+                if sample_receiving["ten_percent_status"]!="CONCLUIDA" or sample_target<=0:
+                    raise HTTPException(400,"Conclua a tiragem e informe os volumes recebidos antes de alocar na QA ou no PR.")
+                if sample_allocated<sample_target:
+                    raise HTTPException(400,f"Primeiro, enderece na Qualidade os {sample_target} volume(s) da amostra de 10%. Já foram alocados {sample_allocated}.")
         valid={r["address"] for r in con.execute("SELECT address FROM sector_positions WHERE setor=?",(setor,)).fetchall()}
         is_global=setor in GLOBAL_ALLOCATION_SECTORS
         allocation_receiving_id=receiving_id if (setor=="RM" or is_ten_percent_sample) else None
