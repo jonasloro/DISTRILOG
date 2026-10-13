@@ -902,6 +902,10 @@ function renderCardHistory() {
 async function renderQualityTab() {
   if (guardSampleAllocationNavigation()) return;
   activateTab("tabQualityBtn");
+  if (!canOperateQuality()) {
+    $("cardTab").innerHTML = qualityReadOnlyPreviewHtml();
+    return;
+  }
   try {
     if (!qualityUsers.length) qualityUsers = await api("/api/quality/users");
   } catch (error) {
