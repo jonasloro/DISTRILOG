@@ -1985,6 +1985,9 @@ async def sample_timer(receiving_id: int, action: str, request: Request):
         raise HTTPException(400, "Este recebimento não exige separação dos 10%.")
     if action == "finish":
         rec = con.execute("SELECT * FROM receivings WHERE id=?", (receiving_id,)).fetchone()
+        if rec["receiving_type"] != "COSTURA" and int(rec["volumes"] or 0) <= 0:
+            con.close()
+            raise HTTPException(400, "Informe e salve a quantidade de volumes recebidos antes de concluir a tiragem dos 10%.")
         if rec["ten_percent_actual"] is None:
             con.close()
             message = ("Informe a quantidade produzida." if rec["receiving_type"] == "COSTURA"
