@@ -158,13 +158,22 @@ def _card_or_404(cur, card_id: int, lock: bool = False) -> dict[str, Any]:
     return card
 
 
-def _card_total_volumes(cur, card_id: int) -> Optional[int]:
-    """Volumes do Card informados no Recebimento (espelho no Supabase).
-    Retorna None enquanto ainda não foram informados — sem limite a aplicar."""
-    cur.execute(
-        "SELECT volumes FROM outlog_receivings WHERE card_id=%s ORDER BY id DESC LIMIT 1",
-        (card_id,),
-    )
+def _card_total_volumes(cur, card_id: int, receiving_id: Optional[int] = None) -> Optional[int]:
+    """Volumes do recebimento atual, preferindo seu ID quando a requisição o informa."""
+    if receiving_id:
+        cur.execute(
+            "SELECT volumes FROM outlog_receivings WHERE id=%s AND card_id=%s",
+            (receiving_id, card_id),
+        )
+    else:
+        cur.execute(
+            """SELECT r.volumes FROM outlog_receivings r
+               LEFT JOIN outlog_cards c ON c.id=r.card_id
+               WHERE r.card_id=%s
+               ORDER BY (r.closed_at IS NULL) DESC,
+                        (r.receiving_type=c.receiving_type) DESC, r.id DESC LIMIT 1""",
+            (card_id,),
+        )
     row = cur.fetchone()
     vol = int(row["volumes"]) if row and row["volumes"] is not None else 0
     return vol if vol > 0 else None
@@ -263,7 +272,7 @@ def allocate(card_id: int, payload: dict[str, Any]) -> dict[str, Any]:
                 valid = {p["address"] for p in list_positions(setor)}
                 now = iso_now()
                 is_global = setor in GLOBAL_ALLOCATION_SECTORS
-                total_volumes = _card_total_volumes(cur, card_id) if is_global else None
+                total_volumes = _card_total_volumes(cur, card_id, receiving_id or None) if is_global else None
                 alocado_global = _global_allocated(cur, card_id) if is_global else 0
 
                 for a in allocations:
@@ -629,8 +638,16 @@ def _list_positions_local(setor: str, zona: Optional[str] = None) -> list[dict[s
              "nivel":r["nivel"],"ocupado":int(r["ocupado"] or 0)} for r in rows]
 
 
-def _local_card_volumes(con: sqlite3.Connection, card_id: int) -> Optional[int]:
-    row=con.execute("SELECT volumes FROM receivings WHERE card_id=? ORDER BY id DESC LIMIT 1",(card_id,)).fetchone()
+def _local_card_volumes(con: sqlite3.Connection, card_id: int, receiving_id: Optional[int] = None) -> Optional[int]:
+    if receiving_id:
+        row=con.execute("SELECT volumes FROM receivings WHERE id=? AND card_id=?",(receiving_id,card_id)).fetchone()
+    else:
+        row=con.execute(
+            """SELECT r.volumes FROM receivings r JOIN cards c ON c.id=r.card_id
+               WHERE r.card_id=? ORDER BY (r.closed_at IS NULL) DESC,
+                      (r.receiving_type=c.receiving_type) DESC, r.id DESC LIMIT 1""",
+            (card_id,),
+        ).fetchone()
     qty=int(row["volumes"]) if row and row["volumes"] is not None else 0
     return qty if qty>0 else None
 
@@ -689,7 +706,7 @@ def _allocate_local(card_id: int, payload: dict[str, Any]) -> dict[str, Any]:
                     raise HTTPException(400,f"Antes de alocar no RM, enderece {ten_percent_target} volume(s) (10% dos volumes) na Qualidade. Já foram alocados {ten_percent_allocated}.")
         valid={r["address"] for r in con.execute("SELECT address FROM sector_positions WHERE setor=?",(setor,)).fetchall()}
         is_global=setor in GLOBAL_ALLOCATION_SECTORS
-        volumes=_local_card_volumes(con,card_id) if is_global else None
+        volumes=_local_card_volumes(con,card_id,receiving_id or None) if is_global else None
         global_total=_local_global_allocated(con,card_id) if is_global else 0
         now=iso_now()
         for entry in allocations:
@@ -831,6 +848,33 @@ def total_allocated_in_sector(setor: str, card_id: int) -> int:
             with con.cursor() as cur:
                 cur.execute(
                     "SELECT COALESCE(SUM(quantidade),0) total FROM card_allocations WHERE card_id=%s AND setor=%s",
+                    (card_id, setor),
+                )
+                return int(cur.fetchone()["total"] or 0)
+    except RuntimeError:
+        return 0
+
+
+def total_volume_only_allocated(setor: str, card_id: int) -> int:
+    """Total de alocações por volume (sem item/referência) em um setor."""
+    setor = str(setor or "").upper()
+    if not os.getenv("SUPABASE_DATABASE_URL"):
+        con = _local_db_connect()
+        try:
+            row = con.execute(
+                """SELECT COALESCE(SUM(quantidade),0) total FROM card_allocations
+                   WHERE card_id=? AND setor=? AND item_id IS NULL""",
+                (card_id, setor),
+            ).fetchone()
+            return int(row["total"] or 0)
+        finally:
+            con.close()
+    try:
+        with pg_connect() as con:
+            with con.cursor() as cur:
+                cur.execute(
+                    """SELECT COALESCE(SUM(quantidade),0) total FROM card_allocations
+                       WHERE card_id=%s AND setor=%s AND item_id IS NULL""",
                     (card_id, setor),
                 )
                 return int(cur.fetchone()["total"] or 0)
