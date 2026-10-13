@@ -86,6 +86,31 @@ def require_completed_receiving_sample(con: sqlite3.Connection, card_id: int, re
     return latest
 
 
+def ensure_quality_sector_owner(con: sqlite3.Connection, inspection: sqlite3.Row, actor_role: str) -> None:
+    """Block Quality mutations when another department owns the card."""
+    card = con.execute(
+        "SELECT id,current_sector,source_snapshot_at FROM cards WHERE id=?",
+        (inspection["card_id"],),
+    ).fetchone()
+    if not card:
+        con.close()
+        raise HTTPException(404, "Card não encontrado.")
+    if card["current_sector"] == "QUALIDADE" or actor_role in SUPERVISOR_ROLES:
+        return
+    if inspection["source_subset"] and card["source_snapshot_at"]:
+        quality_items = con.execute(
+            """SELECT COUNT(*) n FROM quality_inspection_items qii
+               JOIN items i ON i.id=qii.item_id
+               WHERE qii.inspection_id=? AND i.card_id=?
+                 AND i.source_stage IN ('QUALIDADE','QUALIDADE_RETRABALHO','QUALIDADE_REJEITADO')""",
+            (inspection["id"], card["id"]),
+        ).fetchone()
+        if int(quality_items["n"] or 0) > 0:
+            return
+    con.close()
+    raise HTTPException(403, "Este Card está sob responsabilidade de outro setor. A Qualidade pode consultar as informações, mas não executar ações enquanto o Card não estiver sob sua responsabilidade.")
+
+
 def add_history(
     con: sqlite3.Connection,
     card_id: int,
