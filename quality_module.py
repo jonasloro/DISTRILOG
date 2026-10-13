@@ -1431,7 +1431,10 @@ async def complete_inspection(inspection_id: int, request: Request):
                     raise HTTPException(409, "O registro de Recebimento vinculado a esta inspeção não está disponível. Restaure os dados do Recebimento antes de concluir.")
             else:
                 receiving = require_completed_receiving_sample(con, int(inspection["card_id"]), expected_receiving_type)
-            if receiving and receiving["receiving_type"] in {"NOVA", "RETORNO"} and receiving["ten_percent_required"]:
+            if not receiving["ten_percent_required"] or receiving["ten_percent_status"] != "CONCLUIDA" or int(receiving["ten_percent_actual"] or 0) <= 0:
+                con.close()
+                raise HTTPException(400, "A tiragem dos 10% vinculada a esta inspeção precisa estar concluída com quantidade efetivamente separada maior que zero.")
+            if receiving["receiving_type"] in {"NOVA", "RETORNO"}:
                 if receiving["ten_percent_status"] != "CONCLUIDA":
                     con.close()
                     raise HTTPException(400, "Conclua a tiragem dos 10% no Recebimento antes de concluir a Inspeção.")
