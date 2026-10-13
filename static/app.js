@@ -2577,7 +2577,7 @@ async function loadReceivingAllocationStep(cardId) {
     const status=await apiWithTimeout("/api/positions/cards/"+cardId+"/status?setor=QA");
     const receiving=cardData?.receiving||{};
     const totalVolumes=Number(receiving.volumes||status.volumes_total||0);
-    const target=Math.ceil(totalVolumes/10);
+    const target=totalVolumes>0?1:0;
     const allocated=Number(status.ten_percent_sample_allocated||0);
     if(target<=0) {
       box.innerHTML='<div class="notice warn">Informe e salve a quantidade total de volumes recebidos para calcular os 10% e liberar o endereçamento.</div>';
@@ -2620,7 +2620,7 @@ async function loadPositionAllocator(cardId,setor,tenPercentSample=false,tenPerc
   const isVolumeOnlyRM=setor==="RM";
   const isTenPercentSample=Boolean(tenPercentSample)&&setor==="QA";
   const isVolumeOnly=isVolumeOnlyRM||isTenPercentSample;
-  if(isTenPercentSample)tenPercentTarget=Number(tenPercentTarget)||Math.ceil(Number(rcv.volumes||0)/10);
+  if(isTenPercentSample)tenPercentTarget=Number(tenPercentTarget)||(Number(rcv.volumes||0)>0?1:0);
 
   const sectorItems=items.filter(function(i){return i.source_stage===(setor==="ET"?"ETIQUETAGEM":"ESTOCAGEM");});
 
