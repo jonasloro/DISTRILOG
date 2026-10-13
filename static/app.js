@@ -444,7 +444,7 @@ async function openCard(cardId, tab = "receiving") {
     ""
   ).trim();
   const cardDisplayName = cardReference || cardData.purchase_id;
-  const canSetPurchaseMode = ["supervisor", "admin"].includes(currentUser.role) ||
+  const canSetPurchaseMode = (cardData.current_sector === "RECEBIMENTO" && ["recebimento", "supervisor", "admin"].includes(currentUser.role)) ||
     (currentUser.role === "recebimento" && cardData.current_sector === "RECEBIMENTO") ||
     (currentUser.role === "qualidade" && canOperateQuality());
   $("modalBody").innerHTML = `
@@ -519,7 +519,7 @@ function qualityReadOnlyPreviewHtml() {
 }
 function canOperateQuality() {
   if (!currentUser || !cardData) return false;
-  if (["supervisor", "admin"].includes(currentUser.role)) return true;
+  if (!["qualidade", "supervisor", "admin"].includes(currentUser.role)) return false;
   if (currentUser.role !== "qualidade") return false;
   if (cardData.current_sector === "QUALIDADE") return true;
   return Boolean(cardData.source_snapshot_at && (cardData.items || []).some((item) =>
