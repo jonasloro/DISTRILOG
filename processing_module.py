@@ -469,7 +469,7 @@ async def create_processing(card_id: int, request: Request):
             if total_volumes <= 0:
                 con.close()
                 raise HTTPException(400, "Informe e salve os volumes recebidos para validar a amostra de 10%.")
-            sample_target = (total_volumes + 9) // 10
+            sample_target = 1 if total_volumes > 0 else 0
             sample_allocated = total_volume_only_allocated("QA", card_id)
             if sample_allocated < sample_target:
                 con.close()
