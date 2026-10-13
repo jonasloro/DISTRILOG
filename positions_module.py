@@ -200,6 +200,11 @@ def allocate(card_id: int, payload: dict[str, Any]) -> dict[str, Any]:
         with pg_connect() as con:
             with con.cursor() as cur:
                 _card_or_404(cur, card_id, lock=True)
+                if setor == "RM":
+                    cur.execute("SELECT ten_percent_status FROM outlog_receivings WHERE card_id=%s ORDER BY id DESC LIMIT 1", (card_id,))
+                    receiving = cur.fetchone()
+                    if not receiving or receiving["ten_percent_status"] != "CONCLUIDA":
+                        raise HTTPException(400, "Conclua a tiragem dos 10% antes de alocar os volumes no RM.")
                 valid = {p["address"] for p in list_positions(setor)}
                 now = iso_now()
                 is_global = setor in GLOBAL_ALLOCATION_SECTORS
@@ -209,22 +214,26 @@ def allocate(card_id: int, payload: dict[str, Any]) -> dict[str, Any]:
                 for a in allocations:
                     address = str(a.get("address") or "")
                     qty = int(a.get("quantidade") or 0)
-                    item_id = int(a.get("item_id") or 0)
 
                     if address not in valid:
                         raise HTTPException(400, f"Posição {address} não pertence ao setor {setor}.")
                     if qty <= 0:
                         raise HTTPException(400, "Quantidade precisa ser maior que zero.")
-                    if item_id <= 0:
-                        raise HTTPException(400, "Selecione a referência antes de alocar.")
 
-                    cur.execute(
-                        "SELECT id,expected_qty,product,reference,sku,color,size FROM outlog_items WHERE id=%s AND card_id=%s",
-                        (item_id, card_id),
-                    )
-                    item = cur.fetchone()
-                    if not item:
-                        raise HTTPException(400, "A referência selecionada não pertence a este Card.")
+                    if setor == "RM":
+                        item_id = None
+                        item = None
+                    else:
+                        item_id = int(a.get("item_id") or 0)
+                        if item_id <= 0:
+                            raise HTTPException(400, "Selecione a referência antes de alocar.")
+                        cur.execute(
+                            "SELECT id,expected_qty,product,reference,sku,color,size FROM outlog_items WHERE id=%s AND card_id=%s",
+                            (item_id, card_id),
+                        )
+                        item = cur.fetchone()
+                        if not item:
+                            raise HTTPException(400, "A referência selecionada não pertence a este Card.")
 
                     if is_global:
                         # Saldo único do Card (volumes): RM, QA e PR saem do mesmo total.
@@ -582,6 +591,10 @@ def _allocate_local(card_id: int, payload: dict[str, Any]) -> dict[str, Any]:
         con.execute("BEGIN IMMEDIATE")
         if not con.execute("SELECT id FROM cards WHERE id=?",(card_id,)).fetchone():
             raise HTTPException(404,"Card não encontrado.")
+        if setor=="RM":
+            receiving=con.execute("SELECT ten_percent_status FROM receivings WHERE card_id=? ORDER BY id DESC LIMIT 1",(card_id,)).fetchone()
+            if not receiving or receiving["ten_percent_status"]!="CONCLUIDA":
+                raise HTTPException(400,"Conclua a tiragem dos 10% antes de alocar os volumes no RM.")
         valid={r["address"] for r in con.execute("SELECT address FROM sector_positions WHERE setor=?",(setor,)).fetchall()}
         is_global=setor in GLOBAL_ALLOCATION_SECTORS
         volumes=_local_card_volumes(con,card_id) if is_global else None
@@ -590,15 +603,23 @@ def _allocate_local(card_id: int, payload: dict[str, Any]) -> dict[str, Any]:
         for entry in allocations:
             address=str(entry.get("address") or "")
             try:
-                qty=int(entry.get("quantidade") or 0); item_id=int(entry.get("item_id") or 0)
+                qty=int(entry.get("quantidade") or 0)
             except (TypeError,ValueError):
-                raise HTTPException(400,"Quantidade e referência precisam ser válidas.")
+                raise HTTPException(400,"Quantidade precisa ser um número válido.")
             if address not in valid: raise HTTPException(400,f"Posição {address} não pertence ao setor {setor}.")
             if qty<=0: raise HTTPException(400,"Quantidade precisa ser maior que zero.")
-            if item_id<=0: raise HTTPException(400,"Selecione a referência antes de alocar.")
-            item=con.execute("SELECT id,expected_qty,product,reference,sku,color,size FROM items WHERE id=? AND card_id=?",
-                             (item_id,card_id)).fetchone()
-            if not item: raise HTTPException(400,"A referência selecionada não pertence a este Card.")
+            if setor=="RM":
+                item_id=None
+                item=None
+            else:
+                try:
+                    item_id=int(entry.get("item_id") or 0)
+                except (TypeError,ValueError):
+                    raise HTTPException(400,"Selecione uma referência válida.")
+                if item_id<=0: raise HTTPException(400,"Selecione a referência antes de alocar.")
+                item=con.execute("SELECT id,expected_qty,product,reference,sku,color,size FROM items WHERE id=? AND card_id=?",
+                                 (item_id,card_id)).fetchone()
+                if not item: raise HTTPException(400,"A referência selecionada não pertence a este Card.")
             if is_global:
                 if volumes is not None and global_total+qty>volumes:
                     remaining=max(0,volumes-global_total)

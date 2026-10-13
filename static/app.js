@@ -551,7 +551,7 @@ function renderReceivingTab() {
   if (cardData.status === "AGUARDANDO_RECEBIMENTO_RETORNO") {
     $("cardTab").innerHTML = receivingFormHtml(true);
     window.setTimeout(refreshTimerDisplay, 500);
-    loadPositionAllocator(cardData.id, "RM");
+    if (cardData.receiving?.ten_percent_status === "CONCLUIDA") loadPositionAllocator(cardData.id, "RM");
     return;
   }
   if (cardData.status === "EM_COSTURA_CD01" || cardData.receiving?.receiving_type === "COSTURA") {
@@ -561,7 +561,7 @@ function renderReceivingTab() {
   const isReturn = cardData.receiving?.receiving_type === "RETORNO" || cardData.receiving_type === "RETORNO";
   $("cardTab").innerHTML = receivingFormHtml(isReturn);
   window.setTimeout(refreshTimerDisplay, 500);
-  if (cardData.receiving?.physical_status !== "CONCLUIDO") loadPositionAllocator(cardData.id, "RM");
+  if (cardData.receiving?.ten_percent_status === "CONCLUIDA") loadPositionAllocator(cardData.id, "RM");
 }
 
 function sourceLocationHtml() {
@@ -651,7 +651,7 @@ function receivingFormHtml(isReturn) {
   const operationItems = r.operation_items || [];
   return `
     <div class="panel-body">
-      <div class="notice ${isReturn ? "success-box" : ""}"><b>${isReturn ? "Recebimento do retorno CD01" : "Recebimento de mercadoria em trânsito"}</b><br>${isReturn ? "Registre o retorno e separe uma nova amostra de 10%. O Card só segue para a Inspeção 2 quando as duas partes terminarem." : "O recebimento físico e a separação dos 10% podem ser concluídos em qualquer ordem. O Card só segue para a Qualidade quando ambos terminarem."}</div>
+      <div class="notice ${isReturn ? "success-box" : ""}"><b>${isReturn ? "Recebimento do retorno CD01" : "Recebimento de mercadoria em trânsito"}</b><br>${isReturn ? "Registre e conclua a nova tiragem de 10% antes de alocar os volumes no RM. O Card só segue para a Inspeção 2 quando o recebimento físico e a amostra terminarem." : "Conclua a tiragem dos 10% antes de liberar a alocação dos volumes no RM. O Card só segue para a Qualidade quando o recebimento físico e a amostra terminarem."}</div>
       ${!operate && !physicalDone ? `<div class="notice warn"><b>Somente o operador de Recebimento pode operar este Card.</b><br>${cardData.current_sector !== "RECEBIMENTO" ? "Este Card não está no Recebimento." : "Entre com um usuário do perfil Recebimento para usar os botões de ação."}</div>` : ""}
       ${operationItems.length ? `<div class="notice"><b>${operationItems.length} item(ns) fazem parte deste controle</b><br>Somente estes itens serão movimentados. Os demais itens da compra permanecerão em suas etapas atuais.</div>` : ""}
       <h3 class="section-heading">Recebimento físico</h3>
@@ -666,10 +666,10 @@ function receivingFormHtml(isReturn) {
         ${operate && !physicalDone ? `<button class="secondary" onclick="saveReceiving()">Salvar dados</button><button class="success" onclick="completePhysical()">Concluir recebimento físico</button><label class="primary small-btn" style="cursor:pointer">Adicionar fotos<input id="receivingFiles" type="file" multiple hidden onchange="uploadReceivingPhotos()"></label>` : ""}
         ${physicalDone ? '<span class="badge green">Recebimento físico concluído</span>' : '<span class="badge gray">Recebimento físico pendente</span>'}
       </div>
-      ${!physicalDone ? `<h3 class="section-heading">Endereçamento no Recebimento (RM)</h3><div id="posAllocBox" class="notice">Carregando posições…</div>` : ""}
-      <div class="photos">${receivingPhotos.map((p,i)=>`<a class="photo-link" target="_blank" href="${p}">Arquivo ${i+1}</a>`).join("")}</div>
       ${samplePlanTable(r,isReturn?"Plano exato da nova tiragem de 10%":"Plano exato da tiragem de 10%")}
       ${sampleHtml(r, sampleDone, operate, isReturn)}
+      ${!physicalDone ? (sampleDone ? `<h3 class="section-heading">Endereçamento no Recebimento (RM)</h3><div id="posAllocBox" class="notice">Carregando posições…</div>` : `<h3 class="section-heading">Endereçamento no Recebimento (RM)</h3><div class="notice warn">Conclua a tiragem dos 10% para liberar a alocação dos volumes no RM.</div>`) : ""}
+      <div class="photos">${receivingPhotos.map((p,i)=>`<a class="photo-link" target="_blank" href="${p}">Arquivo ${i+1}</a>`).join("")}</div>
     </div>`;
 }
 
@@ -1421,16 +1421,17 @@ async function renderProcessingTab() {
 function processingSetupHtml(importedItems=[]) {
   const modeLabel = cardData.purchase_mode === "GRADE" ? "Grade — importado como Private Label" : cardData.purchase_mode === "SALDO" ? "Saldo" : "Tipo não reconhecido";
   const rmVolumes=cardData.rm_item_volumes||{};
-  importedItems=importedItems.filter(function(item){return Number(rmVolumes[String(item.id)]||0)>0;});
+  const volumeOnly=Boolean(cardData.rm_volume_only);
+  if(!volumeOnly) importedItems=importedItems.filter(function(item){return Number(rmVolumes[String(item.id)]||0)>0;});
   const imported = importedItems.length > 0;
-  const importedQty = importedItems.reduce((sum,item)=>sum+Number(rmVolumes[String(item.id)]||0),0);
+  const importedQty = volumeOnly ? Number(cardData.global_allocated_volume_total||0) : importedItems.reduce((sum,item)=>sum+Number(rmVolumes[String(item.id)]||0),0);
   const importedPicker = !imported ? "" : cardData.purchase_mode === "GRADE" ? (
-    '<div class="notice success-box"><b>Selecione as referências que entrarão nesta produção.</b><br>Somente os volumes das referências posicionadas em Aguardando Processamento serão movimentados. A composição de grade será definida posteriormente na Triagem.</div>' +
+    '<div class="notice success-box"><b>Selecione as referências que entrarão nesta produção.</b><br>'+(volumeOnly ? 'O RM guarda somente o saldo global de volumes, sem vínculo a produto, cor ou tamanho. A quantidade processada por referência será informada nesta etapa e validada contra o saldo global.' : 'Somente os volumes das referências posicionadas em Aguardando Processamento serão movimentados. A composição de grade será definida posteriormente na Triagem.')+'</div>' +
     '<div class="table-wrap compact-picker"><table class="compact-table"><thead><tr><th class="check-col"><input id="processingImportedAll" type="checkbox" checked onchange="toggleImportedProcessingItems(this.checked)"></th><th>Produto</th><th>Referência</th><th>Volumes</th></tr></thead><tbody>' +
       importedItems.map(function(item){
-        return '<tr><td><input class="processing-import-item" type="checkbox" value="'+item.id+'" checked onchange="updateImportedProcessingSummary()"></td><td><b>'+esc(item.product||"—")+'</b></td><td><b>'+esc(item.reference||item.sku||"—")+'</b><small>'+Number(item.expected_qty||0).toLocaleString("pt-BR")+' peças</small></td><td><b>'+Number(rmVolumes[String(item.id)]||0).toLocaleString("pt-BR")+'</b></td></tr>';
+        return '<tr><td><input class="processing-import-item" type="checkbox" value="'+item.id+'" checked onchange="updateImportedProcessingSummary()"></td><td><b>'+esc(item.product||"—")+'</b></td><td><b>'+esc(item.reference||item.sku||"—")+'</b><small>'+Number(item.expected_qty||0).toLocaleString("pt-BR")+' peças</small></td><td><b>'+(volumeOnly?"—":Number(rmVolumes[String(item.id)]||0).toLocaleString("pt-BR"))+'</b></td></tr>';
       }).join("") +
-    '</tbody></table></div><div id="processingImportedSummary" class="queue-counter"><b>'+importedItems.length+'</b> referência(s) • <b>'+importedQty+'</b> volume(s) selecionado(s)</div>'
+    '</tbody></table></div><div id="processingImportedSummary" class="queue-counter"><b>'+importedItems.length+'</b> referência(s) • <b>'+importedQty+'</b> '+(volumeOnly?"volume(s) no saldo global":"volume(s) selecionado(s)")+'</div>'
   ) : (
     '<div class="notice success-box"><b>Volumes disponíveis para produção</b><br>'+importedItems.length+' referência(s), total de '+importedQty+' volume(s). O apontamento continuará por quantidade geral.</div>'
   );
@@ -1490,8 +1491,8 @@ function updateImportedProcessingSummary(){
   const ids=new Set(selected.map((input)=>Number(input.value)));
   const items=(cardData.items||[]).filter((item)=>ids.has(Number(item.id)));
   const rmVolumes=cardData.rm_item_volumes||{};
-  const qty=items.reduce((sum,item)=>sum+Number(rmVolumes[String(item.id)]||0),0);
-  if($("processingImportedSummary"))$("processingImportedSummary").innerHTML=`<b>${items.length}</b> referência(s) • <b>${qty}</b> volume(s) selecionado(s)`;
+  const qty=cardData.rm_volume_only ? Number(cardData.global_allocated_volume_total||0) : items.reduce((sum,item)=>sum+Number(rmVolumes[String(item.id)]||0),0);
+  if($("processingImportedSummary"))$("processingImportedSummary").innerHTML=`<b>${items.length}</b> referência(s) • <b>${qty}</b> ${cardData.rm_volume_only?"volume(s) no saldo global":"volume(s) selecionado(s)"}`;
   if($("processingImportedAll"))$("processingImportedAll").checked=selected.length===document.querySelectorAll(".processing-import-item").length;
 }
 
@@ -1648,14 +1649,17 @@ function processingQuantitiesHtml(p, editable) {
       '<div class="actions">'+(editable ? '<button class="primary" onclick="saveProcessingQuantities()">Salvar volumes</button>' : '')+copyButton+'</div>';
   }
 
-  const deferredNotice = p.quantity_deferred_to_storage
+  const volumeOnly = p.volume_allocation_mode === "VOLUMES";
+  const deferredNotice = (volumeOnly
+    ? '<div class="notice">O RM foi endereçado por volumes, sem vínculo individual por referência. Informe o processamento por referência nesta etapa; a soma será validada contra o saldo global de '+Number(p.global_allocated_volume_total||0).toLocaleString("pt-BR")+' volume(s).</div>'
+    : '') + (p.quantity_deferred_to_storage
     ? '<div class="notice warn">Os volumes finais serão confirmados na Estocagem. É permitido concluir o Processamento sem preencher todas as referências.</div>'
-    : '<div class="notice">Informe os volumes processados por referência.</div>';
+    : volumeOnly ? '' : '<div class="notice">Informe os volumes processados por referência.</div>');
 
   return '<h3 class="section-heading">Volumes — Referências</h3>'+deferredNotice+
-    '<div class="table-wrap"><table><thead><tr><th>Referência</th><th>Volumes previstos</th><th>Volumes processados</th><th>Volumes estocados</th></tr></thead><tbody>'+
+    '<div class="table-wrap"><table><thead><tr><th>Referência</th><th>'+(volumeOnly?"Volumes no RM":"Volumes previstos")+'</th><th>Volumes processados</th><th>Volumes estocados</th></tr></thead><tbody>'+
     p.items.map(function(item){
-      return '<tr><td><b>'+esc(item.reference||item.sku||item.product||"—")+'</b><small>'+Number(item.expected_qty||0).toLocaleString("pt-BR")+' peças</small></td><td>'+Number(item.volume_expected||0).toLocaleString("pt-BR")+'</td><td><input class="table-input processing-item-qty" data-item-id="'+item.item_id+'" type="number" min="0" value="'+item.processed_qty+'" '+(editable ? "" : "readonly")+'></td><td>'+item.stored_qty+'</td></tr>';
+      return '<tr><td><b>'+esc(item.reference||item.sku||item.product||"—")+'</b><small>'+Number(item.expected_qty||0).toLocaleString("pt-BR")+' peças</small></td><td>'+(volumeOnly?"—":Number(item.volume_expected||0).toLocaleString("pt-BR"))+'</td><td><input class="table-input processing-item-qty" data-item-id="'+item.item_id+'" type="number" min="0" value="'+item.processed_qty+'" '+(editable ? "" : "readonly")+'></td><td>'+item.stored_qty+'</td></tr>';
     }).join("")+
     '</tbody></table></div><div class="actions">'+(editable ? '<button class="primary" onclick="saveProcessingQuantities()">Salvar volumes por referência</button>' : '')+copyButton+'</div>';
 }
@@ -2559,6 +2563,7 @@ async function loadPositionAllocator(cardId,setor){
   const items=(cardData.items||[]).filter(function(i){return Number(i.expected_qty||0)>0;});
   const opIds=(rcv.operation_items||[]).map(function(i){return Number(i.id);}).filter(Boolean);
   const isPieceSector=["ET","EC"].includes(setor);
+  const isVolumeOnlyRM=setor==="RM";
 
   const sectorItems=items.filter(function(i){return i.source_stage===(setor==="ET"?"ETIQUETAGEM":"ESTOCAGEM");});
 
@@ -2573,7 +2578,7 @@ async function loadPositionAllocator(cardId,setor){
     cardId:cardId,setor:setor,sourceTotal:sourceTotal,
     remaining:Math.max(0,sourceTotal-Number(isPieceSector?status.total_alocado:status.global_total_alocado||0)),
     positions:positions,status:status,suggestion:suggestion,
-    selectedItemId:Number(firstAvailable?.id||firstAllocated?.item_id||0),
+    selectedItemId:isVolumeOnlyRM?0:Number(firstAvailable?.id||firstAllocated?.item_id||0),
     selectedAddress:suggestion?.address||firstAllocated?.posicoes?.[0]?.address||"",
     posFilter:"ALL",zoneFilter:"ALL",search:""
   };
@@ -2584,7 +2589,7 @@ async function loadPositionAllocator(cardId,setor){
       '<div class="position-allocator-head">' +
         '<div><div class="position-kicker">ENDEREÇAMENTO FÍSICO</div>' +
           '<h3>'+({RM:"Alocar no Recebimento",QA:"Alocar na Qualidade",PR:"Alocar no Processamento",ET:"Alocar na Etiquetagem",EC:"Alocar na Estocagem"}[setor]||("Alocar no "+setor))+'</h3>' +
-          '<p>Escolha primeiro a referência, depois a posição. O controle é feito em '+(isPieceSector?"peças":"volumes")+' da referência.</p>' +
+          '<p>'+(isVolumeOnlyRM?"No RM, a alocação é exclusivamente por volumes, sem divisão por produto, cor ou tamanho.":("Escolha primeiro a referência, depois a posição. O controle é feito em "+(isPieceSector?"peças":"volumes")+" da referência."))+'</p>' +
           '<div class="position-dest"><label for="positionDestSetor">Destino</label>' +
             '<select id="positionDestSetor" onchange="changeAllocDestination(this.value)">'+
               [["RM","Recebimento (RM)"],["QA","Qualidade (QA)"],["PR","Processamento (PR)"],["ET","Etiquetagem (ET)"],["EC","Estocagem (EC)"]].map(function(o){
@@ -2599,10 +2604,12 @@ async function loadPositionAllocator(cardId,setor){
         '</div>' +
       '</div>' +
 
-      '<div class="position-reference-panel">' +
-        '<div class="position-section-title"><b>Referência a alocar</b><span>Escolha uma por vez</span></div>' +
-        '<div id="positionItemPicker" class="allocation-item-grid"></div>' +
-      '</div>' +
+      (isVolumeOnlyRM ?
+        '<div class="position-reference-panel"><div class="notice">O RM registra somente volumes por endereço; nenhuma alocação fica vinculada a produto, cor, tamanho ou referência.</div></div>' :
+        '<div class="position-reference-panel">' +
+          '<div class="position-section-title"><b>Referência a alocar</b><span>Escolha uma por vez</span></div>' +
+          '<div id="positionItemPicker" class="allocation-item-grid"></div>' +
+        '</div>') +
 
       '<div class="position-stat-grid">' +
         '<div class="position-stat"><span>Total alocado</span><strong id="positionAllocatedTotal">'+Number(isPieceSector?status.total_alocado:status.global_total_alocado||0).toLocaleString("pt-BR")+
@@ -2611,7 +2618,7 @@ async function loadPositionAllocator(cardId,setor){
           ' · PR '+Number(status.global_por_setor?.PR||0).toLocaleString("pt-BR"))+'</small></div>' +
         '<div class="position-stat"><span>Posições usadas</span><strong id="positionUsedCount">'+(status.posicoes?.length||0)+
           '</strong><small>endereços</small></div>' +
-        '<div class="position-stat"><span>Saldo da referência</span><strong id="positionReferenceRemainingStat">—</strong><small>'+(isPieceSector?"peças restantes":"volumes restantes")+'</small></div>' +
+        '<div class="position-stat"><span>'+(isVolumeOnlyRM?"Saldo global do Card":"Saldo da referência")+'</span><strong id="positionReferenceRemainingStat">—</strong><small>'+(isPieceSector?"peças restantes":(isVolumeOnlyRM?"volumes restantes no Card":"volumes restantes"))+'</small></div>' +
       '</div>' +
 
       '<div class="position-controls">' +
@@ -2628,17 +2635,17 @@ async function loadPositionAllocator(cardId,setor){
       '<div id="positionMap" class="position-map"></div>' +
 
       '<div class="position-allocation-editor">' +
-        '<div class="position-selected"><span>REFERÊNCIA SELECIONADA</span><strong id="positionSelectedItemLabel">'+
-          esc(firstAvailable?referenceDetailLabel(firstAvailable):"Nenhuma")+'</strong><small id="positionReferenceRemainingLabel"></small><em id="positionSelectedLabel">'+
-          esc(window.allocCtx.selectedAddress||"Nenhuma")+'</em></div>' +
+        (isVolumeOnlyRM ?
+          '<div class="position-selected"><span>ALOCAÇÃO POR VOLUMES</span><strong id="positionSelectedItemLabel">Saldo global do Card</strong><small id="positionReferenceRemainingLabel"></small><em id="positionSelectedLabel">'+esc(window.allocCtx.selectedAddress||"Nenhuma")+'</em></div>' :
+          '<div class="position-selected"><span>REFERÊNCIA SELECIONADA</span><strong id="positionSelectedItemLabel">'+esc(firstAvailable?referenceDetailLabel(firstAvailable):"Nenhuma")+'</strong><small id="positionReferenceRemainingLabel"></small><em id="positionSelectedLabel">'+esc(window.allocCtx.selectedAddress||"Nenhuma")+'</em></div>') +
         '<div class="position-editor-fields">' +
-          '<div class="field"><label>'+(isPieceSector?"Peças nesta posição":"Volumes nessa posição")+'</label><input id="posQty" type="number" min="1" placeholder="Ex.: 30" oninput="updateAllocHint()"><small id="posHint" class="muted">Saldo da referência: '+(firstAvailable?itemRemainingQty(firstAvailable).toLocaleString("pt-BR"):"—")+' '+(isPieceSector?"peças":"volumes")+'</small></div>' +
+          '<div class="field"><label>'+(isPieceSector?"Peças nesta posição":"Volumes nessa posição")+'</label><input id="posQty" type="number" min="1" placeholder="Ex.: 30" oninput="updateAllocHint()"><small id="posHint" class="muted">'+(isVolumeOnlyRM ? ("Saldo do Card: "+window.allocCtx.remaining.toLocaleString("pt-BR")+" volumes") : ("Saldo da referência: "+(firstAvailable?itemRemainingQty(firstAvailable).toLocaleString("pt-BR"):"—")+" "+(isPieceSector?"peças":"volumes")))+'</small></div>' +
           '<div class="position-editor-action"><button class="primary" onclick="submitAllocation('+cardId+',\''+setor+'\')">+ Alocar referência</button></div>' +
         '</div>' +
       '</div>' +
 
       '<div class="position-current-allocations">' +
-        '<div class="position-section-title"><b>Alocações nesta área</b><span>separadas por referência</span></div>' +
+        '<div class="position-section-title"><b>Alocações nesta área</b><span>'+(isVolumeOnlyRM?"por endereço":"separadas por referência")+'</span></div>' +
         '<div id="positionCurrentAllocations"></div>' +
       '</div>' +
     '</div>';
@@ -2666,8 +2673,16 @@ function changeAllocDestination(setor){
 
 function updateReferenceRemaining(){
   const ctx=window.allocCtx;
+  if(!ctx)return;
+  if(ctx.setor==="RM"){
+    const allocated=Number(ctx.status?.global_total_alocado||0);
+    if($("positionReferenceRemainingStat"))$("positionReferenceRemainingStat").textContent=Number(ctx.remaining||0).toLocaleString("pt-BR");
+    if($("positionReferenceRemainingLabel"))$("positionReferenceRemainingLabel").textContent=allocated.toLocaleString("pt-BR")+" volumes alocados no saldo global";
+    if($("positionSelectedItemLabel"))$("positionSelectedItemLabel").textContent="Saldo global do Card";
+    return;
+  }
   const item=selectedAllocationItem();
-  if(!ctx||!item)return;
+  if(!item)return;
   const allocated=globalItemAllocatedQty(item.id),remaining=itemRemainingQty(item);
   const unit=["ET","EC"].includes(ctx.setor)?"peças":"volumes";
   if($("positionReferenceRemainingStat"))$("positionReferenceRemainingStat").textContent=remaining.toLocaleString("pt-BR");
@@ -2680,6 +2695,17 @@ function renderCurrentItemAllocations(){
   const ctx=window.allocCtx;
   const unit=ctx&&["ET","EC"].includes(ctx.setor)?"peças":"volumes";
   if(!box||!ctx) return;
+  if(ctx.setor==="RM"){
+    const positions=ctx.status?.posicoes||[];
+    if(!positions.length){
+      box.innerHTML='<div class="position-empty">Nenhum volume alocado no RM para este Card.</div>';
+      return;
+    }
+    box.innerHTML=positions.map(function(p){
+      return '<div class="reference-allocation-summary"><div><b>'+esc(p.address)+'</b><small>Endereço no RM</small></div><strong>'+Number(p.quantidade||0).toLocaleString("pt-BR")+' volumes</strong></div>';
+    }).join("");
+    return;
+  }
   const rows=(ctx.status?.item_allocations||[]);
   if(!rows.length){
     box.innerHTML='<div class="position-empty">Nenhuma referência foi alocada neste Card ainda.</div>';
@@ -2698,27 +2724,37 @@ function renderCurrentItemAllocations(){
 }
 
 function updateAllocHint(){
-  const el=$("posHint"),ctx=window.allocCtx,item=selectedAllocationItem();
-  if(!el||!ctx||!item)return;
+  const el=$("posHint"),ctx=window.allocCtx;
+  if(!el||!ctx)return;
   const raw=Number($("posQty")?.value||0),unit=["ET","EC"].includes(ctx.setor)?"peças":"volumes";
+  if(ctx.setor==="RM"){
+    el.textContent="Volumes restantes no Card: "+Number(ctx.remaining||0).toLocaleString("pt-BR");
+    if(raw>Number(ctx.remaining||0))el.textContent+=" — quantidade acima do saldo disponível.";
+    updateReferenceRemaining();
+    return;
+  }
+  const item=selectedAllocationItem();
+  if(!item)return;
   el.textContent=(unit==="peças"?"Peças restantes nesta referência: ":"Volumes restantes no Card: ")+Number(ctx.remaining||0).toLocaleString("pt-BR");
   if(raw>Number(ctx.remaining||0))el.textContent+=" — quantidade acima do saldo disponível.";
   updateReferenceRemaining();
 }
 
 async function submitAllocation(cardId,setor){
-  const ctx=window.allocCtx||{},item=selectedAllocationItem(),address=ctx.selectedAddress||"",qty=Number($("posQty")?.value||0);
+  const ctx=window.allocCtx||{},isVolumeOnlyRM=setor==="RM",item=isVolumeOnlyRM?null:selectedAllocationItem(),address=ctx.selectedAddress||"",qty=Number($("posQty")?.value||0);
   const isPieceSector=["ET","EC"].includes(setor),unit=isPieceSector?"peça(s)":"volume(s)";
-  if(!item){toast("Selecione a referência que será alocada.");return;}
+  if(!isVolumeOnlyRM&&!item){toast("Selecione a referência que será alocada.");return;}
   if(!address){toast("Clique em uma posição no mapa.");return;}
   if(qty<=0){toast("Informe a quantidade para esta referência.");return;}
   if(ctx.remaining<=0){toast(isPieceSector?"Não há mais peças disponíveis nesta referência.":"Não há mais volumes disponíveis para este Card.");return;}
-  const itemRemaining=itemRemainingQty(item);
-  if(isPieceSector&&qty>itemRemaining){toast("A referência possui apenas "+itemRemaining.toLocaleString("pt-BR")+" peça(s) disponíveis.");return;}
+  if(!isVolumeOnlyRM){
+    const itemRemaining=itemRemainingQty(item);
+    if(isPieceSector&&qty>itemRemaining){toast("A referência possui apenas "+itemRemaining.toLocaleString("pt-BR")+" peça(s) disponíveis.");return;}
+  }
   if(qty>ctx.remaining){toast("A quantidade ultrapassa o saldo de "+ctx.remaining.toLocaleString("pt-BR")+" "+unit+" disponíveis.");return;}
   try{
     const result=await api("/api/positions/cards/"+cardId+"/allocate",{
-      method:"POST",body:JSON.stringify({setor:setor,responsavel:currentUser?.name,allocations:[{item_id:Number(item.id),address:address,quantidade:qty}]})
+      method:"POST",body:JSON.stringify({setor:setor,responsavel:currentUser?.name,allocations:[{item_id:isVolumeOnlyRM?null:Number(item.id),address:address,quantidade:qty}]})
     });
     ctx.status=result;
     ctx.remaining=Math.max(0,Number(ctx.sourceTotal||0)-Number(isPieceSector?result.total_alocado:result.global_total_alocado||0));
@@ -2726,7 +2762,7 @@ async function submitAllocation(cardId,setor){
     $("posQty").value="";
     if($("positionAllocatedTotal"))$("positionAllocatedTotal").textContent=Number(isPieceSector?result.total_alocado:result.global_total_alocado||0).toLocaleString("pt-BR");
     if($("positionUsedCount"))$("positionUsedCount").textContent=String(result.posicoes?.length||0);
-    toast("Referência "+referenceLabel(item)+" alocada em "+address+" com "+qty.toLocaleString("pt-BR")+" "+unit+".");
+    toast((isVolumeOnlyRM?"Volumes":"Referência "+referenceLabel(item))+" alocados em "+address+" com "+qty.toLocaleString("pt-BR")+" "+unit+".");
     renderAllocationItemPicker();renderCurrentItemAllocations();updateReferenceRemaining();renderPositionMap();
   }catch(e){toast(e.message);}
 }

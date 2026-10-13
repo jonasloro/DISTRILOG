@@ -1817,6 +1817,8 @@ def get_card(card_id: int):
     card["items"] = [dict(r) for r in con.execute("SELECT * FROM items WHERE card_id=? ORDER BY product,color,size,id", (card_id,)).fetchall()]
     card["expected_total"] = sum(item["expected_qty"] for item in card["items"])
     card["rm_item_volumes"] = {str(item_id): qty for item_id, qty in item_allocation_totals(card_id, "RM").items()}
+    card["global_allocated_volume_total"] = total_allocated("RM", card_id)
+    card["rm_volume_only"] = card["global_allocated_volume_total"] > sum(card["rm_item_volumes"].values())
     card["receiving"] = current_receiving(con, card_id)
     card["in_transit"] = awaiting_arrival(con, card_id)
     card["dispatch"] = current_dispatch(con, card_id)

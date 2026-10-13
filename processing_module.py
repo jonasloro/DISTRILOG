@@ -8,7 +8,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, FastAPI, HTTPException, Request
 
-from positions_module import item_allocation_totals
+from positions_module import item_allocation_totals, total_allocated
 
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = Path(os.getenv("OUTLOG_DATA_DIR", str(BASE_DIR / "data"))).resolve() / "controle_logistica.db"
@@ -273,7 +273,8 @@ def processing_validation(con: sqlite3.Connection, processing_id: int) -> list[s
 
     worker_total = sum(int(row["produced_qty"] or 0) for row in workers if row["function"] != "CADASTRO")
     rm_volumes = item_allocation_totals(record["card_id"], "RM")
-    rm_total = sum(rm_volumes.values())
+    rm_total = total_allocated("RM", record["card_id"])
+    volume_only = rm_total > sum(rm_volumes.values())
 
     if record["purchase_mode"] == "SALDO":
         processed_total = int(record["processed_qty_general"] or 0)
@@ -291,19 +292,24 @@ def processing_validation(con: sqlite3.Connection, processing_id: int) -> list[s
         ).fetchall()
         processed_total = sum(int(row["processed_qty"] or 0) for row in item_rows)
         pending = []
-        for row in item_rows:
-            available = int(rm_volumes.get(int(row["item_id"]), 0))
-            processed = int(row["processed_qty"] or 0)
-            if processed > available:
-                errors.append(
-                    f"A referência {row['reference'] or row['product'] or row['item_id']} recebeu "
-                    f"{processed} volume(s) processados, mas o RM liberou somente {available} volume(s)."
-                )
-            if available > 0 and processed <= 0:
-                pending.append(row)
+        if volume_only:
+            if processed_total > rm_total:
+                errors.append(f"Os volumes processados ({processed_total}) não podem superar o saldo global alocado ({rm_total}).")
+            pending = [row for row in item_rows if int(row["processed_qty"] or 0) <= 0]
+        else:
+            for row in item_rows:
+                available = int(rm_volumes.get(int(row["item_id"]), 0))
+                processed = int(row["processed_qty"] or 0)
+                if processed > available:
+                    errors.append(
+                        f"A referência {row['reference'] or row['product'] or row['item_id']} recebeu "
+                        f"{processed} volume(s) processados, mas o RM liberou somente {available} volume(s)."
+                    )
+                if available > 0 and processed <= 0:
+                    pending.append(row)
         if not record["quantity_deferred_to_storage"] and pending:
             errors.append(f"Informe os volumes processados de todas as referências ({len(pending)} pendente(s)).")
-        elif not record["quantity_deferred_to_storage"] and item_rows and not rm_volumes:
+        elif not record["quantity_deferred_to_storage"] and item_rows and not rm_volumes and not volume_only:
             errors.append("Nenhum volume do RM foi encontrado para este Processamento.")
 
     if processed_total > 0 and worker_total != processed_total:
@@ -327,6 +333,10 @@ def processing_card_data(con: sqlite3.Connection, card_id: int) -> Optional[dict
         return None
     data = dict(record)
     rm_volumes = item_allocation_totals(card_id, "RM")
+    global_volume_total = total_allocated("RM", card_id)
+    volume_only = global_volume_total > sum(rm_volumes.values())
+    data["volume_allocation_mode"] = "VOLUMES" if volume_only else "REFERENCIA"
+    data["global_allocated_volume_total"] = global_volume_total
     item_rows = con.execute(
         """SELECT pi.*,i.product,i.reference,i.sku,i.color,i.size,i.expected_qty
            FROM processing_item_quantities pi JOIN items i ON i.id=pi.item_id
@@ -336,7 +346,7 @@ def processing_card_data(con: sqlite3.Connection, card_id: int) -> Optional[dict
     item_data=[]
     for row in item_rows:
         item=dict(row)
-        item["volume_expected"]=int(rm_volumes.get(int(row["item_id"]),0))
+        item["volume_expected"]=None if volume_only else int(rm_volumes.get(int(row["item_id"]),0))
         item_data.append(item)
     data["items"]=item_data
     data["rm_item_volumes"]={str(k):v for k,v in rm_volumes.items()}
@@ -354,9 +364,13 @@ def processing_card_data(con: sqlite3.Connection, card_id: int) -> Optional[dict
     data["workers"] = workers
 
     expected_total = (
-        sum(int(item["volume_expected"] or 0) for item in item_data)
-        if data.get("source_subset")
-        else sum(rm_volumes.values())
+        global_volume_total
+        if volume_only
+        else (
+            sum(int(item["volume_expected"] or 0) for item in item_data)
+            if data.get("source_subset")
+            else sum(rm_volumes.values())
+        )
     )
     processed_total = (
         int(record["processed_qty_general"] or 0)
@@ -420,7 +434,9 @@ async def create_processing(card_id: int, request: Request):
         con.close()
         raise HTTPException(404, "Card não encontrado.")
     rm_volumes = item_allocation_totals(card_id, "RM")
-    if not rm_volumes:
+    allocated_volume_total = total_allocated("RM", card_id)
+    volume_only = allocated_volume_total > sum(rm_volumes.values())
+    if allocated_volume_total <= 0:
         con.close()
         raise HTTPException(400, "Nenhum volume foi alocado no RM para este Card.")
     source_subset = bool(card["source_snapshot_at"] and card["current_sector"] != "PROCESSAMENTO")
@@ -432,7 +448,7 @@ async def create_processing(card_id: int, request: Request):
                    AND source_stage IN ('AGUARDANDO_PROCESSAMENTO','PROCESSAMENTO') ORDER BY id""",
                 (card_id,),
             ).fetchall()
-            if int(rm_volumes.get(int(row["id"]), 0)) > 0
+            if volume_only or int(rm_volumes.get(int(row["id"]), 0)) > 0
         ]
         eligible_ids = {int(row["id"]) for row in eligible_items}
         if requested_item_ids:
@@ -480,12 +496,18 @@ async def create_processing(card_id: int, request: Request):
     )
     processing_id = cur.lastrowid
     if mode == "GRADE" or source_subset:
-        items = eligible_items if source_subset else [
-            row for row in con.execute(
-                "SELECT id FROM items WHERE card_id=? ORDER BY id", (card_id,)
-            ).fetchall()
-            if int(rm_volumes.get(int(row["id"]), 0)) > 0
-        ]
+        items = eligible_items if source_subset else (
+            [row for row in con.execute(
+                "SELECT id FROM items WHERE card_id=? AND expected_qty>0 ORDER BY id", (card_id,)
+            ).fetchall()]
+            if volume_only
+            else [
+                row for row in con.execute(
+                    "SELECT id FROM items WHERE card_id=? ORDER BY id", (card_id,)
+                ).fetchall()
+                if int(rm_volumes.get(int(row["id"]), 0)) > 0
+            ]
+        )
         for item in items:
             con.execute(
                 "INSERT INTO processing_item_quantities(processing_id,item_id) VALUES(?,?)",
