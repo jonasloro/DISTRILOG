@@ -201,7 +201,21 @@ def allocate(card_id: int, payload: dict[str, Any]) -> dict[str, Any]:
             with con.cursor() as cur:
                 _card_or_404(cur, card_id, lock=True)
                 if setor == "RM":
-                    cur.execute("SELECT ten_percent_status FROM outlog_receivings WHERE card_id=%s ORDER BY id DESC LIMIT 1", (card_id,))
+                    receiving_id = int(payload.get("receiving_id") or 0)
+                    if receiving_id:
+                        cur.execute(
+                            "SELECT ten_percent_status FROM outlog_receivings WHERE id=%s AND card_id=%s",
+                            (receiving_id, card_id),
+                        )
+                    else:
+                        cur.execute(
+                            """SELECT r.ten_percent_status FROM outlog_receivings r
+                               LEFT JOIN outlog_cards c ON c.id=r.card_id
+                               WHERE r.card_id=%s
+                               ORDER BY (r.closed_at IS NULL) DESC,
+                                        (r.receiving_type=c.receiving_type) DESC, r.id DESC LIMIT 1""",
+                            (card_id,),
+                        )
                     receiving = cur.fetchone()
                     if not receiving or receiving["ten_percent_status"] != "CONCLUIDA":
                         raise HTTPException(400, "Conclua a tiragem dos 10% antes de alocar os volumes no RM.")
@@ -592,7 +606,17 @@ def _allocate_local(card_id: int, payload: dict[str, Any]) -> dict[str, Any]:
         if not con.execute("SELECT id FROM cards WHERE id=?",(card_id,)).fetchone():
             raise HTTPException(404,"Card não encontrado.")
         if setor=="RM":
-            receiving=con.execute("SELECT ten_percent_status FROM receivings WHERE card_id=? ORDER BY id DESC LIMIT 1",(card_id,)).fetchone()
+            receiving_id=int(payload.get("receiving_id") or 0)
+            if receiving_id:
+                receiving=con.execute("SELECT ten_percent_status FROM receivings WHERE id=? AND card_id=?",(receiving_id,card_id)).fetchone()
+            else:
+                receiving=con.execute(
+                    """SELECT r.ten_percent_status FROM receivings r
+                       JOIN cards c ON c.id=r.card_id WHERE r.card_id=?
+                       ORDER BY (r.closed_at IS NULL) DESC,
+                                (r.receiving_type=c.receiving_type) DESC, r.id DESC LIMIT 1""",
+                    (card_id,),
+                ).fetchone()
             if not receiving or receiving["ten_percent_status"]!="CONCLUIDA":
                 raise HTTPException(400,"Conclua a tiragem dos 10% antes de alocar os volumes no RM.")
         valid={r["address"] for r in con.execute("SELECT address FROM sector_positions WHERE setor=?",(setor,)).fetchall()}

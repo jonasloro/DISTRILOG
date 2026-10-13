@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from openpyxl import load_workbook
@@ -66,12 +66,30 @@ async def persist_card_state(request: Request, call_next):
             allocation_card_id = None
 
     if allocation_card_id:
+        con = None
         try:
             con = db_connect()
-            sync_card_items_to_supabase(con, allocation_card_id)
-            con.close()
+            try:
+                sync_card_items_to_supabase(con, allocation_card_id)
+            except Exception as e:
+                print(f"[aviso] não consegui sincronizar os itens do Card {allocation_card_id} antes da alocação: {e}")
+            try:
+                sync_all_receiving_state_to_supabase(con)
+            except Exception as e:
+                print(f"[erro] não consegui sincronizar o Recebimento antes da alocação do Card {allocation_card_id}: {e}")
+                return JSONResponse(
+                    status_code=503,
+                    content={"detail": "Não foi possível confirmar o status dos 10% no armazenamento persistente. Tente novamente."},
+                )
         except Exception as e:
-            print(f"[aviso] não consegui sincronizar os itens do Card {allocation_card_id} antes da alocação: {e}")
+            print(f"[erro] falha ao preparar a alocação do Card {allocation_card_id}: {e}")
+            return JSONResponse(
+                status_code=503,
+                content={"detail": "Não foi possível preparar a alocação no RM. Tente novamente."},
+            )
+        finally:
+            if con is not None:
+                con.close()
 
     response = await call_next(request)
     if (

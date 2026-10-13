@@ -2754,7 +2754,7 @@ async function submitAllocation(cardId,setor){
   if(qty>ctx.remaining){toast("A quantidade ultrapassa o saldo de "+ctx.remaining.toLocaleString("pt-BR")+" "+unit+" disponíveis.");return;}
   try{
     const result=await api("/api/positions/cards/"+cardId+"/allocate",{
-      method:"POST",body:JSON.stringify({setor:setor,responsavel:currentUser?.name,allocations:[{item_id:isVolumeOnlyRM?null:Number(item.id),address:address,quantidade:qty}]})
+      method:"POST",body:JSON.stringify({setor:setor,responsavel:currentUser?.name,receiving_id:cardData?.receiving?.id||null,allocations:[{item_id:isVolumeOnlyRM?null:Number(item.id),address:address,quantidade:qty}]})
     });
     ctx.status=result;
     ctx.remaining=Math.max(0,Number(ctx.sourceTotal||0)-Number(isPieceSector?result.total_alocado:result.global_total_alocado||0));
