@@ -445,8 +445,7 @@ async function openCard(cardId, tab = "receiving") {
   ).trim();
   const cardDisplayName = cardReference || cardData.purchase_id;
   const canSetPurchaseMode = (cardData.current_sector === "RECEBIMENTO" && ["recebimento", "supervisor", "admin"].includes(currentUser.role)) ||
-    (currentUser.role === "recebimento" && cardData.current_sector === "RECEBIMENTO") ||
-    (currentUser.role === "qualidade" && canOperateQuality());
+    canOperateQuality();
   $("modalBody").innerHTML = `
     <div class="card-title"><div><h2>Card ${esc(cardDisplayName)}</h2><div class="card-subtitle">${esc(cardData.supplier||"—")} • ${esc(cardData.brand||"—")} • ${cardData.expected_total} peças</div></div><div class="card-title-actions"><span class="badge ${statusClass(cardData.status)}">${esc(cardData.status_label)}</span>${currentUser?.role==="admin"?`<button class="danger small-btn" onclick="deleteCard(${cardData.id})">Excluir Card</button>`:""}</div></div>
     <div class="summary-grid">
