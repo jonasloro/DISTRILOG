@@ -101,6 +101,8 @@ def init_processing_db() -> None:
             stored_qty_general INTEGER NOT NULL DEFAULT 0,
             notes TEXT,
             source_subset INTEGER NOT NULL DEFAULT 0,
+            rm_volume_total INTEGER NOT NULL DEFAULT 0,
+            rm_volume_only INTEGER NOT NULL DEFAULT 0,
             created_by INTEGER NOT NULL,
             completed_by INTEGER,
             created_at TEXT NOT NULL,
@@ -116,6 +118,7 @@ def init_processing_db() -> None:
             item_id INTEGER NOT NULL,
             processed_qty INTEGER NOT NULL DEFAULT 0,
             stored_qty INTEGER NOT NULL DEFAULT 0,
+            rm_volume_expected INTEGER,
             UNIQUE(processing_id,item_id),
             FOREIGN KEY(processing_id) REFERENCES processing_records(id) ON DELETE CASCADE,
             FOREIGN KEY(item_id) REFERENCES items(id) ON DELETE CASCADE
@@ -149,6 +152,13 @@ def init_processing_db() -> None:
     columns = {row["name"] for row in con.execute("PRAGMA table_info(processing_records)").fetchall()}
     if "source_subset" not in columns:
         con.execute("ALTER TABLE processing_records ADD COLUMN source_subset INTEGER NOT NULL DEFAULT 0")
+    if "rm_volume_total" not in columns:
+        con.execute("ALTER TABLE processing_records ADD COLUMN rm_volume_total INTEGER NOT NULL DEFAULT 0")
+    if "rm_volume_only" not in columns:
+        con.execute("ALTER TABLE processing_records ADD COLUMN rm_volume_only INTEGER NOT NULL DEFAULT 0")
+    item_columns = {row["name"] for row in con.execute("PRAGMA table_info(processing_item_quantities)").fetchall()}
+    if "rm_volume_expected" not in item_columns:
+        con.execute("ALTER TABLE processing_item_quantities ADD COLUMN rm_volume_expected INTEGER")
     con.commit()
     con.close()
 
@@ -273,8 +283,9 @@ def processing_validation(con: sqlite3.Connection, processing_id: int) -> list[s
 
     worker_total = sum(int(row["produced_qty"] or 0) for row in workers if row["function"] != "CADASTRO")
     rm_volumes = item_allocation_totals(record["card_id"], "RM")
-    rm_total = total_allocated("RM", record["card_id"])
-    volume_only = rm_total > sum(rm_volumes.values())
+    live_rm_total = total_allocated("RM", record["card_id"])
+    rm_total = int(record["rm_volume_total"] or live_rm_total)
+    volume_only = bool(record["rm_volume_only"]) or live_rm_total > sum(rm_volumes.values())
 
     if record["purchase_mode"] == "SALDO":
         processed_total = int(record["processed_qty_general"] or 0)
@@ -298,7 +309,8 @@ def processing_validation(con: sqlite3.Connection, processing_id: int) -> list[s
             pending = [row for row in item_rows if int(row["processed_qty"] or 0) <= 0]
         else:
             for row in item_rows:
-                available = int(rm_volumes.get(int(row["item_id"]), 0))
+                saved_available = row["rm_volume_expected"]
+                available = int(saved_available if saved_available is not None else rm_volumes.get(int(row["item_id"]), 0))
                 processed = int(row["processed_qty"] or 0)
                 if processed > available:
                     errors.append(
@@ -333,8 +345,9 @@ def processing_card_data(con: sqlite3.Connection, card_id: int) -> Optional[dict
         return None
     data = dict(record)
     rm_volumes = item_allocation_totals(card_id, "RM")
-    global_volume_total = total_allocated("RM", card_id)
-    volume_only = global_volume_total > sum(rm_volumes.values())
+    live_global_volume_total = total_allocated("RM", card_id)
+    global_volume_total = int(record["rm_volume_total"] or live_global_volume_total)
+    volume_only = bool(record["rm_volume_only"]) or live_global_volume_total > sum(rm_volumes.values())
     data["volume_allocation_mode"] = "VOLUMES" if volume_only else "REFERENCIA"
     data["global_allocated_volume_total"] = global_volume_total
     item_rows = con.execute(
@@ -346,7 +359,8 @@ def processing_card_data(con: sqlite3.Connection, card_id: int) -> Optional[dict
     item_data=[]
     for row in item_rows:
         item=dict(row)
-        item["volume_expected"]=None if volume_only else int(rm_volumes.get(int(row["item_id"]),0))
+        saved_available = row["rm_volume_expected"]
+        item["volume_expected"] = None if volume_only else int(saved_available if saved_available is not None else rm_volumes.get(int(row["item_id"]),0))
         item_data.append(item)
     data["items"]=item_data
     data["rm_item_volumes"]={str(k):v for k,v in rm_volumes.items()}
@@ -369,7 +383,7 @@ def processing_card_data(con: sqlite3.Connection, card_id: int) -> Optional[dict
         else (
             sum(int(item["volume_expected"] or 0) for item in item_data)
             if data.get("source_subset")
-            else sum(rm_volumes.values())
+            else (global_volume_total or sum(rm_volumes.values()))
         )
     )
     processed_total = (
@@ -476,8 +490,8 @@ async def create_processing(card_id: int, request: Request):
         raise HTTPException(400, "Já existe um Processamento aberto para este Card.")
     cur = con.execute(
         """INSERT INTO processing_records(card_id,status,purchase_mode,brand,operation_profile,needs_triage,
-           needs_labeling,label_type,quantity_deferred_to_storage,notes,source_subset,created_by,created_at)
-           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+           needs_labeling,label_type,quantity_deferred_to_storage,notes,source_subset,rm_volume_total,rm_volume_only,created_by,created_at)
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (
             card_id,
             "ABERTO",
@@ -490,6 +504,8 @@ async def create_processing(card_id: int, request: Request):
             1 if defer else 0,
             notes,
             1 if source_subset else 0,
+            allocated_volume_total,
+            1 if volume_only else 0,
             user_id,
             iso_now(),
         ),
@@ -509,9 +525,11 @@ async def create_processing(card_id: int, request: Request):
             ]
         )
         for item in items:
+            item_id = int(item["id"])
+            volume_expected = None if volume_only else int(rm_volumes.get(item_id, 0))
             con.execute(
-                "INSERT INTO processing_item_quantities(processing_id,item_id) VALUES(?,?)",
-                (processing_id, item["id"]),
+                "INSERT INTO processing_item_quantities(processing_id,item_id,rm_volume_expected) VALUES(?,?,?)",
+                (processing_id, item_id, volume_expected),
             )
     if source_subset:
         item_ids = [int(row["id"]) for row in eligible_items]
