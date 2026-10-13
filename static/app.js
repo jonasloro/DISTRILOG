@@ -2849,7 +2849,7 @@ async function submitAllocation(cardId,setor){
       $("posQty").value="";
       toast("Amostra alocada na Qualidade em "+address+" com "+qty.toLocaleString("pt-BR")+" volume(s).");
       if(ctx.remaining<=0){
-        await openCard(currentCardId);
+        await openCard(currentCardId,"quality");
       }else{
         await loadPositionAllocator(cardId,"QA",true,ctx.sourceTotal);
       }
