@@ -434,6 +434,19 @@ def restore_receiving_state_from_supabase(sqlite_con) -> int:
             rekey_local_timer_event(int(row["id"]), next_timer_id)
             next_timer_id += 1
 
+        local_event_by_identity = sqlite_con.execute(
+            """SELECT id FROM timer_events
+               WHERE receiving_id=? AND event_type=? AND event_at=? AND user_id=?
+               ORDER BY id LIMIT 1""",
+            (local_receiving_id, row["event_type"], row["event_at"], row["user_id"]),
+        ).fetchone()
+        if local_event_by_identity:
+            matching_local_id = int(local_event_by_identity["id"])
+            if matching_local_id != int(row["id"]):
+                # A matching event under a different local ID is the same event, not a second timer event.
+                rekey_local_timer_event(matching_local_id, int(row["id"]))
+            continue
+
         values = (
             int(row["id"]),
             local_receiving_id,
