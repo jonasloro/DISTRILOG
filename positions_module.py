@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any, Optional
+import math
 import os
 import sqlite3
 from pathlib import Path
@@ -184,6 +185,15 @@ def _sector_scope(setor: Optional[str]) -> list[str]:
     return list(GLOBAL_ALLOCATION_SECTORS) if s in GLOBAL_ALLOCATION_SECTORS else [s]
 
 
+def _ten_percent_volume_target(volumes: Any) -> int:
+    """10% dos volumes recebidos, arredondado para cima para nunca zerar a amostra."""
+    try:
+        total = max(0, int(volumes or 0))
+    except (TypeError, ValueError):
+        total = 0
+    return math.ceil(total / 10) if total else 0
+
+
 @router.post("/cards/{card_id}/allocate")
 def allocate(card_id: int, payload: dict[str, Any]) -> dict[str, Any]:
     if not os.getenv("SUPABASE_DATABASE_URL"):
@@ -200,16 +210,20 @@ def allocate(card_id: int, payload: dict[str, Any]) -> dict[str, Any]:
         with pg_connect() as con:
             with con.cursor() as cur:
                 _card_or_404(cur, card_id, lock=True)
-                if setor == "RM":
-                    receiving_id = int(payload.get("receiving_id") or 0)
+                is_ten_percent_sample = (
+                    setor == "QA"
+                    and str(payload.get("allocation_purpose") or "").upper() == "TEN_PERCENT_SAMPLE"
+                )
+                receiving_id = int(payload.get("receiving_id") or 0)
+                if setor == "RM" or is_ten_percent_sample:
                     if receiving_id:
                         cur.execute(
-                            "SELECT ten_percent_status FROM outlog_receivings WHERE id=%s AND card_id=%s",
+                            "SELECT ten_percent_status,volumes FROM outlog_receivings WHERE id=%s AND card_id=%s",
                             (receiving_id, card_id),
                         )
                     else:
                         cur.execute(
-                            """SELECT r.ten_percent_status FROM outlog_receivings r
+                            """SELECT r.ten_percent_status,r.volumes FROM outlog_receivings r
                                LEFT JOIN outlog_cards c ON c.id=r.card_id
                                WHERE r.card_id=%s
                                ORDER BY (r.closed_at IS NULL) DESC,
@@ -218,7 +232,34 @@ def allocate(card_id: int, payload: dict[str, Any]) -> dict[str, Any]:
                         )
                     receiving = cur.fetchone()
                     if not receiving or receiving["ten_percent_status"] != "CONCLUIDA":
-                        raise HTTPException(400, "Conclua a tiragem dos 10% antes de alocar os volumes no RM.")
+                        raise HTTPException(400, "Conclua a tiragem dos 10% antes de alocar os volumes.")
+                    ten_percent_target = _ten_percent_volume_target(receiving["volumes"])
+                    cur.execute(
+                        """SELECT COALESCE(SUM(quantidade),0) total FROM card_allocations
+                           WHERE card_id=%s AND setor='QA' AND item_id IS NULL""",
+                        (card_id,),
+                    )
+                    ten_percent_allocated = int(cur.fetchone()["total"] or 0)
+                    if is_ten_percent_sample:
+                        if ten_percent_target <= 0:
+                            raise HTTPException(400, "Informe e salve os volumes recebidos antes de endereçar os 10% na Qualidade.")
+                        requested_sample_qty = sum(int(a.get("quantidade") or 0) for a in allocations)
+                        if ten_percent_allocated + requested_sample_qty > ten_percent_target:
+                            remaining_sample = max(0, ten_percent_target - ten_percent_allocated)
+                            raise HTTPException(
+                                400,
+                                f"A alocação obrigatória dos 10% na QA é de {ten_percent_target} volume(s). "
+                                f"Já foram alocados {ten_percent_allocated}; restam {remaining_sample}.",
+                            )
+                    elif setor == "RM":
+                        if ten_percent_target <= 0:
+                            raise HTTPException(400, "Informe e salve os volumes recebidos antes de alocar no RM.")
+                        if ten_percent_allocated < ten_percent_target:
+                            raise HTTPException(
+                                400,
+                                f"Antes de alocar no RM, enderece {ten_percent_target} volume(s) (10% dos volumes) na Qualidade. "
+                                f"Já foram alocados {ten_percent_allocated}.",
+                            )
                 valid = {p["address"] for p in list_positions(setor)}
                 now = iso_now()
                 is_global = setor in GLOBAL_ALLOCATION_SECTORS
@@ -234,7 +275,7 @@ def allocate(card_id: int, payload: dict[str, Any]) -> dict[str, Any]:
                     if qty <= 0:
                         raise HTTPException(400, "Quantidade precisa ser maior que zero.")
 
-                    if setor == "RM":
+                    if setor == "RM" or is_ten_percent_sample:
                         item_id = None
                         item = None
                     else:
@@ -334,6 +375,12 @@ def allocation_status(card_id: int, setor: str) -> dict[str, Any]:
                     (card_id, *GLOBAL_ALLOCATION_SECTORS),
                 )
                 global_total = int(cur.fetchone()["total"] or 0)
+                cur.execute(
+                    """SELECT COALESCE(SUM(quantidade),0) total FROM card_allocations
+                       WHERE card_id=%s AND setor='QA' AND item_id IS NULL""",
+                    (card_id,),
+                )
+                ten_percent_sample_allocated = int(cur.fetchone()["total"] or 0)
 
                 cur.execute(
                     """SELECT a.item_id,SUM(a.quantidade) qty,
@@ -361,7 +408,7 @@ def allocation_status(card_id: int, setor: str) -> dict[str, Any]:
     except RuntimeError:
         rows, item_rows, item_positions = [], [], []
         global_total, global_item_rows = 0, []
-        por_setor_rows, volumes_total = [], None
+        por_setor_rows, volumes_total, ten_percent_sample_allocated = [], None, 0
 
     total = sum(int(r["qty"] or 0) for r in rows)
     grouped: dict[int, dict[str, Any]] = {}
@@ -412,6 +459,7 @@ def allocation_status(card_id: int, setor: str) -> dict[str, Any]:
         "total_alocado": total,
         "global_total_alocado": global_total,
         "volumes_total": volumes_total,
+        "ten_percent_sample_allocated": ten_percent_sample_allocated,
         "volumes_restante": max(0, volumes_total - global_total) if volumes_total is not None else None,
         "global_por_setor": {
             s: next((int(r["qty"] or 0) for r in por_setor_rows if r["setor"] == s), 0)
@@ -605,20 +653,40 @@ def _allocate_local(card_id: int, payload: dict[str, Any]) -> dict[str, Any]:
         con.execute("BEGIN IMMEDIATE")
         if not con.execute("SELECT id FROM cards WHERE id=?",(card_id,)).fetchone():
             raise HTTPException(404,"Card não encontrado.")
-        if setor=="RM":
-            receiving_id=int(payload.get("receiving_id") or 0)
+        is_ten_percent_sample = (
+            setor=="QA" and str(payload.get("allocation_purpose") or "").upper()=="TEN_PERCENT_SAMPLE"
+        )
+        receiving_id=int(payload.get("receiving_id") or 0)
+        if setor=="RM" or is_ten_percent_sample:
             if receiving_id:
-                receiving=con.execute("SELECT ten_percent_status FROM receivings WHERE id=? AND card_id=?",(receiving_id,card_id)).fetchone()
+                receiving=con.execute("SELECT ten_percent_status,volumes FROM receivings WHERE id=? AND card_id=?",(receiving_id,card_id)).fetchone()
             else:
                 receiving=con.execute(
-                    """SELECT r.ten_percent_status FROM receivings r
+                    """SELECT r.ten_percent_status,r.volumes FROM receivings r
                        JOIN cards c ON c.id=r.card_id WHERE r.card_id=?
                        ORDER BY (r.closed_at IS NULL) DESC,
                                 (r.receiving_type=c.receiving_type) DESC, r.id DESC LIMIT 1""",
                     (card_id,),
                 ).fetchone()
             if not receiving or receiving["ten_percent_status"]!="CONCLUIDA":
-                raise HTTPException(400,"Conclua a tiragem dos 10% antes de alocar os volumes no RM.")
+                raise HTTPException(400,"Conclua a tiragem dos 10% antes de alocar os volumes.")
+            ten_percent_target=_ten_percent_volume_target(receiving["volumes"])
+            ten_percent_allocated=int(con.execute(
+                "SELECT COALESCE(SUM(quantidade),0) total FROM card_allocations WHERE card_id=? AND setor='QA' AND item_id IS NULL",
+                (card_id,),
+            ).fetchone()["total"] or 0)
+            if is_ten_percent_sample:
+                if ten_percent_target<=0:
+                    raise HTTPException(400,"Informe e salve os volumes recebidos antes de endereçar os 10% na Qualidade.")
+                requested_sample_qty=sum(int(a.get("quantidade") or 0) for a in allocations)
+                if ten_percent_allocated+requested_sample_qty>ten_percent_target:
+                    remaining_sample=max(0,ten_percent_target-ten_percent_allocated)
+                    raise HTTPException(400,f"A alocação obrigatória dos 10% na QA é de {ten_percent_target} volume(s). Já foram alocados {ten_percent_allocated}; restam {remaining_sample}.")
+            elif setor=="RM":
+                if ten_percent_target<=0:
+                    raise HTTPException(400,"Informe e salve os volumes recebidos antes de alocar no RM.")
+                if ten_percent_allocated<ten_percent_target:
+                    raise HTTPException(400,f"Antes de alocar no RM, enderece {ten_percent_target} volume(s) (10% dos volumes) na Qualidade. Já foram alocados {ten_percent_allocated}.")
         valid={r["address"] for r in con.execute("SELECT address FROM sector_positions WHERE setor=?",(setor,)).fetchall()}
         is_global=setor in GLOBAL_ALLOCATION_SECTORS
         volumes=_local_card_volumes(con,card_id) if is_global else None
@@ -632,7 +700,7 @@ def _allocate_local(card_id: int, payload: dict[str, Any]) -> dict[str, Any]:
                 raise HTTPException(400,"Quantidade precisa ser um número válido.")
             if address not in valid: raise HTTPException(400,f"Posição {address} não pertence ao setor {setor}.")
             if qty<=0: raise HTTPException(400,"Quantidade precisa ser maior que zero.")
-            if setor=="RM":
+            if setor=="RM" or is_ten_percent_sample:
                 item_id=None
                 item=None
             else:
@@ -678,6 +746,10 @@ def _allocation_status_local(card_id: int, setor: str) -> dict[str, Any]:
         item_positions=con.execute("SELECT item_id,address,SUM(quantidade) qty FROM card_allocations WHERE card_id=? AND setor=? AND item_id IS NOT NULL GROUP BY item_id,address ORDER BY item_id,address",
                                     (card_id,setor)).fetchall()
         global_total=_local_global_allocated(con,card_id)
+        ten_percent_sample_allocated=int(con.execute(
+            "SELECT COALESCE(SUM(quantidade),0) total FROM card_allocations WHERE card_id=? AND setor='QA' AND item_id IS NULL",
+            (card_id,),
+        ).fetchone()["total"] or 0)
         marks=",".join("?" for _ in GLOBAL_ALLOCATION_SECTORS)
         global_items=con.execute(f"""SELECT a.item_id,SUM(a.quantidade) qty,i.product,i.reference,i.sku,i.color,i.size,i.expected_qty
                                      FROM card_allocations a LEFT JOIN items i ON i.id=a.item_id
@@ -705,6 +777,7 @@ def _allocation_status_local(card_id: int, setor: str) -> dict[str, Any]:
                      "expected_qty":int(r["expected_qty"] or 0),"total_alocado":int(r["qty"] or 0)}
     total=sum(int(r["qty"] or 0) for r in rows)
     return {"card_id":card_id,"setor":setor,"total_alocado":total,"global_total_alocado":global_total,"volumes_total":volumes,
+            "ten_percent_sample_allocated":ten_percent_sample_allocated,
             "volumes_restante":max(0,volumes-global_total) if volumes is not None else None,
             "global_por_setor":{s:next((int(r["qty"] or 0) for r in by_sector if r["setor"]==s),0) for s in GLOBAL_ALLOCATION_SECTORS},
             "posicoes":[{"address":r["address"],"quantidade":int(r["qty"] or 0)} for r in rows],
@@ -738,6 +811,31 @@ def _total_allocated_local(setor: str, card_id: int) -> int:
                         (card_id,*sectors)).fetchone()
         return int(row["total"] or 0)
     finally: con.close()
+
+
+def total_allocated_in_sector(setor: str, card_id: int) -> int:
+    """Total alocado em um único setor, sem somar RM + QA + PR."""
+    setor = str(setor or "").upper()
+    if not os.getenv("SUPABASE_DATABASE_URL"):
+        con = _local_db_connect()
+        try:
+            row = con.execute(
+                "SELECT COALESCE(SUM(quantidade),0) total FROM card_allocations WHERE card_id=? AND setor=?",
+                (card_id, setor),
+            ).fetchone()
+            return int(row["total"] or 0)
+        finally:
+            con.close()
+    try:
+        with pg_connect() as con:
+            with con.cursor() as cur:
+                cur.execute(
+                    "SELECT COALESCE(SUM(quantidade),0) total FROM card_allocations WHERE card_id=%s AND setor=%s",
+                    (card_id, setor),
+                )
+                return int(cur.fetchone()["total"] or 0)
+    except RuntimeError:
+        return 0
 
 
 def _release_card_allocations_local(card_id: int, keep_quality_qty: int = 0) -> int:
