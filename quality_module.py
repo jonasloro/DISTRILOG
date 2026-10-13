@@ -87,7 +87,7 @@ def require_completed_receiving_sample(con: sqlite3.Connection, card_id: int, re
 
 
 def ensure_quality_sector_owner(con: sqlite3.Connection, inspection: sqlite3.Row, actor_role: str) -> None:
-    """Block Quality mutations when another department owns the card."""
+    """Allow mutations only while the Card or the selected Quality items belong to Quality."""
     card = con.execute(
         "SELECT id,current_sector,source_snapshot_at FROM cards WHERE id=?",
         (inspection["card_id"],),
@@ -95,7 +95,10 @@ def ensure_quality_sector_owner(con: sqlite3.Connection, inspection: sqlite3.Row
     if not card:
         con.close()
         raise HTTPException(404, "Card não encontrado.")
-    if card["current_sector"] == "QUALIDADE" or actor_role in SUPERVISOR_ROLES:
+    if actor_role not in QUALITY_ROLES:
+        con.close()
+        raise HTTPException(403, "Este perfil não pode executar ações na Qualidade.")
+    if card["current_sector"] == "QUALIDADE":
         return
     if inspection["source_subset"] and card["source_snapshot_at"]:
         quality_items = con.execute(
