@@ -253,32 +253,105 @@ def sync_all_receiving_state_to_supabase(sqlite_con) -> None:
 
 
 def restore_receiving_state_from_supabase(sqlite_con) -> int:
-    """Restaura os controles de Recebimento persistidos."""
+    """Merge persisted receiving controls without overwriting more advanced local state."""
     with pg_connect() as con:
         with con.cursor() as cur:
             cur.execute("SELECT * FROM outlog_receivings ORDER BY id")
-            receivings = cur.fetchall()
+            remote_receivings = cur.fetchall()
             cur.execute("SELECT * FROM outlog_timer_events ORDER BY id")
-            timer_events = cur.fetchall()
+            remote_events = cur.fetchall()
 
+    local_card_ids = {
+        int(row["id"]) for row in sqlite_con.execute("SELECT id FROM cards").fetchall()
+    }
     receiving_columns = ",".join(RECEIVING_COLUMNS)
     receiving_marks = ",".join(["?"] * len(RECEIVING_COLUMNS))
-    for row in receivings:
-        sqlite_con.execute(
-            f"INSERT OR IGNORE INTO receivings ({receiving_columns}) VALUES ({receiving_marks})",
-            _receiving_tuple(row),
-        )
+    columns_without_id = ",".join(RECEIVING_COLUMNS[1:])
+    marks_without_id = ",".join(["?"] * (len(RECEIVING_COLUMNS) - 1))
+    remote_to_local_receiving_id = {}
+    restored_count = 0
+
+    for row in remote_receivings:
+        remote_id = int(row["id"])
+        card_id = int(row["card_id"])
+        if card_id not in local_card_ids:
+            continue
+
+        local = sqlite_con.execute(
+            "SELECT * FROM receivings WHERE id=?", (remote_id,)
+        ).fetchone()
+        if local and int(local["card_id"]) == card_id and local["receiving_type"] == row["receiving_type"]:
+            local_id = remote_id
+            # A completed positive sample is terminal for a receiving record. If the
+            # local copy is incomplete, recover only the sample fields from Supabase.
+            remote_done = row["ten_percent_status"] == "CONCLUIDA" and int(row["ten_percent_actual"] or 0) > 0
+            local_done = local["ten_percent_status"] == "CONCLUIDA" and int(local["ten_percent_actual"] or 0) > 0
+            if remote_done and not local_done:
+                sqlite_con.execute(
+                    """UPDATE receivings SET
+                       volumes=COALESCE(?,volumes),
+                       received_qty=COALESCE(?,received_qty),
+                       ten_percent_required=?,
+                       ten_percent_min=COALESCE(?,ten_percent_min),
+                       ten_percent_actual=?,
+                       ten_percent_status='CONCLUIDA'
+                       WHERE id=?""",
+                    (
+                        row["volumes"], row["received_qty"], row["ten_percent_required"],
+                        row["ten_percent_min"], row["ten_percent_actual"], remote_id,
+                    ),
+                )
+                restored_count += 1
+        else:
+            # IDs can collide when a deployment has a partially rebuilt local SQLite
+            # database. Preserve both records and remap the remote ID to a new local ID.
+            values = tuple(row[column] for column in RECEIVING_COLUMNS[1:])
+            cursor = sqlite_con.execute(
+                "INSERT INTO receivings ({}) VALUES ({})".format(columns_without_id, marks_without_id),
+                values,
+            )
+            local_id = int(cursor.lastrowid)
+            restored_count += 1
+        remote_to_local_receiving_id[remote_id] = local_id
 
     timer_columns = ",".join(TIMER_EVENT_COLUMNS)
     timer_marks = ",".join(["?"] * len(TIMER_EVENT_COLUMNS))
-    for row in timer_events:
-        sqlite_con.execute(
-            f"INSERT OR IGNORE INTO timer_events ({timer_columns}) VALUES ({timer_marks})",
-            _timer_event_tuple(row),
-        )
-    return len(receivings)
+    timer_without_id = ",".join(TIMER_EVENT_COLUMNS[1:])
+    timer_marks_without_id = ",".join(["?"] * (len(TIMER_EVENT_COLUMNS) - 1))
 
+    for row in remote_events:
+        remote_receiving_id = int(row["receiving_id"])
+        local_receiving_id = remote_to_local_receiving_id.get(remote_receiving_id)
+        if local_receiving_id is None:
+            # Retain a local link when the same receiving ID already exists and belongs
+            # to a card in this database.
+            local_parent = sqlite_con.execute(
+                "SELECT id FROM receivings WHERE id=?", (remote_receiving_id,)
+            ).fetchone()
+            if not local_parent:
+                continue
+            local_receiving_id = remote_receiving_id
 
+        event = sqlite_con.execute(
+            "SELECT receiving_id,event_type,event_at,user_id FROM timer_events WHERE id=?",
+            (row["id"],),
+        ).fetchone()
+        if event:
+            if int(event["receiving_id"]) == local_receiving_id:
+                continue
+            values = (local_receiving_id, row["event_type"], row["event_at"], row["user_id"])
+            sqlite_con.execute(
+                "INSERT INTO timer_events ({}) VALUES ({})".format(timer_without_id, timer_marks_without_id),
+                values,
+            )
+        else:
+            values = (row["id"], local_receiving_id, row["event_type"], row["event_at"], row["user_id"])
+            sqlite_con.execute(
+                "INSERT INTO timer_events ({}) VALUES ({})".format(timer_columns, timer_marks),
+                values,
+            )
+
+    return restored_count
 def sync_card_to_supabase(sqlite_con, card_id: int) -> None:
     row = sqlite_con.execute("SELECT * FROM cards WHERE id=?", (card_id,)).fetchone()
     if not row:
@@ -412,9 +485,12 @@ def bootstrap_card_persistence(sqlite_con) -> dict:
         sync_all_receiving_state_to_supabase(sqlite_con)
         return {"mode": "seeded_remote", "cards": local_count}
     if local_count > 0:
+        restored_receivings = restore_receiving_state_from_supabase(sqlite_con)
         sync_all_cards_to_supabase(sqlite_con, include_items=False)
         sync_all_receiving_state_to_supabase(sqlite_con)
-        return {"mode": "local", "cards": local_count}
+        if restored_receivings:
+            print("[persistencia] {} registro(s) de Recebimento recuperados do Supabase.".format(restored_receivings))
+        return {"mode": "local", "cards": local_count, "receivings_restored": restored_receivings}
     if remote_count == 0:
         return {"mode": "empty", "cards": 0}
 
