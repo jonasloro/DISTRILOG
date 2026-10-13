@@ -1364,6 +1364,35 @@ async def complete_inspection(inspection_id: int, request: Request):
     if inspection["status"] != "ABERTA":
         con.close()
         raise HTTPException(400, "A inspeção já foi concluída.")
+    # Também protege inspeções que já estavam abertas antes da regra obrigatória.
+    if not inspection["source_subset"]:
+        card = con.execute("SELECT * FROM cards WHERE id=?", (inspection["card_id"],)).fetchone()
+        if card and not card["source_snapshot_at"] and card["current_sector"] == "QUALIDADE":
+            receiving = con.execute(
+                """SELECT r.* FROM receivings r JOIN cards c ON c.id=r.card_id
+                   WHERE r.card_id=?
+                   ORDER BY (r.closed_at IS NULL) DESC,
+                            (r.receiving_type=c.receiving_type) DESC, r.id DESC LIMIT 1""",
+                (inspection["card_id"],),
+            ).fetchone()
+            if receiving and receiving["receiving_type"] in {"NOVA", "RETORNO"} and receiving["ten_percent_required"]:
+                if receiving["ten_percent_status"] != "CONCLUIDA":
+                    con.close()
+                    raise HTTPException(400, "Conclua a tiragem dos 10% no Recebimento antes de concluir a Inspeção.")
+                total_volumes = int(receiving["volumes"] or 0)
+                if total_volumes <= 0:
+                    con.close()
+                    raise HTTPException(400, "Informe os volumes recebidos para validar a amostra de 10%.")
+                sample_target = (total_volumes + 9) // 10
+                sample_allocated = total_volume_only_allocated("QA", int(inspection["card_id"]))
+                if sample_allocated < sample_target:
+                    con.close()
+                    raise HTTPException(
+                        400,
+                        f"Enderece os {sample_target} volume(s) da amostra de 10% na Qualidade antes de concluir a Inspeção. "
+                        f"Até agora foram alocados {sample_allocated}.",
+                    )
+
     errors = inspection_validation(con, inspection_id)
     if errors:
         con.close()
