@@ -8,7 +8,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, FastAPI, HTTPException, Request
 
-from positions_module import item_allocation_totals, total_allocated
+from positions_module import item_allocation_totals, total_allocated_in_sector
 
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = Path(os.getenv("OUTLOG_DATA_DIR", str(BASE_DIR / "data"))).resolve() / "controle_logistica.db"
@@ -283,7 +283,7 @@ def processing_validation(con: sqlite3.Connection, processing_id: int) -> list[s
 
     worker_total = sum(int(row["produced_qty"] or 0) for row in workers if row["function"] != "CADASTRO")
     rm_volumes = item_allocation_totals(record["card_id"], "RM")
-    live_rm_total = total_allocated("RM", record["card_id"])
+    live_rm_total = total_allocated_in_sector("RM", record["card_id"])
     rm_total = int(record["rm_volume_total"] or live_rm_total)
     volume_only = bool(record["rm_volume_only"]) or live_rm_total > sum(rm_volumes.values())
 
@@ -345,9 +345,9 @@ def processing_card_data(con: sqlite3.Connection, card_id: int) -> Optional[dict
         return None
     data = dict(record)
     rm_volumes = item_allocation_totals(card_id, "RM")
-    live_global_volume_total = total_allocated("RM", card_id)
-    global_volume_total = int(record["rm_volume_total"] or live_global_volume_total)
-    volume_only = bool(record["rm_volume_only"]) or live_global_volume_total > sum(rm_volumes.values())
+    live_rm_volume_total = total_allocated_in_sector("RM", card_id)
+    global_volume_total = int(record["rm_volume_total"] or live_rm_volume_total)
+    volume_only = bool(record["rm_volume_only"]) or live_rm_volume_total > sum(rm_volumes.values())
     data["volume_allocation_mode"] = "VOLUMES" if volume_only else "REFERENCIA"
     data["global_allocated_volume_total"] = global_volume_total
     item_rows = con.execute(
@@ -448,7 +448,7 @@ async def create_processing(card_id: int, request: Request):
         con.close()
         raise HTTPException(404, "Card não encontrado.")
     rm_volumes = item_allocation_totals(card_id, "RM")
-    allocated_volume_total = total_allocated("RM", card_id)
+    allocated_volume_total = total_allocated_in_sector("RM", card_id)
     volume_only = allocated_volume_total > sum(rm_volumes.values())
     if allocated_volume_total <= 0:
         con.close()
