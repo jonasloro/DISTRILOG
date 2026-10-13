@@ -705,25 +705,17 @@ async def create_inspection(card_id: int, request: Request):
     if not card:
         con.close()
         raise HTTPException(404, "Card não encontrado.")
-    # A amostra separada no Recebimento precisa estar fisicamente endereçada na QA
-    # antes de qualquer inspeção começar. Não aplicar este gate ao fluxo de itens importados.
+    receiving_sample = None
+    # The exact 10% receiving record used below must also pass the QA allocation gate.
     if not source_subset_requested and not card["source_snapshot_at"] and card["current_sector"] == "QUALIDADE":
-        receiving = con.execute(
-            """SELECT r.* FROM receivings r JOIN cards c ON c.id=r.card_id
-               WHERE r.card_id=?
-               ORDER BY (r.closed_at IS NULL) DESC,
-                        (r.receiving_type=c.receiving_type) DESC, r.id DESC LIMIT 1""",
-            (card_id,),
-        ).fetchone()
-        if receiving and receiving["receiving_type"] in {"NOVA", "RETORNO"} and receiving["ten_percent_required"]:
-            if receiving["ten_percent_status"] != "CONCLUIDA":
-                con.close()
-                raise HTTPException(400, "Conclua a tiragem dos 10% no Recebimento antes de iniciar a Inspeção da Qualidade.")
-            total_volumes = int(receiving["volumes"] or 0)
+        receiving_type_for_sample = "RETORNO" if card["receiving_type"] == "RETORNO" else "NOVA"
+        receiving_sample = require_completed_receiving_sample(con, card_id, receiving_type_for_sample)
+        if receiving_sample["ten_percent_required"]:
+            total_volumes = int(receiving_sample["volumes"] or 0)
             if total_volumes <= 0:
                 con.close()
                 raise HTTPException(400, "Informe e salve os volumes recebidos para calcular e endereçar os 10% na Qualidade.")
-            sample_target = 1 if total_volumes > 0 else 0
+            sample_target = 1
             sample_allocated = total_volume_only_allocated("QA", card_id)
             if sample_allocated < sample_target:
                 con.close()
@@ -802,6 +794,7 @@ async def create_inspection(card_id: int, request: Request):
     # - Retorno da Costura: a Inspeção 2 é obrigatória e usa a nova amostra de
     #   10% já separada pelo Recebimento sobre a quantidade efetivamente retornada.
     is_costura_return = card["receiving_type"] == "RETORNO"
+    source_receiving_id: Optional[int] = None
     if source_subset:
         subset_total = sum(int(item["expected_qty"] or 0) for item in source_items)
         requested_target = max(
@@ -810,40 +803,27 @@ async def create_inspection(card_id: int, request: Request):
         )
         sample_source = "IMPORTACAO_QUALIDADE"
     elif inspection_type == 1 or not is_costura_return:
-        receiving = con.execute(
-            """SELECT * FROM receivings WHERE card_id=? AND receiving_type='NOVA'
-               ORDER BY (ten_percent_status='CONCLUIDA' AND COALESCE(ten_percent_actual,0)>0) DESC,
-                        id DESC LIMIT 1""",
-            (card_id,),
-        ).fetchone()
-        requested_target = int((receiving["ten_percent_actual"] if receiving else 0) or 0)
-        if not receiving or receiving["ten_percent_status"] != "CONCLUIDA" or requested_target <= 0:
-            con.close()
-            raise HTTPException(400, "A quantidade efetivamente separada nos 10% pelo Recebimento não foi encontrada.")
+        receiving_sample = receiving_sample or require_completed_receiving_sample(con, card_id, "NOVA")
+        requested_target = int(receiving_sample["ten_percent_actual"])
+        source_receiving_id = int(receiving_sample["id"])
         sample_source = "RECEBIMENTO"
     else:
-        receiving = con.execute(
-            """SELECT * FROM receivings WHERE card_id=? AND receiving_type='RETORNO'
-               ORDER BY (ten_percent_status='CONCLUIDA' AND COALESCE(ten_percent_actual,0)>0) DESC,
-                        id DESC LIMIT 1""",
-            (card_id,),
-        ).fetchone()
-        requested_target = int((receiving["ten_percent_actual"] if receiving else 0) or 0)
-        if requested_target <= 0 or not receiving or receiving["ten_percent_status"] != "CONCLUIDA":
-            con.close()
-            raise HTTPException(400, "A nova amostra de 10% do retorno ainda não foi separada pelo Recebimento.")
+        receiving_sample = receiving_sample or require_completed_receiving_sample(con, card_id, "RETORNO")
+        requested_target = int(receiving_sample["ten_percent_actual"])
+        source_receiving_id = int(receiving_sample["id"])
         sample_source = "RECEBIMENTO_RETORNO"
 
     cur = con.execute(
-        """INSERT INTO quality_inspections(card_id,inspection_type,status,destination,sample_source,purchase_mode,
+        """INSERT INTO quality_inspections(card_id,inspection_type,status,destination,sample_source,source_receiving_id,purchase_mode,
            sample_target_total,development_required,development_separated,development_pending,source_subset,created_by,created_at)
-           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (
             card_id,
             inspection_type,
             "ABERTA",
             destination,
             sample_source,
+            source_receiving_id,
             purchase_mode,
             0,
             development_required,
