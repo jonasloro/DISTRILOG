@@ -2631,7 +2631,7 @@ async function loadPositionAllocator(cardId,setor){
         '<select id="positionStateFilter" onchange="filterPositionMap()"><option value="ALL">Todas as posições</option><option value="FREE">Livres</option><option value="OCCUPIED">Ocupadas</option><option value="CARD">Usadas neste Card</option></select>' +
       '</div>' +
 
-      '<div class="position-legend"><span><i class="position-dot free"></i>Livre</span><span><i class="position-dot occupied"></i>Ocupada</span><span><i class="position-dot selected"></i>Selecionada</span><span><i class="position-dot item"></i>Usada pela referência</span></div>' +
+      '<div class="position-legend"><span><i class="position-dot free"></i>Livre</span><span><i class="position-dot occupied"></i>Ocupada</span><span><i class="position-dot selected"></i>Selecionada</span>'+(isVolumeOnlyRM?"":'<span><i class="position-dot item"></i>Usada pela referência</span>')+'</div>' +
       '<div id="positionMap" class="position-map"></div>' +
 
       '<div class="position-allocation-editor">' +
@@ -2640,7 +2640,7 @@ async function loadPositionAllocator(cardId,setor){
           '<div class="position-selected"><span>REFERÊNCIA SELECIONADA</span><strong id="positionSelectedItemLabel">'+esc(firstAvailable?referenceDetailLabel(firstAvailable):"Nenhuma")+'</strong><small id="positionReferenceRemainingLabel"></small><em id="positionSelectedLabel">'+esc(window.allocCtx.selectedAddress||"Nenhuma")+'</em></div>') +
         '<div class="position-editor-fields">' +
           '<div class="field"><label>'+(isPieceSector?"Peças nesta posição":"Volumes nessa posição")+'</label><input id="posQty" type="number" min="1" placeholder="Ex.: 30" oninput="updateAllocHint()"><small id="posHint" class="muted">'+(isVolumeOnlyRM ? ("Saldo do Card: "+window.allocCtx.remaining.toLocaleString("pt-BR")+" volumes") : ("Saldo da referência: "+(firstAvailable?itemRemainingQty(firstAvailable).toLocaleString("pt-BR"):"—")+" "+(isPieceSector?"peças":"volumes")))+'</small></div>' +
-          '<div class="position-editor-action"><button class="primary" onclick="submitAllocation('+cardId+',\''+setor+'\')">+ Alocar referência</button></div>' +
+          '<div class="position-editor-action"><button class="primary" onclick="submitAllocation('+cardId+',\''+setor+'\')">+ '+(isVolumeOnlyRM?"Alocar volumes":"Alocar referência")+'</button></div>' +
         '</div>' +
       '</div>' +
 
