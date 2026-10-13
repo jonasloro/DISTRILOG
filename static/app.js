@@ -425,7 +425,17 @@ async function setCardPurchaseMode(mode) {
 
 async function openCard(cardId, tab = "receiving") {
   currentCardId = cardId;
+  window.qaSampleAllocationRequired = false;
+  window.qaSampleAllocationComplete = true;
   cardData = await api(`/api/cards/${cardId}`);
+  const currentReceiving = cardData.receiving || {};
+  window.qaSampleAllocationRequired = Boolean(
+    !cardData.source_snapshot_at &&
+    currentReceiving.ten_percent_required &&
+    currentReceiving.ten_percent_status === "CONCLUIDA" &&
+    currentReceiving.receiving_type !== "COSTURA"
+  );
+  window.qaSampleAllocationComplete = !window.qaSampleAllocationRequired;
   receivingPhotos = cardData.receiving?.photo_paths || [];
   dispatchPhotos = cardData.dispatch?.photo_paths || [];
   const cardReference = String(
@@ -470,6 +480,13 @@ async function openCard(cardId, tab = "receiving") {
 function activateTab(id) {
   document.querySelectorAll(".tabs button").forEach((b) => b.classList.remove("active"));
   $(id)?.classList.add("active");
+}
+
+function guardSampleAllocationNavigation() {
+  if (!window.qaSampleAllocationRequired || window.qaSampleAllocationComplete) return false;
+  toast("Antes de continuar, enderece obrigatoriamente os 10% em uma posição da Qualidade.");
+  if (currentCardId && $("cardTab")) renderReceivingTab();
+  return true;
 }
 
 function canOperateReceiving() {
@@ -817,6 +834,7 @@ async function completeDispatch() {
 }
 
 function renderCasuloTab() {
+  if (guardSampleAllocationNavigation()) return;
   activateTab("tabCasuloBtn");
   const canEdit = canOperateReceiving();
   $("cardTab").innerHTML = `<div class="panel-body">
@@ -839,6 +857,7 @@ async function updateCasulo() {
 }
 
 function renderProductsTab() {
+  if (guardSampleAllocationNavigation()) return;
   activateTab("tabProductsBtn");
   $("cardTab").innerHTML = `<div class="table-wrap"><table>
     <thead><tr><th>Produto</th><th>Referência</th><th>SKU</th><th>Marca</th><th>Cor</th><th>Tamanho</th><th>Lote</th><th>NF</th><th>Qtd. esperada</th></tr></thead>
@@ -847,11 +866,13 @@ function renderProductsTab() {
 }
 
 function renderCardHistory() {
+  if (guardSampleAllocationNavigation()) return;
   activateTab("tabHistoryBtn");
   $("cardTab").innerHTML = `<div class="panel-body"><div class="timeline">${cardData.history.map((event)=>`<div class="timeline-event"><b>${esc(event.description)}</b><br><small>${fmtDateTime(event.created_at)} ${event.user_name?"• "+esc(event.user_name):""}</small></div>`).join("") || '<div class="notice">Nenhum evento.</div>'}</div></div>`;
 }
 
 async function renderQualityTab() {
+  if (guardSampleAllocationNavigation()) return;
   activateTab("tabQualityBtn");
   try {
     if (!qualityUsers.length) qualityUsers = await api("/api/quality/users");
@@ -1379,6 +1400,7 @@ async function completeQualityInspection() {
 
 
 async function renderProcessingTab() {
+  if (guardSampleAllocationNavigation()) return;
   activateTab("tabProcessingBtn");
   try {
     if (!processingUsers.length) processingUsers = await api("/api/processing/users");
@@ -1698,6 +1720,7 @@ async function completeProcessing() {
 }
 
 async function renderDownstreamTab(sector) {
+  if (guardSampleAllocationNavigation()) return;
   const key=sector==="ETIQUETAGEM"?"labeling":"storage",tabId=sector==="ETIQUETAGEM"?"tabLabelingBtn":"tabStorageBtn";
   const wmsSector=sector==="ETIQUETAGEM"?"ET":"EC",sectorLabel=sector==="ETIQUETAGEM"?"Etiquetagem (ET)":"Estocagem (EC)";
   activateTab(tabId);
@@ -2546,6 +2569,8 @@ function filterPositionMap(){
 }
 
 async function loadReceivingAllocationStep(cardId) {
+  window.qaSampleAllocationRequired = true;
+  window.qaSampleAllocationComplete = false;
   const box=$("posAllocBox");
   if(!box) return;
   try {
@@ -2559,9 +2584,11 @@ async function loadReceivingAllocationStep(cardId) {
       return;
     }
     if(allocated<target) {
+      window.qaSampleAllocationComplete = false;
       await loadPositionAllocator(cardId,"QA",true,target);
       return;
     }
+    window.qaSampleAllocationComplete = true;
     await loadPositionAllocator(cardId,"RM");
   } catch(error) {
     box.innerHTML='<div class="notice error">Não foi possível verificar a alocação obrigatória da amostra: '+esc(error.message||"Erro desconhecido")+'. <button class="secondary" onclick="loadReceivingAllocationStep('+Number(cardId)+')">Tentar novamente</button></div>';
