@@ -60,6 +60,60 @@ def require_role(con: sqlite3.Connection, user_id: int, allowed: set[str]) -> sq
     return user
 
 
+def latest_receiving_sample(con: sqlite3.Connection, card_id: int, receiving_type: str) -> Optional[sqlite3.Row]:
+    """Find the latest receiving operation for this Card and receiving type."""
+    return con.execute(
+        "SELECT * FROM receivings WHERE card_id=? AND receiving_type=? ORDER BY id DESC LIMIT 1",
+        (card_id, receiving_type),
+    ).fetchone()
+
+
+def require_completed_receiving_sample(con: sqlite3.Connection, card_id: int, receiving_type: str) -> sqlite3.Row:
+    """Require the latest receiving operation to contain a saved, completed 10% sample."""
+    latest = latest_receiving_sample(con, card_id, receiving_type)
+    if not latest:
+        con.close()
+        raise HTTPException(409, "Não existe registro de Recebimento do tipo {} para este Card. Restaure o registro do Recebimento antes de iniciar a inspeção.".format(receiving_type))
+    if not latest["ten_percent_required"]:
+        con.close()
+        raise HTTPException(400, "O registro mais recente de Recebimento não está configurado para exigir a separação dos 10%.")
+    if latest["ten_percent_status"] != "CONCLUIDA":
+        con.close()
+        raise HTTPException(400, "Conclua a tiragem dos 10% no Recebimento antes de iniciar a Inspeção da Qualidade.")
+    if int(latest["ten_percent_actual"] or 0) <= 0:
+        con.close()
+        raise HTTPException(400, "A quantidade efetivamente separada nos 10% não está salva como um valor positivo no Recebimento.")
+    return latest
+
+
+def ensure_quality_sector_owner(con: sqlite3.Connection, inspection: sqlite3.Row, actor_role: str) -> None:
+    """Allow mutations only while the Card or the selected Quality items belong to Quality."""
+    card = con.execute(
+        "SELECT id,current_sector,source_snapshot_at FROM cards WHERE id=?",
+        (inspection["card_id"],),
+    ).fetchone()
+    if not card:
+        con.close()
+        raise HTTPException(404, "Card não encontrado.")
+    if actor_role not in QUALITY_ROLES:
+        con.close()
+        raise HTTPException(403, "Este perfil não pode executar ações na Qualidade.")
+    if card["current_sector"] == "QUALIDADE":
+        return
+    if inspection["source_subset"] and card["source_snapshot_at"]:
+        quality_items = con.execute(
+            """SELECT COUNT(*) n FROM quality_inspection_items qii
+               JOIN items i ON i.id=qii.item_id
+               WHERE qii.inspection_id=? AND i.card_id=?
+                 AND i.source_stage IN ('QUALIDADE','QUALIDADE_RETRABALHO','QUALIDADE_REJEITADO')""",
+            (inspection["id"], card["id"]),
+        ).fetchone()
+        if int(quality_items["n"] or 0) > 0:
+            return
+    con.close()
+    raise HTTPException(403, "Este Card está sob responsabilidade de outro setor. A Qualidade pode consultar as informações, mas não executar ações enquanto o Card não estiver sob sua responsabilidade.")
+
+
 def add_history(
     con: sqlite3.Connection,
     card_id: int,
@@ -108,6 +162,7 @@ def init_quality_db() -> None:
             status TEXT NOT NULL DEFAULT 'ABERTA',
             destination TEXT,
             sample_source TEXT NOT NULL,
+            source_receiving_id INTEGER REFERENCES receivings(id) ON DELETE SET NULL,
             purchase_mode TEXT NOT NULL DEFAULT 'GRADE',
             sample_target_total INTEGER NOT NULL DEFAULT 0,
             development_required INTEGER,
@@ -200,6 +255,8 @@ def init_quality_db() -> None:
         con.execute("ALTER TABLE quality_inspections ADD COLUMN purchase_mode TEXT NOT NULL DEFAULT 'GRADE'")
     if "source_subset" not in inspection_columns:
         con.execute("ALTER TABLE quality_inspections ADD COLUMN source_subset INTEGER NOT NULL DEFAULT 0")
+    if "source_receiving_id" not in inspection_columns:
+        con.execute("ALTER TABLE quality_inspections ADD COLUMN source_receiving_id INTEGER REFERENCES receivings(id) ON DELETE SET NULL")
     sample_columns = {row["name"] for row in con.execute("PRAGMA table_info(quality_sample_items)").fetchall()}
     if "sample_scope" not in sample_columns:
         con.execute("ALTER TABLE quality_sample_items ADD COLUMN sample_scope TEXT NOT NULL DEFAULT 'ITEM'")
@@ -651,25 +708,17 @@ async def create_inspection(card_id: int, request: Request):
     if not card:
         con.close()
         raise HTTPException(404, "Card não encontrado.")
-    # A amostra separada no Recebimento precisa estar fisicamente endereçada na QA
-    # antes de qualquer inspeção começar. Não aplicar este gate ao fluxo de itens importados.
+    receiving_sample = None
+    # The exact 10% receiving record used below must also pass the QA allocation gate.
     if not source_subset_requested and not card["source_snapshot_at"] and card["current_sector"] == "QUALIDADE":
-        receiving = con.execute(
-            """SELECT r.* FROM receivings r JOIN cards c ON c.id=r.card_id
-               WHERE r.card_id=?
-               ORDER BY (r.closed_at IS NULL) DESC,
-                        (r.receiving_type=c.receiving_type) DESC, r.id DESC LIMIT 1""",
-            (card_id,),
-        ).fetchone()
-        if receiving and receiving["receiving_type"] in {"NOVA", "RETORNO"} and receiving["ten_percent_required"]:
-            if receiving["ten_percent_status"] != "CONCLUIDA":
-                con.close()
-                raise HTTPException(400, "Conclua a tiragem dos 10% no Recebimento antes de iniciar a Inspeção da Qualidade.")
-            total_volumes = int(receiving["volumes"] or 0)
+        receiving_type_for_sample = "RETORNO" if card["receiving_type"] == "RETORNO" else "NOVA"
+        receiving_sample = require_completed_receiving_sample(con, card_id, receiving_type_for_sample)
+        if receiving_sample["ten_percent_required"]:
+            total_volumes = int(receiving_sample["volumes"] or 0)
             if total_volumes <= 0:
                 con.close()
                 raise HTTPException(400, "Informe e salve os volumes recebidos para calcular e endereçar os 10% na Qualidade.")
-            sample_target = 1 if total_volumes > 0 else 0
+            sample_target = 1
             sample_allocated = total_volume_only_allocated("QA", card_id)
             if sample_allocated < sample_target:
                 con.close()
@@ -748,6 +797,7 @@ async def create_inspection(card_id: int, request: Request):
     # - Retorno da Costura: a Inspeção 2 é obrigatória e usa a nova amostra de
     #   10% já separada pelo Recebimento sobre a quantidade efetivamente retornada.
     is_costura_return = card["receiving_type"] == "RETORNO"
+    source_receiving_id: Optional[int] = None
     if source_subset:
         subset_total = sum(int(item["expected_qty"] or 0) for item in source_items)
         requested_target = max(
@@ -756,40 +806,27 @@ async def create_inspection(card_id: int, request: Request):
         )
         sample_source = "IMPORTACAO_QUALIDADE"
     elif inspection_type == 1 or not is_costura_return:
-        receiving = con.execute(
-            """SELECT * FROM receivings WHERE card_id=? AND receiving_type='NOVA'
-               ORDER BY (ten_percent_status='CONCLUIDA' AND COALESCE(ten_percent_actual,0)>0) DESC,
-                        id DESC LIMIT 1""",
-            (card_id,),
-        ).fetchone()
-        requested_target = int((receiving["ten_percent_actual"] if receiving else 0) or 0)
-        if not receiving or receiving["ten_percent_status"] != "CONCLUIDA" or requested_target <= 0:
-            con.close()
-            raise HTTPException(400, "A quantidade efetivamente separada nos 10% pelo Recebimento não foi encontrada.")
+        receiving_sample = receiving_sample or require_completed_receiving_sample(con, card_id, "NOVA")
+        requested_target = int(receiving_sample["ten_percent_actual"])
+        source_receiving_id = int(receiving_sample["id"])
         sample_source = "RECEBIMENTO"
     else:
-        receiving = con.execute(
-            """SELECT * FROM receivings WHERE card_id=? AND receiving_type='RETORNO'
-               ORDER BY (ten_percent_status='CONCLUIDA' AND COALESCE(ten_percent_actual,0)>0) DESC,
-                        id DESC LIMIT 1""",
-            (card_id,),
-        ).fetchone()
-        requested_target = int((receiving["ten_percent_actual"] if receiving else 0) or 0)
-        if requested_target <= 0 or not receiving or receiving["ten_percent_status"] != "CONCLUIDA":
-            con.close()
-            raise HTTPException(400, "A nova amostra de 10% do retorno ainda não foi separada pelo Recebimento.")
+        receiving_sample = receiving_sample or require_completed_receiving_sample(con, card_id, "RETORNO")
+        requested_target = int(receiving_sample["ten_percent_actual"])
+        source_receiving_id = int(receiving_sample["id"])
         sample_source = "RECEBIMENTO_RETORNO"
 
     cur = con.execute(
-        """INSERT INTO quality_inspections(card_id,inspection_type,status,destination,sample_source,purchase_mode,
+        """INSERT INTO quality_inspections(card_id,inspection_type,status,destination,sample_source,source_receiving_id,purchase_mode,
            sample_target_total,development_required,development_separated,development_pending,source_subset,created_by,created_at)
-           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (
             card_id,
             inspection_type,
             "ABERTA",
             destination,
             sample_source,
+            source_receiving_id,
             purchase_mode,
             0,
             development_required,
@@ -864,11 +901,12 @@ async def save_item_routes(inspection_id: int, request: Request):
     user_id = int(payload.get("user_id") or 0)
     routes = payload.get("routes") or []
     con = db_connect()
-    require_role(con, user_id, QUALITY_ROLES)
+    actor = require_role(con, user_id, QUALITY_ROLES)
     inspection = con.execute("SELECT * FROM quality_inspections WHERE id=?", (inspection_id,)).fetchone()
     if not inspection:
         con.close()
         raise HTTPException(404, "Inspeção não encontrada.")
+    ensure_quality_sector_owner(con, inspection, actor["role"])
     if inspection["status"] != "ABERTA":
         con.close()
         raise HTTPException(400, "A inspeção já foi concluída.")
@@ -939,6 +977,7 @@ async def update_development(inspection_id: int, request: Request):
     if not inspection:
         con.close()
         raise HTTPException(404, "Inspeção não encontrada.")
+    ensure_quality_sector_owner(con, inspection, user["role"])
     pending = 1 if required and not separated else 0
     con.execute(
         """UPDATE quality_inspections SET development_required=?,development_separated=?,development_pending=?
@@ -984,6 +1023,7 @@ async def create_assignments_batch(inspection_id: int, request: Request):
     if not inspection or inspection["status"] != "ABERTA":
         con.close()
         raise HTTPException(400, "A inspeção não está aberta.")
+    ensure_quality_sector_owner(con, inspection, actor["role"])
     inspector = con.execute("SELECT * FROM users WHERE id=?", (inspector_id,)).fetchone()
     if not inspector or inspector["role"] != "qualidade":
         con.close()
@@ -1066,6 +1106,7 @@ async def create_assignment(inspection_id: int, request: Request):
     if not inspection or inspection["status"] != "ABERTA":
         con.close()
         raise HTTPException(400, "A inspeção não está aberta.")
+    ensure_quality_sector_owner(con, inspection, actor["role"])
     inspector = con.execute("SELECT * FROM users WHERE id=?", (inspector_id,)).fetchone()
     if not inspector or inspector["role"] != "qualidade":
         con.close()
@@ -1133,6 +1174,8 @@ async def release_assignment(assignment_id: int, request: Request):
     if not row:
         con.close()
         raise HTTPException(404, "Atribuição não encontrada.")
+    inspection = con.execute("SELECT * FROM quality_inspections WHERE id=?", (row["inspection_id"],)).fetchone()
+    ensure_quality_sector_owner(con, inspection, actor["role"])
     if actor["role"] == "qualidade" and row["inspector_id"] != user_id:
         con.close()
         raise HTTPException(403, "Você só pode devolver suas próprias atribuições.")
@@ -1176,6 +1219,8 @@ async def transfer_assignment(assignment_id: int, request: Request):
     if not row:
         con.close()
         raise HTTPException(404, "Atribuição não encontrada.")
+    inspection = con.execute("SELECT * FROM quality_inspections WHERE id=?", (row["inspection_id"],)).fetchone()
+    ensure_quality_sector_owner(con, inspection, actor["role"])
     if actor["role"] == "qualidade" and row["inspector_id"] != user_id:
         con.close()
         raise HTTPException(403, "Você só pode transferir suas próprias atribuições.")
@@ -1220,6 +1265,8 @@ async def save_assignment_result(assignment_id: int, request: Request):
     if not row:
         con.close()
         raise HTTPException(404, "Atribuição não encontrada.")
+    inspection = con.execute("SELECT * FROM quality_inspections WHERE id=?", (row["inspection_id"],)).fetchone()
+    ensure_quality_sector_owner(con, inspection, actor["role"])
     if actor["role"] == "qualidade" and row["inspector_id"] != user_id:
         con.close()
         raise HTTPException(403, "Você só pode apontar resultados das suas atribuições.")
@@ -1291,6 +1338,8 @@ async def quality_worker_timer(worker_id: int, action: str, request: Request):
     if not worker:
         con.close()
         raise HTTPException(404, "Participação do inspetor não encontrada.")
+    inspection = con.execute("SELECT * FROM quality_inspections WHERE id=?", (worker["inspection_id"],)).fetchone()
+    ensure_quality_sector_owner(con, inspection, actor["role"])
     if actor["role"] == "qualidade" and worker["inspector_id"] != user_id:
         con.close()
         raise HTTPException(403, "Cada inspetor controla apenas o próprio tempo.")
@@ -1363,6 +1412,7 @@ async def complete_inspection(inspection_id: int, request: Request):
     if not inspection:
         con.close()
         raise HTTPException(404, "Inspeção não encontrada.")
+    ensure_quality_sector_owner(con, inspection, actor["role"])
     if inspection["status"] != "ABERTA":
         con.close()
         raise HTTPException(400, "A inspeção já foi concluída.")
@@ -1370,14 +1420,21 @@ async def complete_inspection(inspection_id: int, request: Request):
     if not inspection["source_subset"]:
         card = con.execute("SELECT * FROM cards WHERE id=?", (inspection["card_id"],)).fetchone()
         if card and not card["source_snapshot_at"] and card["current_sector"] == "QUALIDADE":
-            receiving = con.execute(
-                """SELECT r.* FROM receivings r JOIN cards c ON c.id=r.card_id
-                   WHERE r.card_id=?
-                   ORDER BY (r.closed_at IS NULL) DESC,
-                            (r.receiving_type=c.receiving_type) DESC, r.id DESC LIMIT 1""",
-                (inspection["card_id"],),
-            ).fetchone()
-            if receiving and receiving["receiving_type"] in {"NOVA", "RETORNO"} and receiving["ten_percent_required"]:
+            expected_receiving_type = "RETORNO" if inspection["sample_source"] == "RECEBIMENTO_RETORNO" else "NOVA"
+            if inspection["source_receiving_id"]:
+                receiving = con.execute(
+                    "SELECT * FROM receivings WHERE id=? AND card_id=? AND receiving_type=?",
+                    (inspection["source_receiving_id"], inspection["card_id"], expected_receiving_type),
+                ).fetchone()
+                if not receiving:
+                    con.close()
+                    raise HTTPException(409, "O registro de Recebimento vinculado a esta inspeção não está disponível. Restaure os dados do Recebimento antes de concluir.")
+            else:
+                receiving = require_completed_receiving_sample(con, int(inspection["card_id"]), expected_receiving_type)
+            if not receiving["ten_percent_required"] or receiving["ten_percent_status"] != "CONCLUIDA" or int(receiving["ten_percent_actual"] or 0) <= 0:
+                con.close()
+                raise HTTPException(400, "A tiragem dos 10% vinculada a esta inspeção precisa estar concluída com quantidade efetivamente separada maior que zero.")
+            if receiving["receiving_type"] in {"NOVA", "RETORNO"}:
                 if receiving["ten_percent_status"] != "CONCLUIDA":
                     con.close()
                     raise HTTPException(400, "Conclua a tiragem dos 10% no Recebimento antes de concluir a Inspeção.")

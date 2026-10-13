@@ -237,10 +237,17 @@ def sync_all_receiving_state_to_supabase(sqlite_con) -> None:
     receiving_sql = (
         f"INSERT INTO outlog_receivings ({receiving_columns_sql}) VALUES ({receiving_marks})"
         f" ON CONFLICT (id) DO UPDATE SET {receiving_updates}"
+        " WHERE outlog_receivings.card_id=EXCLUDED.card_id"
+        " AND outlog_receivings.receiving_type=EXCLUDED.receiving_type"
+        " AND outlog_receivings.created_at=EXCLUDED.created_at"
     )
     timer_sql = (
         f"INSERT INTO outlog_timer_events ({timer_columns_sql}) VALUES ({timer_marks})"
         f" ON CONFLICT (id) DO UPDATE SET {timer_updates}"
+        " WHERE outlog_timer_events.receiving_id=EXCLUDED.receiving_id"
+        " AND outlog_timer_events.event_type=EXCLUDED.event_type"
+        " AND outlog_timer_events.event_at=EXCLUDED.event_at"
+        " AND outlog_timer_events.user_id=EXCLUDED.user_id"
     )
 
     with pg_connect() as con:
@@ -253,32 +260,206 @@ def sync_all_receiving_state_to_supabase(sqlite_con) -> None:
 
 
 def restore_receiving_state_from_supabase(sqlite_con) -> int:
-    """Restaura os controles de Recebimento persistidos."""
+    """Restore receiving state by stable identity while preserving local records on ID collisions."""
     with pg_connect() as con:
         with con.cursor() as cur:
             cur.execute("SELECT * FROM outlog_receivings ORDER BY id")
-            receivings = cur.fetchall()
+            remote_receivings = cur.fetchall()
             cur.execute("SELECT * FROM outlog_timer_events ORDER BY id")
-            timer_events = cur.fetchall()
+            remote_events = cur.fetchall()
+
+    local_card_ids = {
+        int(row["id"]) for row in sqlite_con.execute("SELECT id FROM cards").fetchall()
+    }
+    tables = {
+        row["name"]
+        for row in sqlite_con.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+    }
+    has_timer_events = "timer_events" in tables
+    has_receiving_items = "receiving_operation_items" in tables
+    has_quality_inspections = "quality_inspections" in tables and "source_receiving_id" in {
+        row["name"] for row in sqlite_con.execute("PRAGMA table_info(quality_inspections)").fetchall()
+    }
 
     receiving_columns = ",".join(RECEIVING_COLUMNS)
     receiving_marks = ",".join(["?"] * len(RECEIVING_COLUMNS))
-    for row in receivings:
-        sqlite_con.execute(
-            f"INSERT OR IGNORE INTO receivings ({receiving_columns}) VALUES ({receiving_marks})",
-            _receiving_tuple(row),
-        )
-
     timer_columns = ",".join(TIMER_EVENT_COLUMNS)
     timer_marks = ",".join(["?"] * len(TIMER_EVENT_COLUMNS))
-    for row in timer_events:
+    remote_receiving_ids = {int(row["id"]) for row in remote_receivings}
+    remote_timer_ids = {int(row["id"]) for row in remote_events}
+    local_receiving_max = int(sqlite_con.execute("SELECT COALESCE(MAX(id),0) FROM receivings").fetchone()[0] or 0)
+    local_timer_max = (
+        int(sqlite_con.execute("SELECT COALESCE(MAX(id),0) FROM timer_events").fetchone()[0] or 0)
+        if has_timer_events else 0
+    )
+    next_receiving_id = max(local_receiving_max, max(remote_receiving_ids, default=0)) + 1
+    next_timer_id = max(local_timer_max, max(remote_timer_ids, default=0)) + 1
+    restored_count = 0
+    remote_to_local_receiving_id = {}
+
+    def rekey_local_receiving(old_id: int, new_id: int) -> None:
+        local_row = sqlite_con.execute("SELECT * FROM receivings WHERE id=?", (old_id,)).fetchone()
+        if not local_row:
+            return
+        values = list(_receiving_tuple(local_row))
+        values[0] = new_id
         sqlite_con.execute(
-            f"INSERT OR IGNORE INTO timer_events ({timer_columns}) VALUES ({timer_marks})",
-            _timer_event_tuple(row),
+            "INSERT INTO receivings ({}) VALUES ({})".format(receiving_columns, receiving_marks),
+            tuple(values),
         )
-    return len(receivings)
+        if has_timer_events:
+            sqlite_con.execute("UPDATE timer_events SET receiving_id=? WHERE receiving_id=?", (new_id, old_id))
+        if has_receiving_items:
+            sqlite_con.execute(
+                "UPDATE receiving_operation_items SET receiving_id=? WHERE receiving_id=?",
+                (new_id, old_id),
+            )
+        if has_quality_inspections:
+            sqlite_con.execute(
+                "UPDATE quality_inspections SET source_receiving_id=? WHERE source_receiving_id=?",
+                (new_id, old_id),
+            )
+        sqlite_con.execute("DELETE FROM receivings WHERE id=?", (old_id,))
 
+    def rekey_local_timer_event(old_id: int, new_id: int) -> None:
+        local_event = sqlite_con.execute("SELECT * FROM timer_events WHERE id=?", (old_id,)).fetchone()
+        if not local_event:
+            return
+        values = list(_timer_event_tuple(local_event))
+        values[0] = new_id
+        sqlite_con.execute(
+            "INSERT INTO timer_events ({}) VALUES ({})".format(timer_columns, timer_marks),
+            tuple(values),
+        )
+        sqlite_con.execute("DELETE FROM timer_events WHERE id=?", (old_id,))
 
+    def merge_completed_sample(local_id: int, remote_row) -> int:
+        local_row = sqlite_con.execute("SELECT * FROM receivings WHERE id=?", (local_id,)).fetchone()
+        if not local_row:
+            return 0
+        remote_done = (
+            remote_row["ten_percent_status"] == "CONCLUIDA"
+            and int(remote_row["ten_percent_actual"] or 0) > 0
+        )
+        local_done = (
+            local_row["ten_percent_status"] == "CONCLUIDA"
+            and int(local_row["ten_percent_actual"] or 0) > 0
+        )
+        if remote_done and not local_done:
+            sqlite_con.execute(
+                """UPDATE receivings SET
+                   volumes=COALESCE(?,volumes),
+                   received_qty=COALESCE(?,received_qty),
+                   ten_percent_required=?,
+                   ten_percent_min=COALESCE(?,ten_percent_min),
+                   ten_percent_actual=?,
+                   ten_percent_status='CONCLUIDA'
+                   WHERE id=?""",
+                (
+                    remote_row["volumes"], remote_row["received_qty"],
+                    remote_row["ten_percent_required"], remote_row["ten_percent_min"],
+                    remote_row["ten_percent_actual"], local_id,
+                ),
+            )
+            return 1
+        return 0
+
+    for row in remote_receivings:
+        remote_id = int(row["id"])
+        card_id = int(row["card_id"])
+        if card_id not in local_card_ids:
+            continue
+
+        local_by_id = sqlite_con.execute(
+            "SELECT * FROM receivings WHERE id=?", (remote_id,)
+        ).fetchone()
+        if local_by_id:
+            same_identity = (
+                int(local_by_id["card_id"]) == card_id
+                and local_by_id["receiving_type"] == row["receiving_type"]
+                and local_by_id["created_at"] == row["created_at"]
+            )
+            if not same_identity:
+                # Move the unrelated local record out of the remote ID's way, keeping its children linked.
+                rekey_local_receiving(remote_id, next_receiving_id)
+                next_receiving_id += 1
+                local_by_id = None
+
+        if local_by_id:
+            local_id = remote_id
+        else:
+            local_by_identity = sqlite_con.execute(
+                """SELECT * FROM receivings
+                   WHERE card_id=? AND receiving_type=? AND created_at=?
+                   ORDER BY id DESC LIMIT 1""",
+                (card_id, row["receiving_type"], row["created_at"]),
+            ).fetchone()
+            if local_by_identity:
+                old_local_id = int(local_by_identity["id"])
+                if old_local_id != remote_id:
+                    # Remote IDs are canonical; move the matching local record to that ID.
+                    rekey_local_receiving(old_local_id, remote_id)
+                local_id = remote_id
+            else:
+                sqlite_con.execute(
+                    "INSERT INTO receivings ({}) VALUES ({})".format(receiving_columns, receiving_marks),
+                    _receiving_tuple(row),
+                )
+                local_id = remote_id
+                restored_count += 1
+
+        restored_count += merge_completed_sample(local_id, row)
+        remote_to_local_receiving_id[remote_id] = local_id
+
+    for row in remote_events:
+        remote_receiving_id = int(row["receiving_id"])
+        local_receiving_id = remote_to_local_receiving_id.get(remote_receiving_id)
+        if local_receiving_id is None:
+            # Don't attach a remote event to an unrelated local receiving with a colliding numeric ID.
+            continue
+
+        local_event = sqlite_con.execute(
+            "SELECT * FROM timer_events WHERE id=?", (row["id"],)
+        ).fetchone()
+        if local_event:
+            same_event = (
+                int(local_event["receiving_id"]) == local_receiving_id
+                and local_event["event_type"] == row["event_type"]
+                and local_event["event_at"] == row["event_at"]
+                and int(local_event["user_id"]) == int(row["user_id"])
+            )
+            if same_event:
+                continue
+            # Keep the unrelated local event and free the remote primary key.
+            rekey_local_timer_event(int(row["id"]), next_timer_id)
+            next_timer_id += 1
+
+        local_event_by_identity = sqlite_con.execute(
+            """SELECT id FROM timer_events
+               WHERE receiving_id=? AND event_type=? AND event_at=? AND user_id=?
+               ORDER BY id LIMIT 1""",
+            (local_receiving_id, row["event_type"], row["event_at"], row["user_id"]),
+        ).fetchone()
+        if local_event_by_identity:
+            matching_local_id = int(local_event_by_identity["id"])
+            if matching_local_id != int(row["id"]):
+                # A matching event under a different local ID is the same event, not a second timer event.
+                rekey_local_timer_event(matching_local_id, int(row["id"]))
+            continue
+
+        values = (
+            int(row["id"]),
+            local_receiving_id,
+            row["event_type"],
+            row["event_at"],
+            row["user_id"],
+        )
+        sqlite_con.execute(
+            "INSERT INTO timer_events ({}) VALUES ({})".format(timer_columns, timer_marks),
+            values,
+        )
+
+    return restored_count
 def sync_card_to_supabase(sqlite_con, card_id: int) -> None:
     row = sqlite_con.execute("SELECT * FROM cards WHERE id=?", (card_id,)).fetchone()
     if not row:
@@ -412,9 +593,12 @@ def bootstrap_card_persistence(sqlite_con) -> dict:
         sync_all_receiving_state_to_supabase(sqlite_con)
         return {"mode": "seeded_remote", "cards": local_count}
     if local_count > 0:
+        restored_receivings = restore_receiving_state_from_supabase(sqlite_con)
         sync_all_cards_to_supabase(sqlite_con, include_items=False)
         sync_all_receiving_state_to_supabase(sqlite_con)
-        return {"mode": "local", "cards": local_count}
+        if restored_receivings:
+            print("[persistencia] {} registro(s) de Recebimento recuperados do Supabase.".format(restored_receivings))
+        return {"mode": "local", "cards": local_count, "receivings_restored": restored_receivings}
     if remote_count == 0:
         return {"mode": "empty", "cards": 0}
 

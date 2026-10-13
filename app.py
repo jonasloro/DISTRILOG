@@ -2043,10 +2043,25 @@ async def set_purchase_mode(card_id: int, request: Request):
         raise HTTPException(400, "Selecione o tipo da compra: Grade ou Saldo.")
     con = db_connect()
     user = require_role(con, user_id, {"recebimento", "qualidade", "supervisor", "admin"})
-    card = con.execute("SELECT id,purchase_mode FROM cards WHERE id=?", (card_id,)).fetchone()
+    card = con.execute("SELECT id,purchase_mode,current_sector,source_snapshot_at FROM cards WHERE id=?", (card_id,)).fetchone()
     if not card:
         con.close()
         raise HTTPException(404, "Card não encontrado.")
+    role = user["role"]
+    has_quality_snapshot_items = False
+    if card["source_snapshot_at"] and card["current_sector"] != "QUALIDADE":
+        quality_items = con.execute(
+            """SELECT 1 FROM items WHERE card_id=? AND expected_qty>0
+               AND source_stage IN ('QUALIDADE','QUALIDADE_RETRABALHO','QUALIDADE_REJEITADO') LIMIT 1""",
+            (card_id,),
+        ).fetchone()
+        has_quality_snapshot_items = bool(quality_items)
+    receiving_scope = card["current_sector"] == "RECEBIMENTO" and role in {"recebimento", "supervisor", "admin"}
+    quality_scope = card["current_sector"] == "QUALIDADE" and role in {"qualidade", "supervisor", "admin"}
+    quality_subset_scope = has_quality_snapshot_items and role in {"qualidade", "supervisor", "admin"}
+    if not (receiving_scope or quality_scope or quality_subset_scope):
+        con.close()
+        raise HTTPException(403, "O tipo da compra só pode ser definido enquanto o Card ou os itens selecionados estiverem sob responsabilidade do setor.")
     if str(card["purchase_mode"] or "").upper() in {"GRADE", "SALDO"}:
         con.close()
         raise HTTPException(400, "O tipo da compra já foi definido e não pode ser alterado.")

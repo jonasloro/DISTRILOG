@@ -444,12 +444,14 @@ async function openCard(cardId, tab = "receiving") {
     ""
   ).trim();
   const cardDisplayName = cardReference || cardData.purchase_id;
+  const canSetPurchaseMode = (cardData.current_sector === "RECEBIMENTO" && ["recebimento", "supervisor", "admin"].includes(currentUser.role)) ||
+    canOperateQuality();
   $("modalBody").innerHTML = `
     <div class="card-title"><div><h2>Card ${esc(cardDisplayName)}</h2><div class="card-subtitle">${esc(cardData.supplier||"—")} • ${esc(cardData.brand||"—")} • ${cardData.expected_total} peças</div></div><div class="card-title-actions"><span class="badge ${statusClass(cardData.status)}">${esc(cardData.status_label)}</span>${currentUser?.role==="admin"?`<button class="danger small-btn" onclick="deleteCard(${cardData.id})">Excluir Card</button>`:""}</div></div>
     <div class="summary-grid">
       <div class="summary-box"><span>Setor atual</span><strong>${esc(cardData.current_sector)}</strong></div>
       <div class="summary-box"><span>Tipo de entrada</span><strong>${cardData.receiving_type === "RETORNO" ? "Retorno da Costura" : "Mercadoria nova"}</strong></div>
-      <div class="summary-box"><span>Tipo da compra</span>${["GRADE", "SALDO"].includes(cardData.purchase_mode)     ? `<strong>${cardData.purchase_mode === "GRADE" ? "Grade" : "Saldo"}</strong>`     : (["recebimento", "qualidade", "supervisor", "admin"].includes(currentUser.role)         ? `<select id="cardPurchaseMode" onchange="setCardPurchaseMode(this.value)"><option value="">Não reconhecido — definir</option><option value="GRADE">Grade</option><option value="SALDO">Saldo</option></select>`         : "<strong>Não reconhecido</strong>")}</div>
+      <div class="summary-box"><span>Tipo da compra</span>${["GRADE", "SALDO"].includes(cardData.purchase_mode)     ? `<strong>${cardData.purchase_mode === "GRADE" ? "Grade" : "Saldo"}</strong>`     : (canSetPurchaseMode         ? `<select id="cardPurchaseMode" onchange="setCardPurchaseMode(this.value)"><option value="">Não reconhecido — definir</option><option value="GRADE">Grade</option><option value="SALDO">Saldo</option></select>`         : "<strong>Não reconhecido</strong>")}</div>
       <div class="summary-box"><span>Itens</span><strong>${cardData.items.length}</strong></div>
       <div class="summary-box"><span>Quantidade esperada</span><strong>${cardData.expected_total}</strong></div>
       <div class="summary-box"><span>Volumes</span><strong>${cardData.receiving?.volumes ?? cardData.receiving?.volume_count ?? "Não informado"}</strong></div>
@@ -493,8 +495,34 @@ function canOperateReceiving() {
   return currentUser.role === "recebimento" && cardData.current_sector === "RECEBIMENTO";
 }
 
+function qualityReadOnlyPreviewHtml() {
+  const items = (cardData.items || []).slice(0, 8);
+  const rows = items.map((item) => '<tr><td>' + esc(item.product || '—') + '</td><td>' + esc(item.reference || '—') + '</td><td>' + esc(item.color || '—') + '</td><td>' + esc(item.size || '—') + '</td><td>' + Number(item.expected_qty || 0).toLocaleString('pt-BR') + '</td></tr>').join('');
+  return '<div class="panel-body">' +
+    '<div class="notice warn"><b>Visualização somente leitura.</b><br>Setor responsável: <b>' + esc(cardData.current_sector || 'Não definido') + '</b>. Ações operacionais ficam disponíveis somente para o setor responsável.</div>' +
+    '<div class="summary-grid">' +
+      '<div class="summary-box"><span>Compra</span><strong>' + esc(cardData.purchase_id || '—') + '</strong></div>' +
+      '<div class="summary-box"><span>Fornecedor</span><strong>' + esc(cardData.supplier || '—') + '</strong></div>' +
+      '<div class="summary-box"><span>Marca</span><strong>' + esc(cardData.brand || '—') + '</strong></div>' +
+      '<div class="summary-box"><span>Tipo da compra</span><strong>' + esc(cardData.purchase_mode === 'GRADE' ? 'Grade' : cardData.purchase_mode === 'SALDO' ? 'Saldo' : 'Não reconhecido') + '</strong></div>' +
+      '<div class="summary-box"><span>Itens</span><strong>' + (cardData.items || []).length + '</strong></div>' +
+      '<div class="summary-box"><span>Quantidade esperada</span><strong>' + Number(cardData.expected_total || 0).toLocaleString('pt-BR') + '</strong></div>' +
+      '<div class="summary-box"><span>Status</span><strong>' + esc(cardData.status_label || cardData.status || '—') + '</strong></div>' +
+    '</div>' +
+    '<h3 class="section-heading">Resumo dos itens</h3>' +
+    '<div class="table-wrap"><table><thead><tr><th>Produto</th><th>Referência</th><th>Cor</th><th>Tamanho</th><th>Quantidade</th></tr></thead><tbody>' +
+    (rows || '<tr><td colspan="5">Nenhum item disponível para consulta.</td></tr>') +
+    '</tbody></table></div>' +
+    ((cardData.items || []).length > 8 ? '<div class="notice">Exibindo os primeiros 8 itens. A aba Produtos contém a lista completa.</div>' : '') +
+    '</div>';
+}
 function canOperateQuality() {
-  return ["qualidade", "supervisor", "admin"].includes(currentUser.role);
+  if (!currentUser || !cardData) return false;
+  if (!["qualidade", "supervisor", "admin"].includes(currentUser.role)) return false;
+  if (cardData.current_sector === "QUALIDADE") return true;
+  return Boolean(cardData.source_snapshot_at && (cardData.items || []).some((item) =>
+    ["QUALIDADE", "QUALIDADE_RETRABALHO", "QUALIDADE_REJEITADO"].includes(item.source_stage) && Number(item.expected_qty || 0) > 0
+  ));
 }
 
 function canDistributeQuality() {
@@ -872,8 +900,12 @@ function renderCardHistory() {
 }
 
 async function renderQualityTab() {
-  if (guardSampleAllocationNavigation()) return;
   activateTab("tabQualityBtn");
+  if (!canOperateQuality()) {
+    $("cardTab").innerHTML = qualityReadOnlyPreviewHtml();
+    return;
+  }
+  if (guardSampleAllocationNavigation()) return;
   try {
     if (!qualityUsers.length) qualityUsers = await api("/api/quality/users");
   } catch (error) {
@@ -896,10 +928,6 @@ async function renderQualityTab() {
   window.qualitySourceSubset = false;
   const needsNewInspection = cardData.current_sector === "QUALIDADE" && (!q || q.status === "CONCLUIDA");
   if (needsNewInspection) {
-    if (!canOperateQuality()) {
-      $("cardTab").innerHTML = '<div class="panel-body"><div class="notice warn">Aguardando um usuário da Qualidade configurar a nova inspeção.</div></div>';
-      return;
-    }
     $("cardTab").innerHTML = qualitySetupHtml(q);
     toggleQualitySetupFields();
     return;
@@ -1024,9 +1052,11 @@ function qualityInspectionHtml(q) {
   const canOperate = canOperateQuality();
   const typeLabel = `Inspeção ${q.inspection_type}`;
   const modeLabel = q.purchase_mode === "SALDO" ? "Saldo — controle por quantidade geral" : "Grade — controle por item";
-  const sampleLabel = q.sample_source === "RECEBIMENTO"
-    ? `Amostra dos 10% separada e triada pelo Recebimento • ${modeLabel}`
-    : `Nova amostra obrigatória de 10% separada pelo Recebimento após o retorno da Costura • ${modeLabel}`;
+  const sampleLabel = q.sample_source === "IMPORTACAO_QUALIDADE"
+    ? `Referências disponíveis na Qualidade selecionadas para esta inspeção • ${modeLabel}`
+    : q.sample_source === "RECEBIMENTO"
+      ? `Amostra dos 10% separada pelo Recebimento • ${modeLabel}`
+      : `Nova amostra obrigatória de 10% separada pelo Recebimento após o retorno da Costura • ${modeLabel}`;
   return `<div class="panel-body">
     <div class="quality-header">
       <div class="notice ${q.inspection_type===2?"success-box":""}"><b>${typeLabel}</b>${q.inspection_type===1?` — destino <b>${esc(q.destination)}</b>`:""}<br>${sampleLabel}</div>
