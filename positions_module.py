@@ -570,6 +570,37 @@ def item_allocation_totals(card_id: int, setor: str = "RM") -> dict[int, int]:
         return {}
 
 
+def item_allocation_totals_in_sector(card_id: int, setor: str = "RM") -> dict[int, int]:
+    """Quantidades vinculadas a item dentro de um único setor, sem somar QA/PR."""
+    setor = str(setor or "RM").upper()
+    if not os.getenv("SUPABASE_DATABASE_URL"):
+        con = _local_db_connect()
+        try:
+            rows = con.execute(
+                """SELECT item_id,COALESCE(SUM(quantidade),0) qty
+                   FROM card_allocations
+                   WHERE card_id=? AND setor=? AND item_id IS NOT NULL
+                   GROUP BY item_id""",
+                (card_id, setor),
+            ).fetchall()
+            return {int(row["item_id"]): int(row["qty"] or 0) for row in rows}
+        finally:
+            con.close()
+    try:
+        with pg_connect() as con:
+            with con.cursor() as cur:
+                cur.execute(
+                    """SELECT item_id,COALESCE(SUM(quantidade),0) qty
+                       FROM card_allocations
+                       WHERE card_id=%s AND setor=%s AND item_id IS NOT NULL
+                       GROUP BY item_id""",
+                    (card_id, setor),
+                )
+                return {int(row["item_id"]): int(row["qty"] or 0) for row in cur.fetchall()}
+    except RuntimeError:
+        return {}
+
+
 def total_allocated(setor: str, card_id: int) -> int:
     if not os.getenv("SUPABASE_DATABASE_URL"):
         return _total_allocated_local(setor, card_id)
