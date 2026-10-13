@@ -302,16 +302,50 @@ def restore_receiving_state_from_supabase(sqlite_con) -> int:
                     ),
                 )
                 restored_count += 1
-        else:
-            # IDs can collide when a deployment has a partially rebuilt local SQLite
-            # database. Preserve both records and remap the remote ID to a new local ID.
-            values = tuple(row[column] for column in RECEIVING_COLUMNS[1:])
+        elif local is None:
+            # Keep the persisted primary key when it is free so future restores stay idempotent.
             cursor = sqlite_con.execute(
-                "INSERT INTO receivings ({}) VALUES ({})".format(columns_without_id, marks_without_id),
-                values,
+                "INSERT INTO receivings ({}) VALUES ({})".format(receiving_columns, receiving_marks),
+                _receiving_tuple(row),
             )
-            local_id = int(cursor.lastrowid)
-            restored_count += 1
+            local_id = remote_id
+            restored_count += max(cursor.rowcount, 0)
+        else:
+            # Resolve an ID collision without inserting the same remote receiving again on each boot.
+            equivalent = sqlite_con.execute(
+                """SELECT * FROM receivings
+                   WHERE card_id=? AND receiving_type=? AND created_at=?
+                   ORDER BY id DESC LIMIT 1""",
+                (card_id, row["receiving_type"], row["created_at"]),
+            ).fetchone()
+            if equivalent:
+                local_id = int(equivalent["id"])
+                remote_done = row["ten_percent_status"] == "CONCLUIDA" and int(row["ten_percent_actual"] or 0) > 0
+                local_done = equivalent["ten_percent_status"] == "CONCLUIDA" and int(equivalent["ten_percent_actual"] or 0) > 0
+                if remote_done and not local_done:
+                    sqlite_con.execute(
+                        """UPDATE receivings SET
+                           volumes=COALESCE(?,volumes),
+                           received_qty=COALESCE(?,received_qty),
+                           ten_percent_required=?,
+                           ten_percent_min=COALESCE(?,ten_percent_min),
+                           ten_percent_actual=?,
+                           ten_percent_status='CONCLUIDA'
+                           WHERE id=?""",
+                        (
+                            row["volumes"], row["received_qty"], row["ten_percent_required"],
+                            row["ten_percent_min"], row["ten_percent_actual"], local_id,
+                        ),
+                    )
+                    restored_count += 1
+            else:
+                values = tuple(row[column] for column in RECEIVING_COLUMNS[1:])
+                cursor = sqlite_con.execute(
+                    "INSERT INTO receivings ({}) VALUES ({})".format(columns_without_id, marks_without_id),
+                    values,
+                )
+                local_id = int(cursor.lastrowid)
+                restored_count += 1
         remote_to_local_receiving_id[remote_id] = local_id
 
     timer_columns = ",".join(TIMER_EVENT_COLUMNS)
