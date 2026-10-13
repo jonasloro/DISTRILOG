@@ -227,12 +227,12 @@ def allocate(card_id: int, payload: dict[str, Any]) -> dict[str, Any]:
                 if setor == "RM" or is_ten_percent_sample:
                     if receiving_id:
                         cur.execute(
-                            "SELECT ten_percent_status,volumes FROM outlog_receivings WHERE id=%s AND card_id=%s",
+                            "SELECT ten_percent_status,volumes,ten_percent_required,receiving_type FROM outlog_receivings WHERE id=%s AND card_id=%s",
                             (receiving_id, card_id),
                         )
                     else:
                         cur.execute(
-                            """SELECT r.ten_percent_status,r.volumes FROM outlog_receivings r
+                            """SELECT r.ten_percent_status,r.volumes,r.ten_percent_required,r.receiving_type FROM outlog_receivings r
                                LEFT JOIN outlog_cards c ON c.id=r.card_id
                                WHERE r.card_id=%s
                                ORDER BY (r.closed_at IS NULL) DESC,
@@ -242,6 +242,10 @@ def allocate(card_id: int, payload: dict[str, Any]) -> dict[str, Any]:
                     receiving = cur.fetchone()
                     if not receiving or receiving["ten_percent_status"] != "CONCLUIDA":
                         raise HTTPException(400, "Conclua a tiragem dos 10% antes de alocar os volumes.")
+                    if is_ten_percent_sample and (
+                        receiving["receiving_type"] not in {"NOVA", "RETORNO"} or not receiving["ten_percent_required"]
+                    ):
+                        raise HTTPException(400, "A alocação especial dos 10% está disponível somente para recebimentos que exigem amostra.")
                     ten_percent_target = _ten_percent_volume_target(receiving["volumes"])
                     cur.execute(
                         """SELECT COALESCE(SUM(quantidade),0) total FROM card_allocations
@@ -252,7 +256,10 @@ def allocate(card_id: int, payload: dict[str, Any]) -> dict[str, Any]:
                     if is_ten_percent_sample:
                         if ten_percent_target <= 0:
                             raise HTTPException(400, "Informe e salve os volumes recebidos antes de endereçar os 10% na Qualidade.")
-                        requested_sample_qty = sum(int(a.get("quantidade") or 0) for a in allocations)
+                        try:
+                            requested_sample_qty = sum(int(a.get("quantidade") or 0) for a in allocations)
+                        except (TypeError, ValueError):
+                            raise HTTPException(400, "A quantidade precisa ser um número válido.")
                         if ten_percent_allocated + requested_sample_qty > ten_percent_target:
                             remaining_sample = max(0, ten_percent_target - ten_percent_allocated)
                             raise HTTPException(
@@ -745,10 +752,10 @@ def _allocate_local(card_id: int, payload: dict[str, Any]) -> dict[str, Any]:
         receiving_id=int(payload.get("receiving_id") or 0)
         if setor=="RM" or is_ten_percent_sample:
             if receiving_id:
-                receiving=con.execute("SELECT ten_percent_status,volumes FROM receivings WHERE id=? AND card_id=?",(receiving_id,card_id)).fetchone()
+                receiving=con.execute("SELECT ten_percent_status,volumes,ten_percent_required,receiving_type FROM receivings WHERE id=? AND card_id=?",(receiving_id,card_id)).fetchone()
             else:
                 receiving=con.execute(
-                    """SELECT r.ten_percent_status,r.volumes FROM receivings r
+                    """SELECT r.ten_percent_status,r.volumes,r.ten_percent_required,r.receiving_type FROM receivings r
                        JOIN cards c ON c.id=r.card_id WHERE r.card_id=?
                        ORDER BY (r.closed_at IS NULL) DESC,
                                 (r.receiving_type=c.receiving_type) DESC, r.id DESC LIMIT 1""",
@@ -756,6 +763,10 @@ def _allocate_local(card_id: int, payload: dict[str, Any]) -> dict[str, Any]:
                 ).fetchone()
             if not receiving or receiving["ten_percent_status"]!="CONCLUIDA":
                 raise HTTPException(400,"Conclua a tiragem dos 10% antes de alocar os volumes.")
+            if is_ten_percent_sample and (
+                receiving["receiving_type"] not in {"NOVA","RETORNO"} or not receiving["ten_percent_required"]
+            ):
+                raise HTTPException(400,"A alocação especial dos 10% está disponível somente para recebimentos que exigem amostra.")
             ten_percent_target=_ten_percent_volume_target(receiving["volumes"])
             ten_percent_allocated=int(con.execute(
                 "SELECT COALESCE(SUM(quantidade),0) total FROM card_allocations WHERE card_id=? AND setor='QA' AND item_id IS NULL",
@@ -764,7 +775,10 @@ def _allocate_local(card_id: int, payload: dict[str, Any]) -> dict[str, Any]:
             if is_ten_percent_sample:
                 if ten_percent_target<=0:
                     raise HTTPException(400,"Informe e salve os volumes recebidos antes de endereçar os 10% na Qualidade.")
-                requested_sample_qty=sum(int(a.get("quantidade") or 0) for a in allocations)
+                try:
+                    requested_sample_qty=sum(int(a.get("quantidade") or 0) for a in allocations)
+                except (TypeError,ValueError):
+                    raise HTTPException(400,"A quantidade precisa ser um número válido.")
                 if ten_percent_allocated+requested_sample_qty>ten_percent_target:
                     remaining_sample=max(0,ten_percent_target-ten_percent_allocated)
                     raise HTTPException(400,f"A alocação obrigatória dos 10% na QA é de {ten_percent_target} volume(s). Já foram alocados {ten_percent_allocated}; restam {remaining_sample}.")
