@@ -180,9 +180,11 @@ def _card_total_volumes(cur, card_id: int, receiving_id: Optional[int] = None) -
 
 
 def _global_allocated(cur, card_id: int) -> int:
-    """Total alocado do Card somando RM + QA + PR (saldo único, em volumes)."""
+    """Saldo dos volumes recebidos em RM + QA + PR, sem contar o bag extra da amostra."""
     cur.execute(
-        "SELECT COALESCE(SUM(quantidade),0) t FROM card_allocations WHERE card_id=%s AND setor = ANY(%s)",
+        """SELECT COALESCE(SUM(quantidade),0) t FROM card_allocations
+           WHERE card_id=%s AND setor = ANY(%s)
+             AND NOT (setor='QA' AND item_id IS NULL)""",
         (card_id, list(GLOBAL_ALLOCATION_SECTORS)),
     )
     return int(cur.fetchone()["t"] or 0)
@@ -195,12 +197,12 @@ def _sector_scope(setor: Optional[str]) -> list[str]:
 
 
 def _ten_percent_volume_target(volumes: Any) -> int:
-    """10% dos volumes recebidos, arredondado para cima para nunca zerar a amostra."""
+    """A amostra de peças vai em um bag adicional; não substitui nenhum volume recebido."""
     try:
         total = max(0, int(volumes or 0))
     except (TypeError, ValueError):
         total = 0
-    return math.ceil(total / 10) if total else 0
+    return 1 if total > 0 else 0
 
 
 @router.post("/cards/{card_id}/allocate")
@@ -425,7 +427,8 @@ def allocation_status(card_id: int, setor: str) -> dict[str, Any]:
                 cur.execute(
                     """SELECT COALESCE(SUM(quantidade),0) total
                        FROM card_allocations
-                       WHERE card_id=%s AND setor IN (%s,%s,%s)""",
+                       WHERE card_id=%s AND setor IN (%s,%s,%s)
+                         AND NOT (setor='QA' AND item_id IS NULL)""",
                     (card_id, *GLOBAL_ALLOCATION_SECTORS),
                 )
                 global_total = int(cur.fetchone()["total"] or 0)
@@ -454,6 +457,7 @@ def allocation_status(card_id: int, setor: str) -> dict[str, Any]:
                     """SELECT setor,COALESCE(SUM(quantidade),0) qty
                        FROM card_allocations
                        WHERE card_id=%s AND setor = ANY(%s)
+                         AND NOT (setor='QA' AND item_id IS NULL)
                        GROUP BY setor""",
                     (card_id, list(GLOBAL_ALLOCATION_SECTORS)),
                 )
@@ -586,7 +590,9 @@ def total_allocated(setor: str, card_id: int) -> int:
         with pg_connect() as con:
             with con.cursor() as cur:
                 cur.execute(
-                    "SELECT COALESCE(SUM(quantidade),0) t FROM card_allocations WHERE card_id=%s AND setor = ANY(%s)",
+                    """SELECT COALESCE(SUM(quantidade),0) t FROM card_allocations
+                       WHERE card_id=%s AND setor = ANY(%s)
+                         AND NOT (setor='QA' AND item_id IS NULL)""",
                     (card_id, _sector_scope(setor)),
                 )
                 return int(cur.fetchone()["t"] or 0)
@@ -699,7 +705,9 @@ def _local_card_volumes(con: sqlite3.Connection, card_id: int, receiving_id: Opt
 
 def _local_global_allocated(con: sqlite3.Connection, card_id: int) -> int:
     marks=",".join("?" for _ in GLOBAL_ALLOCATION_SECTORS)
-    row=con.execute(f"SELECT COALESCE(SUM(quantidade),0) total FROM card_allocations WHERE card_id=? AND setor IN ({marks})",
+    row=con.execute(f"""SELECT COALESCE(SUM(quantidade),0) total FROM card_allocations
+                         WHERE card_id=? AND setor IN ({marks})
+                           AND NOT (setor='QA' AND item_id IS NULL)""",
                     (card_id,*GLOBAL_ALLOCATION_SECTORS)).fetchone()
     return int(row["total"] or 0)
 
@@ -851,7 +859,10 @@ def _allocation_status_local(card_id: int, setor: str) -> dict[str, Any]:
                                      GROUP BY a.item_id,i.product,i.reference,i.sku,i.color,i.size,i.expected_qty
                                      ORDER BY i.product,i.reference,i.color,i.size,a.item_id""",
                                  (card_id,*GLOBAL_ALLOCATION_SECTORS)).fetchall()
-        by_sector=con.execute(f"SELECT setor,COALESCE(SUM(quantidade),0) qty FROM card_allocations WHERE card_id=? AND setor IN ({marks}) GROUP BY setor",
+        by_sector=con.execute(f"""SELECT setor,COALESCE(SUM(quantidade),0) qty FROM card_allocations
+                                  WHERE card_id=? AND setor IN ({marks})
+                                    AND NOT (setor='QA' AND item_id IS NULL)
+                                  GROUP BY setor""",
                               (card_id,*GLOBAL_ALLOCATION_SECTORS)).fetchall()
         volumes=_local_card_volumes(con,card_id)
     finally: con.close()
@@ -901,7 +912,9 @@ def _item_allocation_totals_local(card_id: int, setor: str = "RM") -> dict[int, 
 def _total_allocated_local(setor: str, card_id: int) -> int:
     sectors=_sector_scope(setor); marks=",".join("?" for _ in sectors); con=_local_db_connect()
     try:
-        row=con.execute(f"SELECT COALESCE(SUM(quantidade),0) total FROM card_allocations WHERE card_id=? AND setor IN ({marks})",
+        row=con.execute(f"""SELECT COALESCE(SUM(quantidade),0) total FROM card_allocations
+                             WHERE card_id=? AND setor IN ({marks})
+                               AND NOT (setor='QA' AND item_id IS NULL)""",
                         (card_id,*sectors)).fetchone()
         return int(row["total"] or 0)
     finally: con.close()
