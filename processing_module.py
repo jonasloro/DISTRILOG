@@ -8,7 +8,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, FastAPI, HTTPException, Request
 
-from positions_module import item_allocation_totals_in_sector, total_allocated_in_sector, total_volume_only_allocated
+from positions_module import item_allocation_totals, total_allocated, total_volume_only_allocated
 
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = Path(os.getenv("OUTLOG_DATA_DIR", str(BASE_DIR / "data"))).resolve() / "controle_logistica.db"
@@ -56,6 +56,13 @@ def add_history(
         "INSERT INTO history(card_id,user_id,event_type,description,created_at) VALUES(?,?,?,?,?)",
         (card_id, user_id, event_type, description, iso_now()),
     )
+
+
+def _processing_volume_total(card_id: int) -> int:
+    """Saldo global RM/QA/PR que segue para processamento, excluindo a amostra reservada na QA."""
+    allocated_global = total_allocated("RM", card_id)
+    qa_sample = total_volume_only_allocated("QA", card_id)
+    return max(0, allocated_global - qa_sample)
 
 
 def business_seconds_between(start: datetime, end: datetime) -> int:
@@ -282,8 +289,8 @@ def processing_validation(con: sqlite3.Connection, processing_id: int) -> list[s
         errors.append("Atribua e conclua a tarefa de Triagem.")
 
     worker_total = sum(int(row["produced_qty"] or 0) for row in workers if row["function"] != "CADASTRO")
-    rm_volumes = item_allocation_totals_in_sector(record["card_id"], "RM")
-    live_rm_total = total_allocated_in_sector("RM", record["card_id"])
+    rm_volumes = item_allocation_totals(record["card_id"], "RM")
+    live_rm_total = _processing_volume_total(record["card_id"])
     rm_total = int(record["rm_volume_total"] or live_rm_total)
     volume_only = bool(record["rm_volume_only"]) or live_rm_total > sum(rm_volumes.values())
 
@@ -344,8 +351,8 @@ def processing_card_data(con: sqlite3.Connection, card_id: int) -> Optional[dict
     if not record:
         return None
     data = dict(record)
-    rm_volumes = item_allocation_totals_in_sector(card_id, "RM")
-    live_rm_volume_total = total_allocated_in_sector("RM", card_id)
+    rm_volumes = item_allocation_totals(card_id, "RM")
+    live_rm_volume_total = _processing_volume_total(card_id)
     global_volume_total = int(record["rm_volume_total"] or live_rm_volume_total)
     volume_only = bool(record["rm_volume_only"]) or live_rm_volume_total > sum(rm_volumes.values())
     data["volume_allocation_mode"] = "VOLUMES" if volume_only else "REFERENCIA"
@@ -474,8 +481,8 @@ async def create_processing(card_id: int, request: Request):
                     f"Até agora foram alocados {sample_allocated}.",
                 )
 
-    rm_volumes = item_allocation_totals_in_sector(card_id, "RM")
-    allocated_volume_total = total_allocated_in_sector("RM", card_id)
+    rm_volumes = item_allocation_totals(card_id, "RM")
+    allocated_volume_total = _processing_volume_total(card_id)
     volume_only = allocated_volume_total > sum(rm_volumes.values())
     if allocated_volume_total <= 0:
         con.close()
