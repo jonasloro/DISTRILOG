@@ -535,12 +535,15 @@ function renderReceivingTab() {
     $("cardTab").innerHTML = sourceLocationHtml();
     return;
   }
-  if (cardData.source_snapshot_at && cardData.current_sector !== "RECEBIMENTO") {
+  const canShowSampleAllocation = cardData.receiving?.ten_percent_status === "CONCLUIDA"
+    && cardData.receiving?.ten_percent_required
+    && cardData.receiving?.receiving_type !== "COSTURA";
+  if (cardData.source_snapshot_at && cardData.current_sector !== "RECEBIMENTO" && !canShowSampleAllocation) {
     window.sourceAllowedStages=null;
     $("cardTab").innerHTML = `<div class="notice"><b>Andamento local preservado:</b> ${esc(cardData.current_sector)} — ${esc(cardData.status_label)}.</div>${sourceLocationHtml()}`;
     return;
   }
-  if (cardData.current_sector !== "RECEBIMENTO") {
+  if (cardData.current_sector !== "RECEBIMENTO" && !canShowSampleAllocation) {
     $("cardTab").innerHTML = outsideReceivingHtml();
     return;
   }
@@ -551,7 +554,7 @@ function renderReceivingTab() {
   if (cardData.status === "AGUARDANDO_RECEBIMENTO_RETORNO") {
     $("cardTab").innerHTML = receivingFormHtml(true);
     window.setTimeout(refreshTimerDisplay, 500);
-    if (cardData.receiving?.ten_percent_status === "CONCLUIDA") loadPositionAllocator(cardData.id, "RM");
+    if (cardData.receiving?.ten_percent_status === "CONCLUIDA") loadReceivingAllocationStep(cardData.id);
     return;
   }
   if (cardData.status === "EM_COSTURA_CD01" || cardData.receiving?.receiving_type === "COSTURA") {
@@ -561,7 +564,7 @@ function renderReceivingTab() {
   const isReturn = cardData.receiving?.receiving_type === "RETORNO" || cardData.receiving_type === "RETORNO";
   $("cardTab").innerHTML = receivingFormHtml(isReturn);
   window.setTimeout(refreshTimerDisplay, 500);
-  if (cardData.receiving?.ten_percent_status === "CONCLUIDA") loadPositionAllocator(cardData.id, "RM");
+  if (cardData.receiving?.ten_percent_status === "CONCLUIDA") loadReceivingAllocationStep(cardData.id);
 }
 
 function sourceLocationHtml() {
@@ -668,7 +671,7 @@ function receivingFormHtml(isReturn) {
       </div>
       ${samplePlanTable(r,isReturn?"Plano exato da nova tiragem de 10%":"Plano exato da tiragem de 10%")}
       ${sampleHtml(r, sampleDone, operate, isReturn)}
-      ${!physicalDone ? (sampleDone ? `<h3 class="section-heading">Endereçamento no Recebimento (RM)</h3><div id="posAllocBox" class="notice">Carregando posições…</div>` : `<h3 class="section-heading">Endereçamento no Recebimento (RM)</h3><div class="notice warn">Conclua a tiragem dos 10% para liberar a alocação dos volumes no RM.</div>`) : ""}
+      ${sampleDone ? `<h3 class="section-heading">Endereçamento obrigatório da amostra na Qualidade</h3><div id="posAllocBox" class="notice">Carregando etapa obrigatória de alocação…</div>` : `<h3 class="section-heading">Endereçamento da amostra</h3><div class="notice warn">Conclua a tiragem dos 10% para liberar primeiro a alocação obrigatória na Qualidade.</div>`}
       <div class="photos">${receivingPhotos.map((p,i)=>`<a class="photo-link" target="_blank" href="${p}">Arquivo ${i+1}</a>`).join("")}</div>
     </div>`;
 }
@@ -2541,7 +2544,7 @@ function filterPositionMap(){
   renderPositionMap();
 }
 
-async function loadPositionAllocator(cardId,setor){
+async function loadPositionAllocator(cardId,setor,tenPercentSample=false,tenPercentTarget=0) {
   const box=$("posAllocBox");
   if(!box) return;
   const requestId=(window.positionMapRequestId||0)+1;
@@ -2564,21 +2567,25 @@ async function loadPositionAllocator(cardId,setor){
   const opIds=(rcv.operation_items||[]).map(function(i){return Number(i.id);}).filter(Boolean);
   const isPieceSector=["ET","EC"].includes(setor);
   const isVolumeOnlyRM=setor==="RM";
+  const isTenPercentSample=Boolean(tenPercentSample)&&setor==="QA";
+  const isVolumeOnly=isVolumeOnlyRM||isTenPercentSample;
+  if(isTenPercentSample)tenPercentTarget=Number(tenPercentTarget)||Math.ceil(Number(rcv.volumes||0)/10);
 
   const sectorItems=items.filter(function(i){return i.source_stage===(setor==="ET"?"ETIQUETAGEM":"ESTOCAGEM");});
 
   const sourceItems=isPieceSector?(sectorItems.length?sectorItems:items):(opIds.length?items.filter(function(i){return opIds.includes(Number(i.id));}):items);
 
   const receivingVolumes=Number(rcv.volumes||0);
-  const sourceTotal=isPieceSector?sourceItems.reduce(function(sum,item){return sum+Number(item.expected_qty||0);},0):receivingVolumes;
+  const sourceTotal=isTenPercentSample?tenPercentTarget:(isPieceSector?sourceItems.reduce(function(sum,item){return sum+Number(item.expected_qty||0);},0):receivingVolumes);
   const firstAvailable=sourceItems[0] || null;
   const firstAllocated=status.item_allocations?.find(function(i){return Number(i.total_alocado||0)>0;}) || null;
+  const sampleAllocated=Number(status.ten_percent_sample_allocated||0);
 
   window.allocCtx={
-    cardId:cardId,setor:setor,sourceTotal:sourceTotal,
-    remaining:Math.max(0,sourceTotal-Number(isPieceSector?status.total_alocado:status.global_total_alocado||0)),
+    cardId:cardId,setor:setor,sourceTotal:sourceTotal,tenPercentSample:isTenPercentSample,
+    remaining:isTenPercentSample?Math.max(0,sourceTotal-sampleAllocated):Math.max(0,sourceTotal-Number(isPieceSector?status.total_alocado:status.global_total_alocado||0)),
     positions:positions,status:status,suggestion:suggestion,
-    selectedItemId:isVolumeOnlyRM?0:Number(firstAvailable?.id||firstAllocated?.item_id||0),
+    selectedItemId:isVolumeOnly?0:Number(firstAvailable?.id||firstAllocated?.item_id||0),
     selectedAddress:suggestion?.address||firstAllocated?.posicoes?.[0]?.address||"",
     posFilter:"ALL",zoneFilter:"ALL",search:""
   };
@@ -2588,14 +2595,15 @@ async function loadPositionAllocator(cardId,setor){
     '<div class="position-allocator">' +
       '<div class="position-allocator-head">' +
         '<div><div class="position-kicker">ENDEREÇAMENTO FÍSICO</div>' +
-          '<h3>'+({RM:"Alocar no Recebimento",QA:"Alocar na Qualidade",PR:"Alocar no Processamento",ET:"Alocar na Etiquetagem",EC:"Alocar na Estocagem"}[setor]||("Alocar no "+setor))+'</h3>' +
-          '<p>'+(isVolumeOnlyRM?"No RM, a alocação é exclusivamente por volumes, sem divisão por produto, cor ou tamanho.":("Escolha primeiro a referência, depois a posição. O controle é feito em "+(isPieceSector?"peças":"volumes")+" da referência."))+'</p>' +
+          '<h3>'+(isTenPercentSample?"Alocar os 10% na Qualidade":({RM:"Alocar no Recebimento",QA:"Alocar na Qualidade",PR:"Alocar no Processamento",ET:"Alocar na Etiquetagem",EC:"Alocar na Estocagem"}[setor]||("Alocar no "+setor)))+'</h3>' +
+          '<p>'+(isTenPercentSample?"Etapa obrigatória: enderece exatamente "+Number(tenPercentTarget).toLocaleString("pt-BR")+" volume(s) da amostra em endereços da QA antes de liberar o RM.":(isVolumeOnlyRM?"No RM, a alocação é exclusivamente por volumes, sem divisão por produto, cor ou tamanho.":("Escolha primeiro a referência, depois a posição. O controle é feito em "+(isPieceSector?"peças":"volumes")+" da referência.")))+'</p>' +
+          (isTenPercentSample ? '<div class="position-dest"><b>Destino fixo: Qualidade (QA)</b><small>Os 10% são endereçados primeiro; o saldo global restante continua compartilhado entre RM, QA e PR.</small></div>' :
           '<div class="position-dest"><label for="positionDestSetor">Destino</label>' +
             '<select id="positionDestSetor" onchange="changeAllocDestination(this.value)">'+
               [["RM","Recebimento (RM)"],["QA","Qualidade (QA)"],["PR","Processamento (PR)"],["ET","Etiquetagem (ET)"],["EC","Estocagem (EC)"]].map(function(o){
                 return '<option value="'+o[0]+'"'+(o[0]===setor?' selected':'')+'>'+o[1]+'</option>';
               }).join("")+
-            '</select><small>'+(isPieceSector?"Saldo em peças nesta área.":"Saldo em volumes compartilhado entre RM, QA e PR.")+'</small></div>' +
+            '</select><small>'+(isPieceSector?"Saldo em peças nesta área.":"Saldo em volumes compartilhado entre RM, QA e PR.")+'</small></div>') +
         '</div>' +
         '<div class="position-suggest">'+
           (suggestion?'<span>SUGESTÃO AUTOMÁTICA</span><b>'+esc(suggestion.address)+'</b><small>'+
@@ -2604,21 +2612,21 @@ async function loadPositionAllocator(cardId,setor){
         '</div>' +
       '</div>' +
 
-      (isVolumeOnlyRM ?
-        '<div class="position-reference-panel"><div class="notice">O RM registra somente volumes por endereço; nenhuma alocação fica vinculada a produto, cor, tamanho ou referência.</div></div>' :
+      (isVolumeOnly ?
+        '<div class="position-reference-panel"><div class="notice">'+(isTenPercentSample?"A amostra deve ser alocada somente em volumes na QA, sem dividir por referência, cor ou tamanho. A alocação é obrigatória e fica limitada aos 10% definidos para este recebimento.":"O RM registra somente volumes por endereço; nenhuma alocação fica vinculada a produto, cor, tamanho ou referência.")+'</div></div>' :
         '<div class="position-reference-panel">' +
           '<div class="position-section-title"><b>Referência a alocar</b><span>Escolha uma por vez</span></div>' +
           '<div id="positionItemPicker" class="allocation-item-grid"></div>' +
         '</div>') +
 
       '<div class="position-stat-grid">' +
-        '<div class="position-stat"><span>Total alocado</span><strong id="positionAllocatedTotal">'+Number(isPieceSector?status.total_alocado:status.global_total_alocado||0).toLocaleString("pt-BR")+
-          '</strong><small>'+(isPieceSector?"peças alocadas em "+setor:"volumes globais · RM "+Number(status.global_por_setor?.RM||0).toLocaleString("pt-BR")+
+        '<div class="position-stat"><span>'+(isTenPercentSample?"10% endereçados na QA":"Total alocado")+'</span><strong id="positionAllocatedTotal">'+Number(isTenPercentSample?sampleAllocated:(isPieceSector?status.total_alocado:status.global_total_alocado||0)).toLocaleString("pt-BR")+
+          '</strong><small>'+(isTenPercentSample?"de "+Number(tenPercentTarget).toLocaleString("pt-BR")+" volume(s) obrigatórios":(isPieceSector?"peças alocadas em "+setor:"volumes globais · RM "+Number(status.global_por_setor?.RM||0).toLocaleString("pt-BR")+
           ' · QA '+Number(status.global_por_setor?.QA||0).toLocaleString("pt-BR")+
-          ' · PR '+Number(status.global_por_setor?.PR||0).toLocaleString("pt-BR"))+'</small></div>' +
+          ' · PR '+Number(status.global_por_setor?.PR||0).toLocaleString("pt-BR")) )+'</small></div>' +
         '<div class="position-stat"><span>Posições usadas</span><strong id="positionUsedCount">'+(status.posicoes?.length||0)+
           '</strong><small>endereços</small></div>' +
-        '<div class="position-stat"><span>'+(isVolumeOnlyRM?"Saldo global do Card":"Saldo da referência")+'</span><strong id="positionReferenceRemainingStat">—</strong><small>'+(isPieceSector?"peças restantes":(isVolumeOnlyRM?"volumes restantes no Card":"volumes restantes"))+'</small></div>' +
+        '<div class="position-stat"><span>'+(isTenPercentSample?"Restante dos 10%":(isVolumeOnlyRM?"Saldo global do Card":"Saldo da referência"))+'</span><strong id="positionReferenceRemainingStat">—</strong><small>'+(isPieceSector?"peças restantes":(isTenPercentSample?"volume(s) que ainda precisam de endereço":(isVolumeOnlyRM?"volumes restantes no Card":"volumes restantes")))+'</small></div>' +
       '</div>' +
 
       '<div class="position-controls">' +
@@ -2631,16 +2639,16 @@ async function loadPositionAllocator(cardId,setor){
         '<select id="positionStateFilter" onchange="filterPositionMap()"><option value="ALL">Todas as posições</option><option value="FREE">Livres</option><option value="OCCUPIED">Ocupadas</option><option value="CARD">Usadas neste Card</option></select>' +
       '</div>' +
 
-      '<div class="position-legend"><span><i class="position-dot free"></i>Livre</span><span><i class="position-dot occupied"></i>Ocupada</span><span><i class="position-dot selected"></i>Selecionada</span>'+(isVolumeOnlyRM?"":'<span><i class="position-dot item"></i>Usada pela referência</span>')+'</div>' +
+      '<div class="position-legend"><span><i class="position-dot free"></i>Livre</span><span><i class="position-dot occupied"></i>Ocupada</span><span><i class="position-dot selected"></i>Selecionada</span>'+(isVolumeOnly?"":'<span><i class="position-dot item"></i>Usada pela referência</span>')+'</div>' +
       '<div id="positionMap" class="position-map"></div>' +
 
       '<div class="position-allocation-editor">' +
-        (isVolumeOnlyRM ?
-          '<div class="position-selected"><span>ALOCAÇÃO POR VOLUMES</span><strong id="positionSelectedItemLabel">Saldo global do Card</strong><small id="positionReferenceRemainingLabel"></small><em id="positionSelectedLabel">'+esc(window.allocCtx.selectedAddress||"Nenhuma")+'</em></div>' :
+        (isVolumeOnly ?
+          '<div class="position-selected"><span>ALOCAÇÃO POR VOLUMES</span><strong id="positionSelectedItemLabel">'+(isTenPercentSample?"Amostra de 10% — Qualidade":"Saldo global do Card")+'</strong><small id="positionReferenceRemainingLabel"></small><em id="positionSelectedLabel">'+esc(window.allocCtx.selectedAddress||"Nenhuma")+'</em></div>' :
           '<div class="position-selected"><span>REFERÊNCIA SELECIONADA</span><strong id="positionSelectedItemLabel">'+esc(firstAvailable?referenceDetailLabel(firstAvailable):"Nenhuma")+'</strong><small id="positionReferenceRemainingLabel"></small><em id="positionSelectedLabel">'+esc(window.allocCtx.selectedAddress||"Nenhuma")+'</em></div>') +
         '<div class="position-editor-fields">' +
-          '<div class="field"><label>'+(isPieceSector?"Peças nesta posição":"Volumes nessa posição")+'</label><input id="posQty" type="number" min="1" placeholder="Ex.: 30" oninput="updateAllocHint()"><small id="posHint" class="muted">'+(isVolumeOnlyRM ? ("Saldo do Card: "+window.allocCtx.remaining.toLocaleString("pt-BR")+" volumes") : ("Saldo da referência: "+(firstAvailable?itemRemainingQty(firstAvailable).toLocaleString("pt-BR"):"—")+" "+(isPieceSector?"peças":"volumes")))+'</small></div>' +
-          '<div class="position-editor-action"><button class="primary" onclick="submitAllocation('+cardId+',\''+setor+'\')">+ '+(isVolumeOnlyRM?"Alocar volumes":"Alocar referência")+'</button></div>' +
+          '<div class="field"><label>'+(isPieceSector?"Peças nesta posição":"Volumes nessa posição")+'</label><input id="posQty" type="number" min="1" max="'+(isTenPercentSample?window.allocCtx.remaining:"")+'" placeholder="Ex.: 30" oninput="updateAllocHint()"><small id="posHint" class="muted">'+(isTenPercentSample?("Restam "+window.allocCtx.remaining.toLocaleString("pt-BR")+" volumes dos 10%"):(isVolumeOnlyRM ? ("Saldo do Card: "+window.allocCtx.remaining.toLocaleString("pt-BR")+" volumes") : ("Saldo da referência: "+(firstAvailable?itemRemainingQty(firstAvailable).toLocaleString("pt-BR"):"—")+" "+(isPieceSector?"peças":"volumes"))))+'</small></div>' +
+          '<div class="position-editor-action"><button class="primary" onclick="submitAllocation('+cardId+',\''+setor+'\')">+ '+(isVolumeOnly?"Alocar volumes":"Alocar referência")+'</button></div>' +
         '</div>' +
       '</div>' +
 
