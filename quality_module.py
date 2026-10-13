@@ -60,6 +60,57 @@ def require_role(con: sqlite3.Connection, user_id: int, allowed: set[str]) -> sq
     return user
 
 
+def find_completed_receiving_sample(con: sqlite3.Connection, card_id: int, receiving_type: str) -> Optional[sqlite3.Row]:
+    """Find the latest completed 10% sample of the requested receiving type."""
+    return con.execute(
+        """SELECT * FROM receivings
+           WHERE card_id=? AND receiving_type=? AND ten_percent_status='CONCLUIDA'
+             AND COALESCE(ten_percent_actual,0)>0
+           ORDER BY id DESC LIMIT 1""",
+        (card_id, receiving_type),
+    ).fetchone()
+
+
+def require_completed_receiving_sample(con: sqlite3.Connection, card_id: int, receiving_type: str) -> sqlite3.Row:
+    """Require a completed sample and distinguish missing records from missing data."""
+    sample = find_completed_receiving_sample(con, card_id, receiving_type)
+    if sample:
+        return sample
+    latest = con.execute(
+        "SELECT * FROM receivings WHERE card_id=? AND receiving_type=? ORDER BY id DESC LIMIT 1",
+        (card_id, receiving_type),
+    ).fetchone()
+    con.close()
+    if not latest:
+        raise HTTPException(409, "Não existe registro de Recebimento do tipo {} para este Card. Restaure o registro do Recebimento antes de iniciar a inspeção.".format(receiving_type))
+    if latest["ten_percent_status"] != "CONCLUIDA":
+        raise HTTPException(400, "Conclua a tiragem dos 10% no Recebimento antes de iniciar a Inspeção da Qualidade.")
+    raise HTTPException(400, "A quantidade efetivamente separada nos 10% não está salva como um valor positivo no Recebimento.")
+
+
+def ensure_quality_sector_owner(con: sqlite3.Connection, inspection: sqlite3.Row, actor_role: str) -> None:
+    """Block Quality mutations when another department owns the card."""
+    card = con.execute(
+        "SELECT id,current_sector,source_snapshot_at FROM cards WHERE id=?",
+        (inspection["card_id"],),
+    ).fetchone()
+    if not card:
+        con.close()
+        raise HTTPException(404, "Card não encontrado.")
+    if card["current_sector"] == "QUALIDADE" or actor_role in SUPERVISOR_ROLES:
+        return
+    if inspection["source_subset"] and card["source_snapshot_at"]:
+        quality_items = con.execute(
+            """SELECT COUNT(*) n FROM quality_inspection_items qii
+               JOIN items i ON i.id=qii.item_id
+               WHERE qii.inspection_id=? AND i.card_id=?
+                 AND i.source_stage IN ('QUALIDADE','QUALIDADE_RETRABALHO','QUALIDADE_REJEITADO')""",
+            (inspection["id"], card["id"]),
+        ).fetchone()
+        if int(quality_items["n"] or 0) > 0:
+            return
+    con.close()
+    raise HTTPException(403, "Este Card está sob responsabilidade de outro setor. A Qualidade pode consultar as informações, mas não executar ações enquanto o Card não estiver sob sua responsabilidade.")
 def add_history(
     con: sqlite3.Connection,
     card_id: int,
@@ -108,6 +159,7 @@ def init_quality_db() -> None:
             status TEXT NOT NULL DEFAULT 'ABERTA',
             destination TEXT,
             sample_source TEXT NOT NULL,
+            source_receiving_id INTEGER REFERENCES receivings(id) ON DELETE SET NULL,
             purchase_mode TEXT NOT NULL DEFAULT 'GRADE',
             sample_target_total INTEGER NOT NULL DEFAULT 0,
             development_required INTEGER,
@@ -200,6 +252,8 @@ def init_quality_db() -> None:
         con.execute("ALTER TABLE quality_inspections ADD COLUMN purchase_mode TEXT NOT NULL DEFAULT 'GRADE'")
     if "source_subset" not in inspection_columns:
         con.execute("ALTER TABLE quality_inspections ADD COLUMN source_subset INTEGER NOT NULL DEFAULT 0")
+    if "source_receiving_id" not in inspection_columns:
+        con.execute("ALTER TABLE quality_inspections ADD COLUMN source_receiving_id INTEGER REFERENCES receivings(id) ON DELETE SET NULL")
     sample_columns = {row["name"] for row in con.execute("PRAGMA table_info(quality_sample_items)").fetchall()}
     if "sample_scope" not in sample_columns:
         con.execute("ALTER TABLE quality_sample_items ADD COLUMN sample_scope TEXT NOT NULL DEFAULT 'ITEM'")
