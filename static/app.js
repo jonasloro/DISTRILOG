@@ -1831,6 +1831,8 @@ async function safeApi(url, fallback) { try { return await api(url); } catch (er
 const shortStatus = value => String(value||"—").replaceAll("_"," ");
 const progressFor = card => card.status?.includes("FINAL")||card.status?.includes("CONCL")?100:card.status?.includes("PROCESS")?68:card.status?.includes("ETIQU")?82:card.status?.includes("QUAL")||card.status?.includes("INSPE")?38:card.status?.includes("RECEB")?18:12;
 
+function analyticsBarsBody(rows){const max=Math.max(1,...rows.map(r=>Number(r.value)||0));return `<div class="analytics-bars">${rows.slice(0,15).map(r=>`<div><span>${esc(r.label)}</span><i><b style="width:${Number(r.value)*100/max}%"></b></i><strong>${Number(r.value).toLocaleString('pt-BR')}</strong><small>${esc(r.hint||'')}</small></div>`).join('')||'<div class="empty-visual">Sem dados para exibir.</div>'}</div>`;}
+
 async function renderDashboard() {
   setPage("Central de Operações", "");
   const [data,quality,processing,returns,stockReport] = await Promise.all([
@@ -2556,10 +2558,13 @@ async function loadPositionAllocator(cardId,setor){
   const rcv=cardData?.receiving||{};
   const items=(cardData.items||[]).filter(function(i){return Number(i.expected_qty||0)>0;});
   const opIds=(rcv.operation_items||[]).map(function(i){return Number(i.id);}).filter(Boolean);
-  const sectorItems=items.filter(function(i){return i.source_stage===(setor==="ET"?"ETIQUETAGEM":"ESTOCAGEM");});
-  const sourceItems=isPieceSector?(sectorItems.length?sectorItems:items):(opIds.length?items.filter(function(i){return opIds.includes(Number(i.id));}):items);
-  const receivingVolumes=Number(rcv.volumes||0);
   const isPieceSector=["ET","EC"].includes(setor);
+
+  const sectorItems=items.filter(function(i){return i.source_stage===(setor==="ET"?"ETIQUETAGEM":"ESTOCAGEM");});
+
+  const sourceItems=isPieceSector?(sectorItems.length?sectorItems:items):(opIds.length?items.filter(function(i){return opIds.includes(Number(i.id));}):items);
+
+  const receivingVolumes=Number(rcv.volumes||0);
   const sourceTotal=isPieceSector?sourceItems.reduce(function(sum,item){return sum+Number(item.expected_qty||0);},0):receivingVolumes;
   const firstAvailable=sourceItems[0] || null;
   const firstAllocated=status.item_allocations?.find(function(i){return Number(i.total_alocado||0)>0;}) || null;
