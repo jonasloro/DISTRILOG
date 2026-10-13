@@ -898,11 +898,12 @@ async def save_item_routes(inspection_id: int, request: Request):
     user_id = int(payload.get("user_id") or 0)
     routes = payload.get("routes") or []
     con = db_connect()
-    require_role(con, user_id, QUALITY_ROLES)
+    actor = require_role(con, user_id, QUALITY_ROLES)
     inspection = con.execute("SELECT * FROM quality_inspections WHERE id=?", (inspection_id,)).fetchone()
     if not inspection:
         con.close()
         raise HTTPException(404, "Inspeção não encontrada.")
+    ensure_quality_sector_owner(con, inspection, actor["role"])
     if inspection["status"] != "ABERTA":
         con.close()
         raise HTTPException(400, "A inspeção já foi concluída.")
@@ -973,6 +974,7 @@ async def update_development(inspection_id: int, request: Request):
     if not inspection:
         con.close()
         raise HTTPException(404, "Inspeção não encontrada.")
+    ensure_quality_sector_owner(con, inspection, user["role"])
     pending = 1 if required and not separated else 0
     con.execute(
         """UPDATE quality_inspections SET development_required=?,development_separated=?,development_pending=?
@@ -1018,6 +1020,7 @@ async def create_assignments_batch(inspection_id: int, request: Request):
     if not inspection or inspection["status"] != "ABERTA":
         con.close()
         raise HTTPException(400, "A inspeção não está aberta.")
+    ensure_quality_sector_owner(con, inspection, actor["role"])
     inspector = con.execute("SELECT * FROM users WHERE id=?", (inspector_id,)).fetchone()
     if not inspector or inspector["role"] != "qualidade":
         con.close()
@@ -1100,6 +1103,7 @@ async def create_assignment(inspection_id: int, request: Request):
     if not inspection or inspection["status"] != "ABERTA":
         con.close()
         raise HTTPException(400, "A inspeção não está aberta.")
+    ensure_quality_sector_owner(con, inspection, actor["role"])
     inspector = con.execute("SELECT * FROM users WHERE id=?", (inspector_id,)).fetchone()
     if not inspector or inspector["role"] != "qualidade":
         con.close()
@@ -1167,6 +1171,8 @@ async def release_assignment(assignment_id: int, request: Request):
     if not row:
         con.close()
         raise HTTPException(404, "Atribuição não encontrada.")
+    inspection = con.execute("SELECT * FROM quality_inspections WHERE id=?", (row["inspection_id"],)).fetchone()
+    ensure_quality_sector_owner(con, inspection, actor["role"])
     if actor["role"] == "qualidade" and row["inspector_id"] != user_id:
         con.close()
         raise HTTPException(403, "Você só pode devolver suas próprias atribuições.")
@@ -1210,6 +1216,8 @@ async def transfer_assignment(assignment_id: int, request: Request):
     if not row:
         con.close()
         raise HTTPException(404, "Atribuição não encontrada.")
+    inspection = con.execute("SELECT * FROM quality_inspections WHERE id=?", (row["inspection_id"],)).fetchone()
+    ensure_quality_sector_owner(con, inspection, actor["role"])
     if actor["role"] == "qualidade" and row["inspector_id"] != user_id:
         con.close()
         raise HTTPException(403, "Você só pode transferir suas próprias atribuições.")
@@ -1254,6 +1262,8 @@ async def save_assignment_result(assignment_id: int, request: Request):
     if not row:
         con.close()
         raise HTTPException(404, "Atribuição não encontrada.")
+    inspection = con.execute("SELECT * FROM quality_inspections WHERE id=?", (row["inspection_id"],)).fetchone()
+    ensure_quality_sector_owner(con, inspection, actor["role"])
     if actor["role"] == "qualidade" and row["inspector_id"] != user_id:
         con.close()
         raise HTTPException(403, "Você só pode apontar resultados das suas atribuições.")
@@ -1325,6 +1335,8 @@ async def quality_worker_timer(worker_id: int, action: str, request: Request):
     if not worker:
         con.close()
         raise HTTPException(404, "Participação do inspetor não encontrada.")
+    inspection = con.execute("SELECT * FROM quality_inspections WHERE id=?", (worker["inspection_id"],)).fetchone()
+    ensure_quality_sector_owner(con, inspection, actor["role"])
     if actor["role"] == "qualidade" and worker["inspector_id"] != user_id:
         con.close()
         raise HTTPException(403, "Cada inspetor controla apenas o próprio tempo.")
@@ -1397,6 +1409,7 @@ async def complete_inspection(inspection_id: int, request: Request):
     if not inspection:
         con.close()
         raise HTTPException(404, "Inspeção não encontrada.")
+    ensure_quality_sector_owner(con, inspection, actor["role"])
     if inspection["status"] != "ABERTA":
         con.close()
         raise HTTPException(400, "A inspeção já foi concluída.")
@@ -1404,13 +1417,17 @@ async def complete_inspection(inspection_id: int, request: Request):
     if not inspection["source_subset"]:
         card = con.execute("SELECT * FROM cards WHERE id=?", (inspection["card_id"],)).fetchone()
         if card and not card["source_snapshot_at"] and card["current_sector"] == "QUALIDADE":
-            receiving = con.execute(
-                """SELECT r.* FROM receivings r JOIN cards c ON c.id=r.card_id
-                   WHERE r.card_id=?
-                   ORDER BY (r.closed_at IS NULL) DESC,
-                            (r.receiving_type=c.receiving_type) DESC, r.id DESC LIMIT 1""",
-                (inspection["card_id"],),
-            ).fetchone()
+            expected_receiving_type = "RETORNO" if inspection["sample_source"] == "RECEBIMENTO_RETORNO" else "NOVA"
+            if inspection["source_receiving_id"]:
+                receiving = con.execute(
+                    "SELECT * FROM receivings WHERE id=? AND card_id=? AND receiving_type=?",
+                    (inspection["source_receiving_id"], inspection["card_id"], expected_receiving_type),
+                ).fetchone()
+                if not receiving:
+                    con.close()
+                    raise HTTPException(409, "O registro de Recebimento vinculado a esta inspeção não está disponível. Restaure os dados do Recebimento antes de concluir.")
+            else:
+                receiving = require_completed_receiving_sample(con, int(inspection["card_id"]), expected_receiving_type)
             if receiving and receiving["receiving_type"] in {"NOVA", "RETORNO"} and receiving["ten_percent_required"]:
                 if receiving["ten_percent_status"] != "CONCLUIDA":
                     con.close()
