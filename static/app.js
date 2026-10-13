@@ -571,7 +571,7 @@ function renderReceivingTab() {
   if (cardData.status === "AGUARDANDO_RECEBIMENTO_RETORNO") {
     $("cardTab").innerHTML = receivingFormHtml(true);
     window.setTimeout(refreshTimerDisplay, 500);
-    if (cardData.receiving?.ten_percent_status === "CONCLUIDA") loadReceivingAllocationStep(cardData.id);
+    if (cardData.receiving?.ten_percent_required && cardData.receiving?.ten_percent_status === "CONCLUIDA" && cardData.receiving?.receiving_type !== "COSTURA") loadReceivingAllocationStep(cardData.id);
     return;
   }
   if (cardData.status === "EM_COSTURA_CD01" || cardData.receiving?.receiving_type === "COSTURA") {
@@ -581,7 +581,7 @@ function renderReceivingTab() {
   const isReturn = cardData.receiving?.receiving_type === "RETORNO" || cardData.receiving_type === "RETORNO";
   $("cardTab").innerHTML = receivingFormHtml(isReturn);
   window.setTimeout(refreshTimerDisplay, 500);
-  if (cardData.receiving?.ten_percent_status === "CONCLUIDA") loadReceivingAllocationStep(cardData.id);
+  if (cardData.receiving?.ten_percent_required && cardData.receiving?.ten_percent_status === "CONCLUIDA" && cardData.receiving?.receiving_type !== "COSTURA") loadReceivingAllocationStep(cardData.id);
 }
 
 function sourceLocationHtml() {
