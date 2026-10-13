@@ -766,6 +766,7 @@ async function sampleAction(action) {
       await api(`/api/receivings/${cardData.receiving.id}`, { method:"PATCH", body:JSON.stringify({
         user_id:currentUser.id,
         ten_percent_actual: $("sampleActual").value === "" ? null : Number($("sampleActual").value),
+        volumes: $("recVolumes") ? ($("recVolumes").value === "" ? null : Number($("recVolumes").value)) : cardData.receiving?.volumes,
       })});
     }
     await api(`/api/receivings/${cardData.receiving.id}/timer/${action}`, { method:"POST", body:JSON.stringify({ user_id:currentUser.id }) });
@@ -2544,6 +2545,29 @@ function filterPositionMap(){
   renderPositionMap();
 }
 
+async function loadReceivingAllocationStep(cardId) {
+  const box=$("posAllocBox");
+  if(!box) return;
+  try {
+    const status=await apiWithTimeout("/api/positions/cards/"+cardId+"/status?setor=QA");
+    const receiving=cardData?.receiving||{};
+    const totalVolumes=Number(receiving.volumes||status.volumes_total||0);
+    const target=Math.ceil(totalVolumes/10);
+    const allocated=Number(status.ten_percent_sample_allocated||0);
+    if(target<=0) {
+      box.innerHTML='<div class="notice warn">Informe e salve a quantidade total de volumes recebidos para calcular os 10% e liberar o endereçamento.</div>';
+      return;
+    }
+    if(allocated<target) {
+      await loadPositionAllocator(cardId,"QA",true,target);
+      return;
+    }
+    await loadPositionAllocator(cardId,"RM");
+  } catch(error) {
+    box.innerHTML='<div class="notice error">Não foi possível verificar a alocação obrigatória da amostra: '+esc(error.message||"Erro desconhecido")+'. <button class="secondary" onclick="loadReceivingAllocationStep('+Number(cardId)+')">Tentar novamente</button></div>';
+  }
+}
+
 async function loadPositionAllocator(cardId,setor,tenPercentSample=false,tenPercentTarget=0) {
   const box=$("posAllocBox");
   if(!box) return;
@@ -2682,6 +2706,13 @@ function changeAllocDestination(setor){
 function updateReferenceRemaining(){
   const ctx=window.allocCtx;
   if(!ctx)return;
+  if(ctx.tenPercentSample){
+    const allocated=Number(ctx.status?.ten_percent_sample_allocated||0);
+    if($("positionReferenceRemainingStat"))$("positionReferenceRemainingStat").textContent=Number(ctx.remaining||0).toLocaleString("pt-BR");
+    if($("positionReferenceRemainingLabel"))$("positionReferenceRemainingLabel").textContent=allocated.toLocaleString("pt-BR")+" de "+Number(ctx.sourceTotal||0).toLocaleString("pt-BR")+" volumes dos 10% alocados na QA";
+    if($("positionSelectedItemLabel"))$("positionSelectedItemLabel").textContent="Amostra de 10% — Qualidade";
+    return;
+  }
   if(ctx.setor==="RM"){
     const allocated=Number(ctx.status?.global_total_alocado||0);
     if($("positionReferenceRemainingStat"))$("positionReferenceRemainingStat").textContent=Number(ctx.remaining||0).toLocaleString("pt-BR");
@@ -2703,14 +2734,14 @@ function renderCurrentItemAllocations(){
   const ctx=window.allocCtx;
   const unit=ctx&&["ET","EC"].includes(ctx.setor)?"peças":"volumes";
   if(!box||!ctx) return;
-  if(ctx.setor==="RM"){
+  if(ctx.setor==="RM"||ctx.tenPercentSample){
     const positions=ctx.status?.posicoes||[];
     if(!positions.length){
-      box.innerHTML='<div class="position-empty">Nenhum volume alocado no RM para este Card.</div>';
+      box.innerHTML='<div class="position-empty">'+(ctx.tenPercentSample?"Ainda não há volumes da amostra alocados na QA.":"Nenhum volume alocado no RM para este Card.")+'</div>';
       return;
     }
     box.innerHTML=positions.map(function(p){
-      return '<div class="reference-allocation-summary"><div><b>'+esc(p.address)+'</b><small>Endereço no RM</small></div><strong>'+Number(p.quantidade||0).toLocaleString("pt-BR")+' volumes</strong></div>';
+      return '<div class="reference-allocation-summary"><div><b>'+esc(p.address)+'</b><small>'+(ctx.tenPercentSample?"Endereço da amostra na QA":"Endereço no RM")+'</small></div><strong>'+Number(p.quantidade||0).toLocaleString("pt-BR")+' volumes</strong></div>';
     }).join("");
     return;
   }
@@ -2735,8 +2766,8 @@ function updateAllocHint(){
   const el=$("posHint"),ctx=window.allocCtx;
   if(!el||!ctx)return;
   const raw=Number($("posQty")?.value||0),unit=["ET","EC"].includes(ctx.setor)?"peças":"volumes";
-  if(ctx.setor==="RM"){
-    el.textContent="Volumes restantes no Card: "+Number(ctx.remaining||0).toLocaleString("pt-BR");
+  if(ctx.setor==="RM"||ctx.tenPercentSample"){
+    el.textContent=(ctx.tenPercentSample?"Volumes restantes dos 10%: ":"Volumes restantes no Card: ")+Number(ctx.remaining||0).toLocaleString("pt-BR");
     if(raw>Number(ctx.remaining||0))el.textContent+=" — quantidade acima do saldo disponível.";
     updateReferenceRemaining();
     return;
@@ -2749,22 +2780,38 @@ function updateAllocHint(){
 }
 
 async function submitAllocation(cardId,setor){
-  const ctx=window.allocCtx||{},isVolumeOnlyRM=setor==="RM",item=isVolumeOnlyRM?null:selectedAllocationItem(),address=ctx.selectedAddress||"",qty=Number($("posQty")?.value||0);
+  const ctx=window.allocCtx||{},isVolumeOnlyRM=setor==="RM",isTenPercentSample=Boolean(ctx.tenPercentSample),isVolumeOnly=isVolumeOnlyRM||isTenPercentSample;
+  const item=isVolumeOnly?null:selectedAllocationItem(),address=ctx.selectedAddress||"",qty=Number($("posQty")?.value||0);
   const isPieceSector=["ET","EC"].includes(setor),unit=isPieceSector?"peça(s)":"volume(s)";
-  if(!isVolumeOnlyRM&&!item){toast("Selecione a referência que será alocada.");return;}
+  if(!isVolumeOnly&&!item){toast("Selecione a referência que será alocada.");return;}
   if(!address){toast("Clique em uma posição no mapa.");return;}
   if(qty<=0){toast("Informe a quantidade para esta referência.");return;}
-  if(ctx.remaining<=0){toast(isPieceSector?"Não há mais peças disponíveis nesta referência.":"Não há mais volumes disponíveis para este Card.");return;}
-  if(!isVolumeOnlyRM){
+  if(ctx.remaining<=0){toast(isTenPercentSample?"Os 10% já foram totalmente endereçados na Qualidade.":(isPieceSector?"Não há mais peças disponíveis nesta referência.":"Não há mais volumes disponíveis para este Card."));return;}
+  if(!isVolumeOnly){
     const itemRemaining=itemRemainingQty(item);
     if(isPieceSector&&qty>itemRemaining){toast("A referência possui apenas "+itemRemaining.toLocaleString("pt-BR")+" peça(s) disponíveis.");return;}
   }
   if(qty>ctx.remaining){toast("A quantidade ultrapassa o saldo de "+ctx.remaining.toLocaleString("pt-BR")+" "+unit+" disponíveis.");return;}
   try{
     const result=await api("/api/positions/cards/"+cardId+"/allocate",{
-      method:"POST",body:JSON.stringify({setor:setor,responsavel:currentUser?.name,receiving_id:cardData?.receiving?.id||null,allocations:[{item_id:isVolumeOnlyRM?null:Number(item.id),address:address,quantidade:qty}]})
+      method:"POST",body:JSON.stringify({
+        setor:setor,responsavel:currentUser?.name,receiving_id:cardData?.receiving?.id||null,
+        allocation_purpose:isTenPercentSample?"TEN_PERCENT_SAMPLE":null,
+        allocations:[{item_id:isVolumeOnly?null:Number(item.id),address:address,quantidade:qty}]
+      })
     });
     ctx.status=result;
+    if(isTenPercentSample){
+      ctx.remaining=Math.max(0,Number(ctx.sourceTotal||0)-Number(result.ten_percent_sample_allocated||0));
+      $("posQty").value="";
+      toast("Amostra alocada na Qualidade em "+address+" com "+qty.toLocaleString("pt-BR")+" volume(s).");
+      if(ctx.remaining<=0){
+        await openCard(currentCardId);
+      }else{
+        await loadPositionAllocator(cardId,"QA",true,ctx.sourceTotal);
+      }
+      return;
+    }
     ctx.remaining=Math.max(0,Number(ctx.sourceTotal||0)-Number(isPieceSector?result.total_alocado:result.global_total_alocado||0));
     ctx.positions=await api("/api/positions?setor="+setor);
     $("posQty").value="";
