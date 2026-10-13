@@ -758,18 +758,20 @@ async def create_inspection(card_id: int, request: Request):
     elif inspection_type == 1 or not is_costura_return:
         receiving = con.execute(
             """SELECT * FROM receivings WHERE card_id=? AND receiving_type='NOVA'
-               ORDER BY id DESC LIMIT 1""",
+               ORDER BY (ten_percent_status='CONCLUIDA' AND COALESCE(ten_percent_actual,0)>0) DESC,
+                        id DESC LIMIT 1""",
             (card_id,),
         ).fetchone()
         requested_target = int((receiving["ten_percent_actual"] if receiving else 0) or 0)
-        if requested_target <= 0:
+        if not receiving or receiving["ten_percent_status"] != "CONCLUIDA" or requested_target <= 0:
             con.close()
             raise HTTPException(400, "A quantidade efetivamente separada nos 10% pelo Recebimento não foi encontrada.")
         sample_source = "RECEBIMENTO"
     else:
         receiving = con.execute(
             """SELECT * FROM receivings WHERE card_id=? AND receiving_type='RETORNO'
-               ORDER BY id DESC LIMIT 1""",
+               ORDER BY (ten_percent_status='CONCLUIDA' AND COALESCE(ten_percent_actual,0)>0) DESC,
+                        id DESC LIMIT 1""",
             (card_id,),
         ).fetchone()
         requested_target = int((receiving["ten_percent_actual"] if receiving else 0) or 0)
