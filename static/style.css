@@ -848,3 +848,30 @@ input:disabled,select:disabled,textarea:disabled{
 .position-dest select{min-width:190px}
 .position-dest small{flex-basis:100%;opacity:.7}
 
+/* Qualidade: seleção legível no tema escuro e agrupamento visual por cor */
+.quality-batch-row:has(.quality-batch-check:checked) td{
+  background:#2d3743!important;
+  color:#f1f5f9!important;
+  border-bottom-color:#465363!important;
+}
+.quality-batch-row:has(.quality-batch-check:checked) td small{
+  color:#b8c5d4!important;
+}
+.quality-batch-row:has(.quality-batch-check:checked) .table-input{
+  background:#1c2229!important;
+  color:#f1f5f9!important;
+  border-color:#596777!important;
+}
+.quality-grade-table .quality-color-group{
+  vertical-align:middle;
+  font-weight:800;
+  color:#ffd0ad;
+  background:#29241f;
+  border-right:2px solid #4a382b;
+}
+.quality-grade-table tbody tr:hover td{
+  background:#292e35;
+}
+.quality-grade-table tbody tr:hover .quality-color-group{
+  background:#332a23;
+}
