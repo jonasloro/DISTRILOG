@@ -10,6 +10,8 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, FastAPI, HTTPException, Request
 
+from positions_module import total_volume_only_allocated
+
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = Path(os.getenv("OUTLOG_DATA_DIR", str(BASE_DIR / "data"))).resolve() / "controle_logistica.db"
 router = APIRouter(prefix="/api", tags=["Qualidade"])
@@ -649,6 +651,34 @@ async def create_inspection(card_id: int, request: Request):
     if not card:
         con.close()
         raise HTTPException(404, "Card não encontrado.")
+    # A amostra separada no Recebimento precisa estar fisicamente endereçada na QA
+    # antes de qualquer inspeção começar. Não aplicar este gate ao fluxo de itens importados.
+    if not source_subset_requested and not card["source_snapshot_at"] and card["current_sector"] == "QUALIDADE":
+        receiving = con.execute(
+            """SELECT r.* FROM receivings r JOIN cards c ON c.id=r.card_id
+               WHERE r.card_id=?
+               ORDER BY (r.closed_at IS NULL) DESC,
+                        (r.receiving_type=c.receiving_type) DESC, r.id DESC LIMIT 1""",
+            (card_id,),
+        ).fetchone()
+        if receiving and receiving["receiving_type"] in {"NOVA", "RETORNO"} and receiving["ten_percent_required"]:
+            if receiving["ten_percent_status"] != "CONCLUIDA":
+                con.close()
+                raise HTTPException(400, "Conclua a tiragem dos 10% no Recebimento antes de iniciar a Inspeção da Qualidade.")
+            total_volumes = int(receiving["volumes"] or 0)
+            if total_volumes <= 0:
+                con.close()
+                raise HTTPException(400, "Informe e salve os volumes recebidos para calcular e endereçar os 10% na Qualidade.")
+            sample_target = (total_volumes + 9) // 10
+            sample_allocated = total_volume_only_allocated("QA", card_id)
+            if sample_allocated < sample_target:
+                con.close()
+                raise HTTPException(
+                    400,
+                    f"Enderece os {sample_target} volume(s) da amostra de 10% em posições da Qualidade antes de iniciar a Inspeção. "
+                    f"Até agora foram alocados {sample_allocated}.",
+                )
+
     source_items: list[sqlite3.Row] = []
     source_subset = False
     if source_subset_requested:
