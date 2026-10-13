@@ -2766,7 +2766,7 @@ function updateAllocHint(){
   const el=$("posHint"),ctx=window.allocCtx;
   if(!el||!ctx)return;
   const raw=Number($("posQty")?.value||0),unit=["ET","EC"].includes(ctx.setor)?"peças":"volumes";
-  if(ctx.setor==="RM"||ctx.tenPercentSample"){
+  if(ctx.setor==="RM"||ctx.tenPercentSample){
     el.textContent=(ctx.tenPercentSample?"Volumes restantes dos 10%: ":"Volumes restantes no Card: ")+Number(ctx.remaining||0).toLocaleString("pt-BR");
     if(raw>Number(ctx.remaining||0))el.textContent+=" — quantidade acima do saldo disponível.";
     updateReferenceRemaining();
