@@ -928,19 +928,11 @@ async function renderQualityTab() {
   window.qualitySourceSubset = false;
   const needsNewInspection = cardData.current_sector === "QUALIDADE" && (!q || q.status === "CONCLUIDA");
   if (needsNewInspection) {
-    if (!canOperateQuality()) {
-      $("cardTab").innerHTML = qualityReadOnlyPreviewHtml();
-      return;
-    }
     $("cardTab").innerHTML = qualitySetupHtml(q);
     toggleQualitySetupFields();
     return;
   }
   if (!q) {
-    if (!canOperateQuality() && cardData.current_sector !== "QUALIDADE") {
-      $("cardTab").innerHTML = qualityReadOnlyPreviewHtml();
-      return;
-    }
     $("cardTab").innerHTML = '<div class="panel-body"><div class="notice">Este Card ainda não possui inspeção da Qualidade.</div></div>';
     return;
   }
