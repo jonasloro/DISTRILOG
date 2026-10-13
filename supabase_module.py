@@ -237,10 +237,16 @@ def sync_all_receiving_state_to_supabase(sqlite_con) -> None:
     receiving_sql = (
         f"INSERT INTO outlog_receivings ({receiving_columns_sql}) VALUES ({receiving_marks})"
         f" ON CONFLICT (id) DO UPDATE SET {receiving_updates}"
+        " WHERE outlog_receivings.card_id=EXCLUDED.card_id"
+        " AND outlog_receivings.receiving_type=EXCLUDED.receiving_type"
     )
     timer_sql = (
         f"INSERT INTO outlog_timer_events ({timer_columns_sql}) VALUES ({timer_marks})"
         f" ON CONFLICT (id) DO UPDATE SET {timer_updates}"
+        " WHERE outlog_timer_events.receiving_id=EXCLUDED.receiving_id"
+        " AND outlog_timer_events.event_type=EXCLUDED.event_type"
+        " AND outlog_timer_events.event_at=EXCLUDED.event_at"
+        " AND outlog_timer_events.user_id=EXCLUDED.user_id"
     )
 
     with pg_connect() as con:
