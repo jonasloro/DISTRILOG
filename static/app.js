@@ -2692,7 +2692,7 @@ async function loadPositionAllocator(cardId,setor,tenPercentSample=false,tenPerc
     window.allocCtx=null;
     const activeBox=$("posAllocBox");
     if(!activeBox || !activeBox.isConnected) return;
-    activeBox.innerHTML='<div class="position-empty large"><strong>Não foi possível gerar o mapa de posições.</strong><p>'+esc(error?.message||"Falha ao carregar ou montar os endereços.")+'</p><button type="button" class="secondary" onclick="loadPositionAllocator('+Number(cardId)+', \''+esc(setor)+'\')">Tentar novamente</button></div>';
+    activeBox.innerHTML='<div class="position-empty large"><strong>Não foi possível gerar o mapa de posições.</strong><p>'+esc(error?.message||"Falha ao carregar ou montar os endereços.")+'</p><button type="button" class="secondary" onclick="loadPositionAllocator('+Number(cardId)+', \''+esc(setor)+'\', '+Boolean(tenPercentSample)+', '+Number(tenPercentTarget||0)+')">Tentar novamente</button></div>';
   }
 
 }
