@@ -9,6 +9,7 @@ O DISTRILOG usa como base operacional a lógica do repositório `Distribox-`, pr
 - Cronômetro de recebimento (iniciar, pausar e retomar).
 - Endereçamento WMS por RM, QA, PR, ET e EC; sugestão de posição, saldos e trilha de alocações.
 - Saldo global de alocação compartilhado entre RM + QA + PR.
+- Mapa físico de casulos, mapa de calor e simulador de capacidade removidos para reduzir carga; o endereçamento WMS operacional permanece independente.
 - SQLite local para testes isolados e espelhamento/persistência compartilhada quando Supabase estiver configurado.
 
 ## Render
@@ -18,8 +19,8 @@ Sem essa variável, criação e operações locais usam SQLite e o endereçament
 
 Após salvar a variável, publique o commit mais recente em **Manual Deploy → Deploy latest commit** ou aguarde o deploy automático. A rota `/health` é o health check.
 
-## Endereços
-Zonas/casulos 01–20 e níveis A/B/C:
+## Endereçamento operacional
+As posições WMS são independentes do mapa físico de capacidade. Endereços usam casulos 01–20 e níveis A/B/C:
 - RM: zona 1
 - QA: zonas 1 e 2
 - PR: zona 1
