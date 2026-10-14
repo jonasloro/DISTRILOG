@@ -110,8 +110,8 @@ def require_completed_receiving_sample(con: sqlite3.Connection, card_id: int, re
         can_reopen = (
             not existing_types
             and not has_any_receiving
-            not restore_error
-            bool(os.getenv("SUPABASE_DATABASE_URL"))
+            and not restore_error
+            and bool(os.getenv("SUPABASE_DATABASE_URL"))
             and card is not None
             and card["current_sector"] == "QUALIDADE"
             and card["status"] == expected_status
