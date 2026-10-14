@@ -69,121 +69,146 @@ def latest_receiving_sample(con: sqlite3.Connection, card_id: int, receiving_typ
 
 
 def require_completed_receiving_sample(con: sqlite3.Connection, card_id: int, receiving_type: str) -> sqlite3.Row:
-    """Require a persisted, completed 10% sample; recover the Card's state before blocking."""
-    latest = latest_receiving_sample(con, card_id, receiving_type)
-    restore_error = None
-    if not latest:
-        # SQLite may be missing an operational row even when it was persisted in Supabase.
-        # Restore only this Card's receiving state, rather than loading every Card's history.
-        try:
-            from supabase_module import restore_receiving_state_from_supabase
+    """Read the 10% gate from Supabase, then refresh the local working copy for the inspection FK."""
+    from supabase_module import (
+        get_latest_receiving_from_supabase,
+        restore_receiving_state_from_supabase,
+        sync_receiving_card_state_to_supabase,
+    )
 
-            restore_receiving_state_from_supabase(con, card_id=card_id)
-            con.commit()
-            latest = latest_receiving_sample(con, card_id, receiving_type)
-        except Exception as exc:
-            con.rollback()
-            restore_error = str(exc)
-            print(
-                "[qualidade] falha ao restaurar Recebimento do Card {} no Supabase: {}".format(
-                    card_id, exc
-                )
-            )
-    if not latest:
-        existing_types = [
-            str(row["receiving_type"])
-            for row in con.execute(
-                "SELECT DISTINCT receiving_type FROM receivings WHERE card_id=? ORDER BY receiving_type",
-                (card_id,),
-            ).fetchall()
-        ]
-        has_any_receiving = con.execute(
-            "SELECT 1 FROM receivings WHERE card_id=? LIMIT 1", (card_id,)
-        ).fetchone()
-        card = con.execute(
-            "SELECT current_sector,status,purchase_mode FROM cards WHERE id=?", (card_id,)
-        ).fetchone()
-
-        # If both stores genuinely lack the operation, return the Card to Receiving
-        # with a fresh pending control. Never infer volumes or mark the sample complete.
-        expected_status = "RETORNO_CONCLUIDO" if receiving_type == "RETORNO" else "AGUARDANDO_QUALIDADE"
-        can_reopen = (
-            not existing_types
-            and not has_any_receiving
-            and not restore_error
-            and bool(os.getenv("SUPABASE_DATABASE_URL"))
-            and card is not None
-            and card["current_sector"] == "QUALIDADE"
-            and card["status"] == expected_status
-        )
-        if can_reopen:
-            quantities = con.execute(
-                """SELECT COALESCE(SUM(expected_qty),0) total,
-                          COUNT(*) n FROM items
-                   WHERE card_id=? AND expected_qty>0""",
-                (card_id,),
-            ).fetchone()
-            total = int(quantities["total"] or 0)
-            item_count = int(quantities["n"] or 0)
-            if total > 0:
-                minimum = max(
-                    math.ceil(total * 0.10),
-                    item_count if str(card["purchase_mode"] or "").upper() == "GRADE" else 0,
-                )
-                now = iso_now()
-                con.execute(
-                    """INSERT INTO receivings(
-                        card_id,receiving_type,physical_status,ten_percent_required,
-                        ten_percent_min,ten_percent_status,created_at
-                    ) VALUES(?,?,'PENDENTE',1,?,'NAO_INICIADA',?)""",
-                    (card_id, receiving_type, minimum, now),
-                )
-                next_status = (
-                    "AGUARDANDO_RECEBIMENTO_RETORNO"
-                    if receiving_type == "RETORNO"
-                    else "AGUARDANDO_RECEBIMENTO"
-                )
-                con.execute(
-                    """UPDATE cards SET current_sector='RECEBIMENTO',status=?,
-                       receiving_type=?,updated_at=? WHERE id=?""",
-                    (next_status, receiving_type, now, card_id),
-                )
-                add_history(
-                    con, card_id, "RECEBIMENTO_RECUPERADO",
-                    "O registro original do Recebimento não foi localizado no SQLite nem no Supabase. "
-                    "O controle foi reaberto como pendente; volumes e separação dos 10% precisam ser registrados novamente.",
-                )
+    try:
+        # Supabase is authoritative for this gate. If an older deployment missed a write,
+        # seed the remote row from the existing local operation once, then query Supabase again.
+        remote_latest = get_latest_receiving_from_supabase(card_id, receiving_type)
+        if not remote_latest:
+            local_candidate = latest_receiving_sample(con, card_id, receiving_type)
+            if local_candidate:
+                # Refresh canonical Receiving rows first, then backfill only the legacy
+                # operation that is missing remotely.
+                restore_receiving_state_from_supabase(con, card_id=card_id)
                 con.commit()
-                con.close()
-                raise HTTPException(
-                    409,
-                    "O registro original do Recebimento não existia nos bancos e não pôde ser restaurado. O Card foi devolvido ao Recebimento com um controle pendente; informe novamente os volumes e registre a separação dos 10% antes de retomar a Qualidade.",
-                )
-
-        details = (
-            " Foram encontrados registros de outro tipo: {}.".format(", ".join(existing_types))
-            if existing_types
-            else " Não existe registro correspondente no banco local nem foi possível recuperá-lo do Supabase."
-        )
-        if restore_error:
-            details += " A restauração automática falhou; verifique a conexão persistente do Supabase."
+                local_candidate = latest_receiving_sample(con, card_id, receiving_type)
+                if local_candidate:
+                    sync_receiving_card_state_to_supabase(
+                        con, card_id, receiving_type=receiving_type
+                    )
+                    remote_latest = get_latest_receiving_from_supabase(card_id, receiving_type)
+        # Load the authoritative row (and events/links) into SQLite only as the local
+        # working copy required by existing Quality tables and foreign keys.
+        restore_receiving_state_from_supabase(con, card_id=card_id)
+        con.commit()
+        local_latest = latest_receiving_sample(con, card_id, receiving_type)
+    except Exception as exc:
+        con.rollback()
         con.close()
+        print("[qualidade] falha ao consultar/restaurar Recebimento do Card {} no Supabase: {}".format(card_id, exc))
         raise HTTPException(
-            409,
-            "Não existe registro de Recebimento do tipo {} para este Card. O sistema tentou restaurar os dados persistidos, mas não localizou um registro correspondente.{} A inspeção continua bloqueada para não inventar a quantidade dos 10%; verifique o histórico do Card ou solicite a recuperação ao Supervisor.".format(
-                receiving_type, details
-            ),
-        )
-    if not latest["ten_percent_required"]:
-        con.close()
-        raise HTTPException(400, "O registro mais recente de Recebimento não está configurado para exigir a separação dos 10%.")
-    if latest["ten_percent_status"] != "CONCLUIDA":
-        con.close()
-        raise HTTPException(400, "Conclua a tiragem dos 10% no Recebimento antes de iniciar a Inspeção da Qualidade.")
-    if int(latest["ten_percent_actual"] or 0) <= 0:
-        con.close()
-        raise HTTPException(400, "A quantidade efetivamente separada nos 10% não está salva como um valor positivo no Recebimento.")
-    return latest
+            503,
+            "Não foi possível consultar o Recebimento persistido no Supabase. A inspeção não foi criada; verifique a conexão e tente novamente.",
+        ) from exc
+
+    if remote_latest:
+        if remote_latest["physical_status"] != "CONCLUIDO":
+            con.close()
+            raise HTTPException(400, "Conclua e salve o recebimento físico no Supabase antes de iniciar a Inspeção da Qualidade.")
+        if not remote_latest["ten_percent_required"]:
+            con.close()
+            raise HTTPException(400, "O registro de Recebimento no Supabase não está configurado para exigir a separação dos 10%.")
+        if remote_latest["ten_percent_status"] != "CONCLUIDA":
+            con.close()
+            raise HTTPException(400, "Conclua e salve a tiragem dos 10% no Recebimento antes de iniciar a Inspeção da Qualidade.")
+        actual_sample = int(remote_latest["ten_percent_actual"] or 0)
+        minimum_sample = int(remote_latest["ten_percent_min"] or 0)
+        if actual_sample <= 0:
+            con.close()
+            raise HTTPException(400, "A quantidade efetivamente separada nos 10% não está salva no Supabase como um valor positivo.")
+        if actual_sample < minimum_sample:
+            con.close()
+            raise HTTPException(400, "A quantidade de 10% salva no Supabase está abaixo do mínimo exigido. Revise o Recebimento antes de iniciar a Inspeção.")
+        if not local_latest:
+            con.close()
+            raise HTTPException(503, "O Recebimento existe no Supabase, mas não pôde ser vinculado ao Card local. Tente novamente; a inspeção continua bloqueada até a restauração do vínculo.")
+        return local_latest
+
+    existing_types = [
+        str(row["receiving_type"])
+        for row in con.execute(
+            "SELECT DISTINCT receiving_type FROM receivings WHERE card_id=? ORDER BY receiving_type",
+            (card_id,),
+        ).fetchall()
+    ]
+    has_any_receiving = con.execute(
+        "SELECT 1 FROM receivings WHERE card_id=? LIMIT 1", (card_id,)
+    ).fetchone()
+    card = con.execute(
+        "SELECT current_sector,status,purchase_mode FROM cards WHERE id=?", (card_id,)
+    ).fetchone()
+
+    # Both stores have no operation for this Card. Reopen only this known post-receiving
+    # state with a pending record; never invent volumes or mark the 10% as completed.
+    expected_status = "RETORNO_CONCLUIDO" if receiving_type == "RETORNO" else "AGUARDANDO_QUALIDADE"
+    can_reopen = (
+        not existing_types
+        and not has_any_receiving
+        and card is not None
+        and card["current_sector"] == "QUALIDADE"
+        and card["status"] == expected_status
+    )
+    if can_reopen:
+        quantities = con.execute(
+            """SELECT COALESCE(SUM(expected_qty),0) total, COUNT(*) n
+               FROM items WHERE card_id=? AND expected_qty>0""",
+            (card_id,),
+        ).fetchone()
+        total = int(quantities["total"] or 0)
+        item_count = int(quantities["n"] or 0)
+        if total > 0:
+            minimum = max(
+                math.ceil(total * 0.10),
+                item_count if str(card["purchase_mode"] or "").upper() == "GRADE" else 0,
+            )
+            now = iso_now()
+            con.execute(
+                """INSERT INTO receivings(
+                    card_id,receiving_type,physical_status,ten_percent_required,
+                    ten_percent_min,ten_percent_status,created_at
+                ) VALUES(?,?,'PENDENTE',1,?,'NAO_INICIADA',?)""",
+                (card_id, receiving_type, minimum, now),
+            )
+            next_status = "AGUARDANDO_RECEBIMENTO_RETORNO" if receiving_type == "RETORNO" else "AGUARDANDO_RECEBIMENTO"
+            con.execute(
+                """UPDATE cards SET current_sector='RECEBIMENTO',status=?,
+                   receiving_type=?,updated_at=? WHERE id=?""",
+                (next_status, receiving_type, now, card_id),
+            )
+            add_history(
+                con, card_id, "RECEBIMENTO_RECUPERADO",
+                "O registro original do Recebimento não existia no Supabase. O controle foi reaberto como pendente; volumes e separação dos 10% precisam ser registrados novamente.",
+            )
+            try:
+                sync_receiving_card_state_to_supabase(con, card_id)
+                con.commit()
+            except Exception as exc:
+                con.rollback()
+                con.close()
+                print("[qualidade] falha ao reabrir Recebimento do Card {} no Supabase: {}".format(card_id, exc))
+                raise HTTPException(503, "Não foi possível reabrir o Recebimento no Supabase. A inspeção não foi criada; tente novamente.") from exc
+            con.close()
+            raise HTTPException(
+                409,
+                "O registro original do Recebimento não existia no Supabase. O Card foi devolvido ao Recebimento com um controle pendente; informe novamente os volumes e registre a separação dos 10% antes de retomar a Qualidade.",
+            )
+
+    details = (
+        " Foram encontrados registros de outro tipo: {}.".format(", ".join(existing_types))
+        if existing_types
+        else " Não existe registro correspondente no Supabase nem uma operação local que possa ser recuperada.",
+    )
+    con.close()
+    raise HTTPException(
+        409,
+        "Não existe registro de Recebimento do tipo {} no Supabase para este Card.{} A inspeção permanece bloqueada para não inventar a quantidade dos 10%; verifique o histórico do Card ou solicite a recuperação ao Supervisor.".format(receiving_type, details),
+    )
 
 
 def ensure_quality_sector_owner(con: sqlite3.Connection, inspection: sqlite3.Row, actor_role: str) -> None:
@@ -813,6 +838,14 @@ async def create_inspection(card_id: int, request: Request):
     if not source_subset_requested and not card["source_snapshot_at"] and card["current_sector"] == "QUALIDADE":
         receiving_type_for_sample = "RETORNO" if card["receiving_type"] == "RETORNO" else "NOVA"
         receiving_sample = require_completed_receiving_sample(con, card_id, receiving_type_for_sample)
+        # The Supabase refresh can reveal that another operator moved the Card meanwhile.
+        card = con.execute("SELECT * FROM cards WHERE id=?", (card_id,)).fetchone()
+        if not card or card["current_sector"] != "QUALIDADE" or card["source_snapshot_at"]:
+            con.close()
+            raise HTTPException(
+                409,
+                "O setor responsável pelo Card mudou enquanto o Recebimento era atualizado. Reabra o Card antes de iniciar a inspeção.",
+            )
         if receiving_sample["ten_percent_required"]:
             total_volumes = int(receiving_sample["volumes"] or 0)
             if total_volumes <= 0:

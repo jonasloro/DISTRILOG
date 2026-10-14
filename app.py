@@ -33,6 +33,8 @@ from supabase_module import (
     sync_all_cards_to_supabase,
     sync_card_items_to_supabase,
     sync_all_receiving_state_to_supabase,
+    sync_receiving_card_state_to_supabase,
+    restore_receiving_state_from_supabase,
     delete_card_from_supabase,
 )
 
@@ -73,14 +75,6 @@ async def persist_card_state(request: Request, call_next):
                 sync_card_items_to_supabase(con, allocation_card_id)
             except Exception as e:
                 print(f"[aviso] não consegui sincronizar os itens do Card {allocation_card_id} antes da alocação: {e}")
-            try:
-                sync_all_receiving_state_to_supabase(con)
-            except Exception as e:
-                print(f"[erro] não consegui sincronizar o Recebimento antes da alocação do Card {allocation_card_id}: {e}")
-                return JSONResponse(
-                    status_code=503,
-                    content={"detail": "Não foi possível confirmar o status dos 10% no armazenamento persistente. Tente novamente."},
-                )
         except Exception as e:
             print(f"[erro] falha ao preparar a alocação do Card {allocation_card_id}: {e}")
             return JSONResponse(
@@ -91,21 +85,62 @@ async def persist_card_state(request: Request, call_next):
             if con is not None:
                 con.close()
 
+    if request.method == "POST" and request.url.path == "/api/import-excel":
+        if not os.getenv("SUPABASE_DATABASE_URL"):
+            return JSONResponse(
+                status_code=503,
+                content={"detail": "O Supabase não está configurado. A importação não foi executada para evitar salvar os controles de Recebimento somente no banco local."},
+            )
+        con = None
+        try:
+            con = db_connect()
+            # Import routing depends on whether a Card already has local workflow.
+            # Refresh persisted Receiving/Card state first so the import cannot sync
+            # stale local receiving values over a newer Supabase record.
+            restore_receiving_state_from_supabase(con)
+            con.commit()
+        except Exception as exc:
+            if con is not None:
+                try:
+                    con.rollback()
+                except Exception:
+                    pass
+            print("[erro] não consegui atualizar o estado do Recebimento antes da importação: {}".format(exc))
+            return JSONResponse(
+                status_code=503,
+                content={"detail": "Não foi possível atualizar o estado do Recebimento no Supabase. A importação não foi executada; tente novamente."},
+            )
+        finally:
+            if con is not None:
+                con.close()
+
     response = await call_next(request)
     if (
         request.method in {"POST", "PUT", "PATCH", "DELETE"}
         and request.url.path.startswith("/api/")
     ):
+        con = None
         try:
             con = db_connect()
             sync_all_cards_to_supabase(
                 con,
                 include_items=request.url.path == "/api/import-excel",
             )
-            sync_all_receiving_state_to_supabase(con)
-            con.close()
+            if request.url.path == "/api/import-excel":
+                # Imports can create Receiving controls before the operator opens a Card.
+                # Keep this bootstrap/creation path persisted; normal Receiving writes use
+                # targeted write-through before the API reports success.
+                sync_all_receiving_state_to_supabase(con)
         except Exception as e:
             print(f"[aviso] não consegui sincronizar cards com o Supabase: {e}")
+            if request.url.path == "/api/import-excel":
+                return JSONResponse(
+                    status_code=503,
+                    content={"detail": "A importação localizou os Cards, mas não foi possível confirmar seus controles de Recebimento no Supabase. Consulte o histórico antes de repetir a importação."},
+                )
+        finally:
+            if con is not None:
+                con.close()
     return response
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
@@ -177,6 +212,76 @@ def db_connect() -> sqlite3.Connection:
 
 def iso_now() -> str:
     return datetime.now().replace(microsecond=0).isoformat()
+
+
+def persist_receiving_then_commit(
+    con: sqlite3.Connection, card_id: int, failure_message: str,
+    sync_item_ids: list[int] | None = None,
+) -> None:
+    """Persist Receiving to Supabase first; only then commit the local working copy."""
+    try:
+        sync_receiving_card_state_to_supabase(con, card_id, sync_item_ids=sync_item_ids)
+    except Exception as exc:
+        con.rollback()
+        con.close()
+        print("[erro] falha ao persistir Recebimento do Card {} no Supabase: {}".format(card_id, exc))
+        raise HTTPException(503, failure_message) from exc
+    con.commit()
+    con.close()
+
+
+def refresh_receiving_card_state(con: sqlite3.Connection, card_id: int) -> None:
+    """Refresh the Card's authoritative workflow state from Supabase before a sector action."""
+    try:
+        restore_receiving_state_from_supabase(con, card_id=int(card_id))
+        con.commit()
+    except Exception as exc:
+        con.rollback()
+        con.close()
+        print("[erro] falha ao atualizar o estado do Card {} no Supabase: {}".format(card_id, exc))
+        raise HTTPException(
+            503,
+            "Não foi possível atualizar o estado persistido do Card no Supabase. A operação não foi executada; tente novamente.",
+        ) from exc
+
+
+def refresh_receiving_operation(con: sqlite3.Connection, receiving_id: int) -> sqlite3.Row:
+    """Refresh one Receiving operation from Supabase before reading or mutating it."""
+    rec = con.execute(
+        "SELECT card_id,receiving_type,created_at FROM receivings WHERE id=?", (int(receiving_id),)
+    ).fetchone()
+    if not rec:
+        con.close()
+        raise HTTPException(404, "Recebimento não encontrado. Reabra o Card para carregar o registro persistido.")
+    card_id = int(rec["card_id"])
+    receiving_type = str(rec["receiving_type"])
+    created_at = str(rec["created_at"])
+    try:
+        restore_receiving_state_from_supabase(con, card_id=card_id)
+        con.commit()
+    except Exception as exc:
+        con.rollback()
+        con.close()
+        print("[erro] falha ao consultar Recebimento {} no Supabase: {}".format(receiving_id, exc))
+        raise HTTPException(
+            503,
+            "Não foi possível consultar o Recebimento atualizado no Supabase. A operação não foi executada; tente novamente.",
+        ) from exc
+    refreshed = con.execute(
+        "SELECT * FROM receivings WHERE id=? AND card_id=?", (int(receiving_id), card_id)
+    ).fetchone()
+    if not refreshed:
+        # The restore may have moved a legacy local ID to Supabase's canonical ID.
+        refreshed = con.execute(
+            """SELECT * FROM receivings
+               WHERE card_id=? AND receiving_type=? AND created_at=?
+               ORDER BY id DESC LIMIT 1""",
+            (card_id, receiving_type, created_at),
+        ).fetchone()
+    if not refreshed:
+        con.close()
+        raise HTTPException(404, "Este registro de Recebimento não existe mais. Reabra o Card para carregar o registro atualizado.")
+    return refreshed
 
 
 def normalize_text(value: Any) -> str:
@@ -681,9 +786,24 @@ def init_db() -> None:
         );
         """
     )
-    # Cards/itens persistidos no Supabase são restaurados antes das migrações
-    # de estado abaixo, para que Recebimento/Qualidade/Processamento encontrem
-    # a mesma base lógica após um redeploy.
+    # These Receiving migrations must exist before bootstrap restoration reads Supabase.
+    # Otherwise a fresh local SQLite file can lack columns/links needed to restore the
+    # authoritative remote Receiving record.
+    receiving_columns = {row["name"] for row in con.execute("PRAGMA table_info(receivings)").fetchall()}
+    if "source_subset" not in receiving_columns:
+        con.execute("ALTER TABLE receivings ADD COLUMN source_subset INTEGER NOT NULL DEFAULT 0")
+    con.execute(
+        """CREATE TABLE IF NOT EXISTS receiving_operation_items (
+            receiving_id INTEGER NOT NULL,
+            item_id INTEGER NOT NULL,
+            PRIMARY KEY(receiving_id,item_id),
+            FOREIGN KEY(receiving_id) REFERENCES receivings(id) ON DELETE CASCADE,
+            FOREIGN KEY(item_id) REFERENCES items(id) ON DELETE CASCADE
+        )"""
+    )
+
+    # Cards/items and Receiving state are restored from Supabase before the remaining
+    # migrations, so the durable record is available after a redeploy.
     try:
         persistence = bootstrap_card_persistence(con)
         if persistence.get("mode") == "restored":
@@ -1175,11 +1295,20 @@ def startup() -> None:
     # para o Supabase para manter o espelho atualizado entre redeploys.
     try:
         con = db_connect()
+        # Re-run restoration after local users and all SQLite migrations are ready.
+        # This makes Supabase's Receiving rows/timer events authoritative on redeploy.
+        restore_receiving_state_from_supabase(con)
+        con.commit()
         sync_all_cards_to_supabase(con, include_items=True)
         sync_all_receiving_state_to_supabase(con)
         con.close()
     except Exception as e:
-        print(f"[aviso] não consegui sincronizar cards/itens no startup: {e}")
+        if "con" in locals():
+            try:
+                con.close()
+            except Exception:
+                pass
+        print(f"[aviso] não consegui restaurar/sincronizar cards e Recebimento no startup: {e}")
     init_quality_db()
     init_processing_db()
     ensure_worker_function_column()
@@ -1816,6 +1945,21 @@ def repair_stored_reference_items(con: sqlite3.Connection, card_id: int) -> bool
 @app.get("/api/cards/{card_id}")
 def get_card(card_id: int):
     con = db_connect()
+    initial_card = con.execute("SELECT current_sector FROM cards WHERE id=?", (card_id,)).fetchone()
+    if not initial_card:
+        con.close()
+        raise HTTPException(404, "Card não encontrado.")
+    try:
+        restore_receiving_state_from_supabase(con, card_id=card_id)
+        con.commit()
+    except Exception as exc:
+        con.rollback()
+        con.close()
+        print("[erro] falha ao atualizar estado persistido do Card {}: {}".format(card_id, exc))
+        raise HTTPException(
+            503,
+            "Não foi possível carregar o estado mais recente do Card no Supabase. Nenhuma operação será executada com dados desatualizados; tente novamente quando a conexão for restabelecida.",
+        ) from exc
     repaired = repair_stored_reference_items(con, card_id)
     if repaired:
         con.commit()
@@ -1828,6 +1972,16 @@ def get_card(card_id: int):
         con.close()
         raise HTTPException(404, "Card não encontrado.")
     if ensure_pending_receiving(con, card_id):
+        try:
+            sync_receiving_card_state_to_supabase(con, card_id)
+        except Exception as exc:
+            con.rollback()
+            con.close()
+            print("[erro] não consegui persistir o controle de Recebimento do Card {} no Supabase: {}".format(card_id, exc))
+            raise HTTPException(
+                503,
+                "Não foi possível confirmar o controle de Recebimento no Supabase. Reabra o Card e tente novamente.",
+            ) from exc
         con.commit()
     card = dict(row)
     card["status_label"] = STATUS_LABELS.get(card["status"], card["status"])
@@ -1860,10 +2014,8 @@ async def save_receiving(receiving_id: int, request: Request):
     user_id = int(data.get("user_id") or 0)
     con = db_connect()
     require_role(con, user_id, {"recebimento"})
-    rec = con.execute("SELECT * FROM receivings WHERE id=?", (receiving_id,)).fetchone()
-    if not rec:
-        con.close()
-        raise HTTPException(404, "Recebimento não encontrado.")
+    rec = refresh_receiving_operation(con, receiving_id)
+    receiving_id = int(rec["id"])
     card = con.execute("SELECT * FROM cards WHERE id=?", (rec["card_id"],)).fetchone()
     if card["current_sector"] != "RECEBIMENTO":
         con.close()
@@ -1910,8 +2062,10 @@ async def save_receiving(receiving_id: int, request: Request):
         minimum = max(math.ceil(int(received_qty) * 0.10), item_count if card["purchase_mode"] == "GRADE" else 0)
         con.execute("UPDATE receivings SET ten_percent_min=? WHERE id=?", (minimum, receiving_id))
     add_history(con, rec["card_id"], "RECEBIMENTO_SALVO", "Dados do Recebimento atualizados.", user_id)
-    con.commit()
-    con.close()
+    persist_receiving_then_commit(
+        con, int(rec["card_id"]),
+        "Os dados do Recebimento não foram confirmados no Supabase. Nada foi considerado salvo; tente novamente."
+    )
     return {"ok": True}
 
 
@@ -1921,10 +2075,8 @@ async def complete_physical(receiving_id: int, request: Request):
     user_id = int(data.get("user_id") or 0)
     con = db_connect()
     user = require_role(con, user_id, {"recebimento"})
-    rec = con.execute("SELECT * FROM receivings WHERE id=?", (receiving_id,)).fetchone()
-    if not rec:
-        con.close()
-        raise HTTPException(404, "Recebimento não encontrado.")
+    rec = refresh_receiving_operation(con, receiving_id)
+    receiving_id = int(rec["id"])
     card = con.execute("SELECT * FROM cards WHERE id=?", (rec["card_id"],)).fetchone()
     if card["current_sector"] != "RECEBIMENTO":
         con.close()
@@ -1958,8 +2110,10 @@ async def complete_physical(receiving_id: int, request: Request):
     )
     add_history(con, rec["card_id"], "RECEBIMENTO_FISICO_CONCLUIDO", f"{user['name']} concluiu o recebimento físico.", user_id)
     next_status = update_new_receiving_flow(con, receiving_id, user_id)
-    con.commit()
-    con.close()
+    persist_receiving_then_commit(
+        con, int(rec["card_id"]),
+        "O recebimento físico não foi confirmado no Supabase. A conclusão não foi registrada; tente novamente."
+    )
     return {"ok": True, "next_status": next_status}
 
 
@@ -1969,10 +2123,8 @@ async def sample_timer(receiving_id: int, action: str, request: Request):
     user_id = int(data.get("user_id") or 0)
     con = db_connect()
     require_role(con, user_id, {"recebimento"})
-    rec = con.execute("SELECT * FROM receivings WHERE id=?", (receiving_id,)).fetchone()
-    if not rec:
-        con.close()
-        raise HTTPException(404, "Recebimento não encontrado.")
+    rec = refresh_receiving_operation(con, receiving_id)
+    receiving_id = int(rec["id"])
     card = con.execute("SELECT * FROM cards WHERE id=?", (rec["card_id"],)).fetchone()
     if card["current_sector"] != "RECEBIMENTO":
         con.close()
@@ -2010,8 +2162,10 @@ async def sample_timer(receiving_id: int, action: str, request: Request):
     next_status = None
     if action == "finish" and rec["receiving_type"] != "COSTURA":
         next_status = update_new_receiving_flow(con, receiving_id, user_id)
-    con.commit()
-    con.close()
+    persist_receiving_then_commit(
+        con, int(rec["card_id"]),
+        "A etapa dos 10% não foi confirmada no Supabase. O cronômetro não foi considerado salvo; tente novamente."
+    )
     return summary | {"next_status": next_status}
 @app.delete("/api/cards/{card_id}")
 async def delete_card(card_id: int, request: Request):
@@ -2047,6 +2201,8 @@ async def set_purchase_mode(card_id: int, request: Request):
     if not card:
         con.close()
         raise HTTPException(404, "Card não encontrado.")
+    refresh_receiving_card_state(con, card_id)
+    card = con.execute("SELECT id,purchase_mode,current_sector,source_snapshot_at FROM cards WHERE id=?", (card_id,)).fetchone()
     role = user["role"]
     has_quality_snapshot_items = False
     if card["source_snapshot_at"] and card["current_sector"] != "QUALIDADE":
@@ -2077,8 +2233,10 @@ async def set_purchase_mode(card_id: int, request: Request):
         con.execute("UPDATE receivings SET ten_percent_min=? WHERE id=?", (minimum, rec["id"]))
     add_history(con, card_id, "TIPO_COMPRA_MANUAL",
                 f"{user['name']} informou manualmente o tipo da compra: {'Grade' if mode == 'GRADE' else 'Saldo'}.", user_id)
-    con.commit()
-    con.close()
+    persist_receiving_then_commit(
+        con, card_id,
+        "O tipo da compra e o mínimo dos 10% não foram confirmados no Supabase. Tente novamente."
+    )
     return {"ok": True, "purchase_mode": mode}
 
 @app.post("/api/cards/{card_id}/mark-arrived")
@@ -2091,6 +2249,7 @@ async def mark_arrived(card_id: int, request: Request):
     if not con.execute("SELECT 1 FROM cards WHERE id=?", (card_id,)).fetchone():
         con.close()
         raise HTTPException(404, "Card não encontrado.")
+    refresh_receiving_card_state(con, card_id)
     if not awaiting_arrival(con, card_id):
         con.close()
         raise HTTPException(400, "Este Card não está aguardando chegada.")
@@ -2102,8 +2261,10 @@ async def mark_arrived(card_id: int, request: Request):
     add_history(con, card_id, "CHEGADA_CONFIRMADA",
                 f"{user['name']} marcou a mercadoria como recebida (chegou ao CD). Recebimento físico e separação dos 10% liberados.",
                 user_id)
-    con.commit()
-    con.close()
+    persist_receiving_then_commit(
+        con, card_id,
+        "A chegada e o controle de Recebimento não foram confirmados no Supabase. Tente novamente."
+    )
     return {"ok": True, "status": "AGUARDANDO_RECEBIMENTO"}
 
 
@@ -2164,6 +2325,8 @@ async def complete_dispatch(card_id: int, request: Request):
     if not card:
         con.close()
         raise HTTPException(404, "Card não encontrado.")
+    refresh_receiving_card_state(con, card_id)
+    card = con.execute("SELECT * FROM cards WHERE id=?", (card_id,)).fetchone()
     if card["current_sector"] != "RECEBIMENTO" or card["status"] != "AGUARDANDO_DESPACHO_COSTURA":
         con.close()
         raise HTTPException(400, "O Card não está aguardando despacho no Recebimento.")
@@ -2228,8 +2391,11 @@ async def complete_dispatch(card_id: int, request: Request):
         (next_sector, next_status, "COSTURA" if destination == "CD01" else card["receiving_type"], iso_now(), card_id),
     )
     add_history(con, card_id, "DESPACHO_COSTURA", description, user_id)
-    con.commit()
-    con.close()
+    persist_receiving_then_commit(
+        con, card_id,
+        "O despacho não foi confirmado no armazenamento persistente. Tente novamente.",
+        sync_item_ids=item_ids,
+    )
     return {"ok": True, "next_status": next_status, "item_ids": item_ids}
 
 
@@ -2246,6 +2412,8 @@ async def simulate_quality_return(card_id: int, request: Request):
     if not card:
         con.close()
         raise HTTPException(404, "Card não encontrado.")
+    refresh_receiving_card_state(con, card_id)
+    card = con.execute("SELECT * FROM cards WHERE id=?", (card_id,)).fetchone()
     if card["current_sector"] != "QUALIDADE":
         con.close()
         raise HTTPException(400, "A simulação exige que o Card esteja encaminhado à Qualidade.")
@@ -2261,8 +2429,10 @@ async def simulate_quality_return(card_id: int, request: Request):
         f"Ferramenta de teste: Inspeção 1 concluída com destino {destination}. Card devolvido ao Recebimento para despacho.",
         user_id,
     )
-    con.commit()
-    con.close()
+    persist_receiving_then_commit(
+        con, card_id,
+        "O retorno não foi confirmado no armazenamento persistente. Tente novamente."
+    )
     return {"ok": True}
 
 
@@ -2276,6 +2446,8 @@ async def simulate_costura_return(card_id: int, request: Request):
     if not card:
         con.close()
         raise HTTPException(404, "Card não encontrado.")
+    refresh_receiving_card_state(con, card_id)
+    card = con.execute("SELECT * FROM cards WHERE id=?", (card_id,)).fetchone()
     if card["status"] != "EM_COSTURA_CD01":
         con.close()
         raise HTTPException(400, "Somente Cards em Costura CD01 podem retornar.")
@@ -2304,8 +2476,11 @@ async def simulate_costura_return(card_id: int, request: Request):
         "Ferramenta de teste: retorno CD01 registrado. Card enviado ao Recebimento para conferência e nova tiragem de 10%.",
         user_id,
     )
-    con.commit()
-    con.close()
+    persist_receiving_then_commit(
+        con, card_id,
+        "O retorno da Costura não foi confirmado no Supabase. Tente novamente.",
+        sync_item_ids=returned_ids,
+    )
     return {"ok": True}
 
 

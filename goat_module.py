@@ -10,7 +10,12 @@ from typing import Any
 from fastapi import APIRouter, FastAPI, File, HTTPException, UploadFile
 from openpyxl import load_workbook
 
-from supabase_module import pg_connect, sync_card_with_items_to_supabase
+from supabase_module import (
+    pg_connect,
+    sync_card_with_items_to_supabase,
+    sync_receiving_card_state_to_supabase,
+    restore_receiving_state_from_supabase,
+)
 
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = Path(os.getenv("OUTLOG_DATA_DIR", str(BASE_DIR / "data"))).resolve() / "controle_logistica.db"
@@ -481,6 +486,16 @@ def confirm_receiving(payload: dict[str, Any]) -> dict[str, Any]:
         con.execute("PRAGMA foreign_keys=ON")
         if not con.execute("SELECT 1 FROM cards WHERE id=?", (card_id,)).fetchone():
             raise HTTPException(404, "Card não encontrado.")
+        try:
+            restore_receiving_state_from_supabase(con, card_id=card_id)
+            con.commit()
+        except Exception as exc:
+            con.rollback()
+            print("[erro] não consegui ler o Recebimento do Card {} no Supabase: {}".format(card_id, exc))
+            raise HTTPException(
+                503,
+                "Não foi possível atualizar o Recebimento no Supabase. A conferência não foi executada; tente novamente.",
+            ) from exc
         rec = con.execute(
             "SELECT id FROM receivings WHERE card_id=? AND closed_at IS NULL ORDER BY id DESC LIMIT 1", (card_id,)
         ).fetchone()
@@ -497,6 +512,15 @@ def confirm_receiving(payload: dict[str, Any]) -> dict[str, Any]:
             "INSERT INTO history(card_id,user_id,event_type,description,created_at) VALUES(?,?,?,?,?)",
             (card_id, None, "CONFERENCIA", f"Conferência {status}: {pecas} peças, {vol} volumes, casulo {casulo}. {obs}".strip(), now),
         )
+        try:
+            sync_receiving_card_state_to_supabase(con, card_id)
+        except Exception as exc:
+            con.rollback()
+            print("[erro] falha ao persistir a conferência do Card {} no Supabase: {}".format(card_id, exc))
+            raise HTTPException(
+                503,
+                "A conferência não foi confirmada no Supabase. Nenhuma alteração foi considerada salva; tente novamente.",
+            ) from exc
         con.commit()
     finally:
         con.close()
