@@ -122,7 +122,7 @@ RECEIVING_COLUMNS = [
     "id", "card_id", "receiving_type", "physical_status", "volumes", "received_qty",
     "has_damage", "damage_description", "notes", "photo_paths", "ten_percent_required",
     "ten_percent_min", "ten_percent_actual", "ten_percent_status",
-    "physical_completed_by", "physical_completed_at", "closed_at", "created_at",
+    "physical_completed_by", "physical_completed_at", "closed_at", "source_subset", "created_at",
 ]
 
 TIMER_EVENT_COLUMNS = [
@@ -184,10 +184,21 @@ def init_card_persistence() -> None:
                     physical_completed_by INTEGER,
                     physical_completed_at TEXT,
                     closed_at TEXT,
+                    source_subset SMALLINT NOT NULL DEFAULT 0,
                     created_at TEXT NOT NULL
                 )
             """)
+            cur.execute("ALTER TABLE outlog_receivings ADD COLUMN IF NOT EXISTS source_subset SMALLINT NOT NULL DEFAULT 0")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_outlog_receivings_card ON outlog_receivings(card_id)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_outlog_receivings_type ON outlog_receivings(card_id,receiving_type,id DESC)")
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS outlog_receiving_operation_items (
+                    receiving_id BIGINT NOT NULL REFERENCES outlog_receivings(id) ON DELETE CASCADE,
+                    item_id BIGINT NOT NULL REFERENCES outlog_items(id) ON DELETE CASCADE,
+                    PRIMARY KEY(receiving_id,item_id)
+                )
+            """)
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_outlog_receiving_items_item ON outlog_receiving_operation_items(item_id)")
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS outlog_timer_events (
                     id BIGINT PRIMARY KEY,
@@ -215,6 +226,143 @@ def _receiving_tuple(row) -> tuple:
 
 def _timer_event_tuple(row) -> tuple:
     return tuple(row[column] for column in TIMER_EVENT_COLUMNS)
+
+
+def get_latest_receiving_from_supabase(card_id: int, receiving_type: str) -> dict | None:
+    """Read the authoritative latest Receiving operation directly from Supabase."""
+    with pg_connect() as con:
+        with con.cursor() as cur:
+            cur.execute(
+                """SELECT * FROM outlog_receivings
+                   WHERE card_id=%s AND receiving_type=%s
+                   ORDER BY id DESC LIMIT 1""",
+                (int(card_id), receiving_type),
+            )
+            return cur.fetchone()
+
+
+def sync_receiving_card_state_to_supabase(sqlite_con, card_id: int) -> dict[str, int]:
+    """Write through one Card's current Receiving state to Supabase before confirming success."""
+    if not os.getenv("SUPABASE_DATABASE_URL"):
+        raise RuntimeError("SUPABASE_DATABASE_URL não está configurada; o Recebimento não pode ser confirmado.")
+
+    card = sqlite_con.execute("SELECT * FROM cards WHERE id=?", (int(card_id),)).fetchone()
+    if not card:
+        raise RuntimeError("Card {} não existe no banco local.".format(card_id))
+    items = sqlite_con.execute(
+        "SELECT * FROM items WHERE card_id=? ORDER BY id", (int(card_id),)
+    ).fetchall()
+    receivings = sqlite_con.execute(
+        "SELECT * FROM receivings WHERE card_id=? ORDER BY id", (int(card_id),)
+    ).fetchall()
+    receiving_ids = [int(row["id"]) for row in receivings]
+
+    events = []
+    operation_items = []
+    if receiving_ids:
+        marks = ",".join("?" for _ in receiving_ids)
+        events = sqlite_con.execute(
+            "SELECT * FROM timer_events WHERE receiving_id IN ({}) ORDER BY id".format(marks),
+            receiving_ids,
+        ).fetchall()
+        operation_items = sqlite_con.execute(
+            "SELECT receiving_id,item_id FROM receiving_operation_items WHERE receiving_id IN ({}) ORDER BY receiving_id,item_id".format(marks),
+            receiving_ids,
+        ).fetchall()
+
+    card_columns_sql = ",".join(CARD_COLUMNS)
+    item_columns_sql = ",".join(ITEM_COLUMNS)
+    receiving_columns_sql = ",".join(RECEIVING_COLUMNS)
+    timer_columns_sql = ",".join(TIMER_EVENT_COLUMNS)
+    card_marks = ",".join(["%s"] * len(CARD_COLUMNS))
+    item_marks = ",".join(["%s"] * len(ITEM_COLUMNS))
+    receiving_marks = ",".join(["%s"] * len(RECEIVING_COLUMNS))
+    timer_marks = ",".join(["%s"] * len(TIMER_EVENT_COLUMNS))
+    card_updates = ", ".join("{}=EXCLUDED.{}".format(c, c) for c in CARD_COLUMNS if c != "id")
+    item_updates = ", ".join("{}=EXCLUDED.{}".format(c, c) for c in ITEM_COLUMNS if c not in {"id", "card_id", "source_key"})
+    receiving_updates = ", ".join("{}=EXCLUDED.{}".format(c, c) for c in RECEIVING_COLUMNS if c != "id")
+    timer_updates = ", ".join("{}=EXCLUDED.{}".format(c, c) for c in TIMER_EVENT_COLUMNS if c != "id")
+
+    card_sql = (
+        "INSERT INTO outlog_cards ({}) VALUES ({}) ON CONFLICT (id) DO UPDATE SET {}".format(
+            card_columns_sql, card_marks, card_updates
+        )
+    )
+    item_sql = (
+        "INSERT INTO outlog_items ({}) VALUES ({}) ON CONFLICT (id) DO UPDATE SET {}".format(
+            item_columns_sql, item_marks, item_updates
+        )
+        + " WHERE outlog_items.card_id=EXCLUDED.card_id AND outlog_items.source_key=EXCLUDED.source_key"
+    )
+    receiving_sql = (
+        "INSERT INTO outlog_receivings ({}) VALUES ({}) ON CONFLICT (id) DO UPDATE SET {}".format(
+            receiving_columns_sql, receiving_marks, receiving_updates
+        )
+        + " WHERE outlog_receivings.card_id=EXCLUDED.card_id"
+        + " AND outlog_receivings.receiving_type=EXCLUDED.receiving_type"
+        + " AND outlog_receivings.created_at=EXCLUDED.created_at"
+    )
+    timer_sql = (
+        "INSERT INTO outlog_timer_events ({}) VALUES ({}) ON CONFLICT (id) DO UPDATE SET {}".format(
+            timer_columns_sql, timer_marks, timer_updates
+        )
+        + " WHERE outlog_timer_events.receiving_id=EXCLUDED.receiving_id"
+        + " AND outlog_timer_events.event_type=EXCLUDED.event_type"
+        + " AND outlog_timer_events.event_at=EXCLUDED.event_at"
+        + " AND outlog_timer_events.user_id=EXCLUDED.user_id"
+    )
+
+    with pg_connect() as con:
+        with con.cursor() as cur:
+            cur.execute(card_sql, _card_tuple(card))
+            if cur.rowcount != 1:
+                raise RuntimeError("Não foi possível sincronizar a identidade do Card {} no Supabase.".format(card_id))
+
+            for item in items:
+                cur.execute(item_sql, _item_tuple(item))
+                if cur.rowcount != 1:
+                    raise RuntimeError(
+                        "Conflito de identidade ao sincronizar o item {} do Card {} no Supabase.".format(item["id"], card_id)
+                    )
+
+            for receiving in receivings:
+                cur.execute(receiving_sql, _receiving_tuple(receiving))
+                if cur.rowcount != 1:
+                    raise RuntimeError(
+                        "Conflito de identidade no registro de Recebimento {} do Card {}.".format(receiving["id"], card_id)
+                    )
+
+            links_by_receiving: dict[int, list[int]] = {}
+            for link in operation_items:
+                links_by_receiving.setdefault(int(link["receiving_id"]), []).append(int(link["item_id"]))
+            for receiving_id in receiving_ids:
+                cur.execute(
+                    "DELETE FROM outlog_receiving_operation_items WHERE receiving_id=%s",
+                    (receiving_id,),
+                )
+                linked_items = links_by_receiving.get(receiving_id, [])
+                if linked_items:
+                    cur.executemany(
+                        """INSERT INTO outlog_receiving_operation_items(receiving_id,item_id)
+                           VALUES(%s,%s) ON CONFLICT(receiving_id,item_id) DO NOTHING""",
+                        [(receiving_id, item_id) for item_id in linked_items],
+                    )
+
+            for event in events:
+                cur.execute(timer_sql, _timer_event_tuple(event))
+                if cur.rowcount != 1:
+                    raise RuntimeError(
+                        "Conflito de identidade no evento de cronômetro {} do Recebimento {}.".format(
+                            event["id"], event["receiving_id"]
+                        )
+                    )
+        con.commit()
+
+    return {
+        "card_id": int(card_id),
+        "receivings": len(receivings),
+        "timer_events": len(events),
+    }
 
 
 def sync_all_receiving_state_to_supabase(sqlite_con) -> None:
