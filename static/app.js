@@ -1044,7 +1044,12 @@ async function createQualityInspection() {
     });
     toast("Inspeção criada.");
     await openCard(currentCardId, "quality");
-  } catch (error) { toast(error.message); }
+  } catch (error) {
+    toast(error.message);
+    if (String(error.message || "").includes("Card foi devolvido ao Recebimento")) {
+      await openCard(currentCardId, "receiving");
+    }
+  }
 }
 
 function qualityInspectionHtml(q) {
