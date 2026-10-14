@@ -977,7 +977,8 @@ def store_quality_files(files: list[dict]) -> list[str]:
                 cur.execute(
                     """INSERT INTO outlog_quality_files(
                            id,original_name,content_type,content,uploaded_by,created_at
-                       ) VALUES(%s,%s,%s,%s,%s,%s)""",
+                       ) VALUES(%s,%s,%s,%s,%s,%s)
+                       ON CONFLICT (id) DO NOTHING""",
                     (
                         uploaded["id"], uploaded["original_name"], uploaded["content_type"],
                         uploaded["content"], int(uploaded["uploaded_by"]), uploaded["created_at"],
