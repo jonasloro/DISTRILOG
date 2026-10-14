@@ -1198,9 +1198,11 @@ function qualityInspectionHtml(q) {
 function qualityPreviousInspectionsHtml(q) {
   const rows = q.previous_inspections || [];
   if (!rows.length) return "";
-  const routeLabel = (row) => row.inspection_type === 1
-    ? (row.send_to_costura === 1 || (row.send_to_costura == null && row.destination === "CD01") ? "Sim — Costura" : "Não — Processamento")
-    : "Processamento";
+  const routeLabel = (row) => row.source_subset
+    ? "Destino por referência"
+    : row.inspection_type === 1
+      ? (row.send_to_costura === 1 || (row.send_to_costura == null && row.destination === "CD01") ? "Sim — Costura" : "Não — Processamento")
+      : "Processamento";
   return `<h3 class="section-heading">Rodadas anteriores da Qualidade</h3><div class="table-wrap"><table>
     <thead><tr><th>Inspeção</th><th>Tipo</th><th>Destino</th><th>Amostra</th><th>Aprovada</th><th>Rejeitada</th><th>Retrabalho</th><th>Conclusão</th><th>Desenvolvimento</th></tr></thead>
     <tbody>${rows.map((row)=>`<tr><td>Inspeção ${row.inspection_type}</td><td>${row.purchase_mode==="SALDO"?"Saldo":"Grade"}</td><td>${esc(routeLabel(row))}</td><td>${row.sample_target_total}</td><td>${row.approved_total}</td><td>${row.rejected_total}</td><td>${row.rework_total}</td><td>${fmtDateTime(row.completed_at)}</td><td>${row.development_pending?'<span class="badge orange">Pendente</span>':'<span class="badge green">Regular</span>'}</td></tr>`).join("")}</tbody>
