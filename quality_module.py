@@ -838,6 +838,14 @@ async def create_inspection(card_id: int, request: Request):
     if not source_subset_requested and not card["source_snapshot_at"] and card["current_sector"] == "QUALIDADE":
         receiving_type_for_sample = "RETORNO" if card["receiving_type"] == "RETORNO" else "NOVA"
         receiving_sample = require_completed_receiving_sample(con, card_id, receiving_type_for_sample)
+        # The Supabase refresh can reveal that another operator moved the Card meanwhile.
+        card = con.execute("SELECT * FROM cards WHERE id=?", (card_id,)).fetchone()
+        if not card or card["current_sector"] != "QUALIDADE" or card["source_snapshot_at"]:
+            con.close()
+            raise HTTPException(
+                409,
+                "O setor responsável pelo Card mudou enquanto o Recebimento era atualizado. Reabra o Card antes de iniciar a inspeção.",
+            )
         if receiving_sample["ten_percent_required"]:
             total_volumes = int(receiving_sample["volumes"] or 0)
             if total_volumes <= 0:
