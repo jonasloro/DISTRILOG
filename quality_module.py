@@ -10,7 +10,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, FastAPI, HTTPException, Request
 
-from positions_module import move_ten_percent_sample_into_balance, total_volume_only_allocated
+from positions_module import move_ten_percent_sample_into_balance, total_ten_percent_sample_in_balance, total_volume_only_allocated
 
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = Path(os.getenv("OUTLOG_DATA_DIR", str(BASE_DIR / "data"))).resolve() / "controle_logistica.db"
@@ -1728,7 +1728,8 @@ async def complete_inspection(inspection_id: int, request: Request):
                     raise HTTPException(400, "Informe os volumes recebidos para validar a amostra de 10%.")
                 sample_target = 1 if total_volumes > 0 else 0
                 sample_allocated = total_volume_only_allocated("QA", int(inspection["card_id"]))
-                if sample_allocated < sample_target:
+                sample_already_moved = total_ten_percent_sample_in_balance(int(inspection["card_id"]))
+                if sample_allocated < sample_target and sample_already_moved < sample_target:
                     con.close()
                     raise HTTPException(
                         400,
