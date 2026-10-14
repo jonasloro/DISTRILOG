@@ -194,9 +194,14 @@ def require_completed_receiving_sample(con: sqlite3.Connection, card_id: int, re
         if actual_sample <= 0:
             con.close()
             raise HTTPException(400, "A quantidade efetivamente separada nos 10% não está salva no Supabase como um valor positivo.")
-        if actual_sample < minimum_sample:
+        if actual_sample != minimum_sample:
             con.close()
-            raise HTTPException(400, "A quantidade de 10% salva no Supabase está abaixo do mínimo exigido. Revise o Recebimento antes de iniciar a Inspeção.")
+            raise HTTPException(
+                400,
+                "A quantidade separada nos 10% deve corresponder ao total exigido de {} peças; o Recebimento está registrado com {}. Corrija e salve a tiragem antes de iniciar a Inspeção.".format(
+                    minimum_sample, actual_sample
+                ),
+            )
         if not local_latest:
             con.close()
             raise HTTPException(503, "O Recebimento existe no Supabase, mas não pôde ser vinculado ao Card local. Tente novamente; a inspeção continua bloqueada até a restauração do vínculo.")
@@ -1123,8 +1128,12 @@ async def create_inspection(card_id: int, request: Request):
         raise HTTPException(404, "Card não encontrado.")
     receiving_sample = None
     # The exact 10% receiving record used below must also pass the QA allocation gate.
+    is_costura_return = (
+        str(card["receiving_type"] or "").upper() == "RETORNO"
+        or str(card["status"] or "").upper() == "AGUARDANDO_RECEBIMENTO_RETORNO"
+    )
     if not source_subset_requested and not card["source_snapshot_at"] and card["current_sector"] == "QUALIDADE":
-        receiving_type_for_sample = "RETORNO" if card["receiving_type"] == "RETORNO" else "NOVA"
+        receiving_type_for_sample = "RETORNO" if is_costura_return else "NOVA"
         receiving_sample = require_completed_receiving_sample(con, card_id, receiving_type_for_sample)
         # The Supabase refresh can reveal that another operator moved the Card meanwhile.
         card = con.execute("SELECT * FROM cards WHERE id=?", (card_id,)).fetchone()
@@ -1202,7 +1211,10 @@ async def create_inspection(card_id: int, request: Request):
     if existing:
         con.close()
         raise HTTPException(400, "Já existe uma inspeção aberta para este Card.")
-    is_costura_return = str(card["receiving_type"] or "").upper() == "RETORNO"
+    is_costura_return = (
+        str(card["receiving_type"] or "").upper() == "RETORNO"
+        or str(card["status"] or "").upper() == "AGUARDANDO_RECEBIMENTO_RETORNO"
+    )
     expected_inspection_type = 2 if is_costura_return else 1
     if inspection_type != expected_inspection_type:
         con.close()
