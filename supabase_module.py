@@ -292,6 +292,7 @@ def sync_receiving_card_state_to_supabase(
         "INSERT INTO outlog_cards ({}) VALUES ({}) ON CONFLICT (id) DO UPDATE SET {}".format(
             card_columns_sql, card_marks, card_updates
         )
+        + " WHERE outlog_cards.purchase_id=EXCLUDED.purchase_id"
     )
     item_insert_sql = (
         "INSERT INTO outlog_items ({}) VALUES ({}) ON CONFLICT (id) DO NOTHING".format(
