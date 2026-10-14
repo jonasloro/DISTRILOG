@@ -1860,6 +1860,16 @@ def get_card(card_id: int):
         con.close()
         raise HTTPException(404, "Card não encontrado.")
     if ensure_pending_receiving(con, card_id):
+        try:
+            sync_receiving_card_state_to_supabase(con, card_id)
+        except Exception as exc:
+            con.rollback()
+            con.close()
+            print("[erro] não consegui persistir o controle de Recebimento do Card {} no Supabase: {}".format(card_id, exc))
+            raise HTTPException(
+                503,
+                "Não foi possível confirmar o controle de Recebimento no Supabase. Reabra o Card e tente novamente.",
+            ) from exc
         con.commit()
     card = dict(row)
     card["status_label"] = STATUS_LABELS.get(card["status"], card["status"])
