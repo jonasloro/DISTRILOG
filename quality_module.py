@@ -1093,6 +1093,10 @@ async def transfer_inspection_2_to_processing(card_id: int, request: Request):
     con = db_connect()
     try:
         actor = require_role(con, user_id, QUALITY_ROLES)
+        from supabase_module import restore_receiving_state_from_supabase
+
+        restore_receiving_state_from_supabase(con, card_id=card_id)
+        con.commit()
         card = con.execute(
             """SELECT id,current_sector,status,receiving_type,source_snapshot_at
                FROM cards WHERE id=?""",
