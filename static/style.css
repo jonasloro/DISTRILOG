@@ -1063,3 +1063,112 @@ input:disabled,select:disabled,textarea:disabled{
   .quality-choice-options{grid-template-columns:1fr;max-width:420px}
   .quality-choice-card{justify-content:flex-start;min-height:68px}
 }
+
+
+/* Grade visual cleanup: neutral surfaces; reserve accent color for selection. */
+.task-board>section{
+  background:#202327;
+  border:1px solid #33383f;
+}
+.task-board h3 span{
+  background:#2a2d32;
+  color:#cbd5e1;
+}
+.production-material-row:hover td,
+.production-material-row:focus td{
+  background:#25292e;
+}
+.production-material-row.selected td{
+  background:#2a2d32;
+  border-bottom-color:#41474e;
+}
+.production-material-row.selected td:first-child{
+  box-shadow:inset 3px 0 #ff8a3d;
+}
+.quality-batch-row:has(.quality-batch-check:checked) td{
+  background:#2a2d32!important;
+  color:#f1f5f9!important;
+  border-bottom-color:#41474e!important;
+}
+.position-dot.free,
+.position-dot.occupied,
+.position-dot.card,
+.position-dot.item{
+  background:#25292e!important;
+  border-color:#454c54!important;
+  color:#dce2e8!important;
+}
+.position-dot.selected{
+  background:#2b2926!important;
+  border-color:#ff8a3d!important;
+  color:#fff!important;
+}
+.position-cell,
+.position-cell.is-occupied,
+.position-cell.is-card,
+.position-cell.is-item{
+  background:#202429!important;
+  border-color:#3b4249!important;
+  color:#dce2e8!important;
+}
+.position-cell:hover{
+  border-color:#666e77!important;
+  box-shadow:none!important;
+}
+.position-cell.is-selected{
+  background:#2b2926!important;
+  border-color:#ff8a3d!important;
+  box-shadow:inset 0 0 0 1px #ff8a3d45!important;
+  color:#f5f8fc!important;
+}
+.position-cell.is-card small{
+  color:#9eabb9!important;
+}
+.position-selected{
+  background:#25292e!important;
+  border-color:#ff8a3d!important;
+}
+.quality-choice-card:hover{
+  border-color:#59616a!important;
+  background:#25292e!important;
+}
+.quality-choice-card.is-selected{
+  background:#2a2d32!important;
+  border-color:#ff8a3d!important;
+  box-shadow:inset 0 0 0 1px #ff8a3d22!important;
+}
+.quality-choice-card.is-selected .quality-choice-indicator{
+  border-color:#ff8a3d!important;
+}
+.quality-choice-card.is-selected .quality-choice-indicator:after{
+  background:#ff8a3d!important;
+}
+.size-token,
+.type-pill,
+.stage-chip,
+.photo-link,
+.row-open{
+  background:#25292e!important;
+  color:#d6dfe8!important;
+  border-color:#3b4249!important;
+}
+.stage-chip:hover,
+.row-open:hover{
+  background:#30353b!important;
+  border-color:#555d66!important;
+}
+.group-summary>div{
+  background:#212429;
+  border-color:#33383f;
+}
+.hero-icon,
+.hero-icon.teal{
+  background:#25292e!important;
+  border-color:#41474e!important;
+  color:#d6dfe8!important;
+}
+.help-grid button{
+  background:#212429;
+  color:#edf4fb;
+  border-color:#33383f;
+}
