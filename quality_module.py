@@ -20,12 +20,54 @@ QUALITY_ROLES = {"qualidade", "supervisor", "admin"}
 SUPERVISOR_ROLES = {"supervisor", "admin"}
 
 
-def db_connect() -> sqlite3.Connection:
-    con = sqlite3.connect(DB_PATH, timeout=10)
+class QualitySQLiteConnection(sqlite3.Connection):
+    """SQLite compatível com os módulos legados; o commit só é confirmado após gravar no Supabase."""
+
+    def commit(self) -> None:
+        if getattr(self, "_quality_persistence_enabled", False):
+            from supabase_module import sync_quality_state_to_supabase
+
+            try:
+                snapshot = sync_quality_state_to_supabase(
+                    self, getattr(self, "_quality_remote_snapshot", {})
+                )
+            except Exception as exc:
+                raise HTTPException(
+                    503,
+                    "Não foi possível salvar a operação da Qualidade no Supabase. Nada foi confirmado; atualize e tente novamente.",
+                ) from exc
+            self._quality_remote_snapshot = snapshot
+        super().commit()
+
+
+def db_connect(persist: bool = True) -> sqlite3.Connection:
+    if persist and not os.getenv("SUPABASE_DATABASE_URL"):
+        raise HTTPException(
+            503,
+            "A Qualidade exige conexão com o Supabase. Configure SUPABASE_DATABASE_URL; operações não serão salvas apenas no SQLite.",
+        )
+    con = sqlite3.connect(DB_PATH, timeout=10, factory=QualitySQLiteConnection)
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA foreign_keys=ON")
     con.execute("PRAGMA journal_mode=WAL")
     con.execute("PRAGMA synchronous=NORMAL")
+    con._quality_persistence_enabled = False
+    if persist:
+        try:
+            from supabase_module import restore_quality_state_from_supabase
+
+            con._quality_remote_snapshot = restore_quality_state_from_supabase(con)
+            con.commit()
+            con._quality_persistence_enabled = True
+        except HTTPException:
+            con.close()
+            raise
+        except Exception as exc:
+            con.close()
+            raise HTTPException(
+                503,
+                "Não foi possível carregar os dados persistidos da Qualidade no Supabase. A operação foi bloqueada para evitar divergência.",
+            ) from exc
     return con
 
 
@@ -277,7 +319,7 @@ def business_seconds_between(start: datetime, end: datetime) -> int:
 
 
 def init_quality_db() -> None:
-    con = db_connect()
+    con = db_connect(persist=False)
     con.executescript(
         """
         CREATE TABLE IF NOT EXISTS quality_inspections (
@@ -391,6 +433,19 @@ def init_quality_db() -> None:
     con.commit()
     con.close()
 
+    # Migra registros antigos apenas se o Supabase ainda não tiver dados de Qualidade.
+    # A partir daqui, toda rota exige Supabase e o SQLite funciona só como cache de compatibilidade.
+    if os.getenv("SUPABASE_DATABASE_URL"):
+        cache_con = db_connect(persist=False)
+        try:
+            from supabase_module import bootstrap_quality_state
+
+            bootstrap_quality_state(cache_con)
+            cache_con.commit()
+        except Exception as exc:
+            print("[qualidade] não foi possível inicializar a persistência no Supabase: {}".format(exc))
+        finally:
+            cache_con.close()
 
 def normalize_purchase_mode(value: Any) -> str:
     mode = str(value or "").strip().upper()
