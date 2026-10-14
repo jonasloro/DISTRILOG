@@ -423,63 +423,6 @@ async function setCardPurchaseMode(mode) {
   }
 }
 
-function qualitySampleRelocationNoticeHtml(rows, failed=false) {
-  if (failed || !Array.isArray(rows)) {
-    return '<div class="notice warn"><b>Endereçamento da amostra dos 10%</b><br>Não foi possível confirmar os endereços físicos agora. Confira a localização da mercadoria antes de despachar para a Costura.</div>';
-  }
-  const positiveRows = rows.filter((row) =>
-    String(row.address || "").trim() && Number(row.quantidade || 0) > 0
-  );
-  const sampleRows = positiveRows.filter((row) =>
-    ["QA", "QUALIDADE"].includes(String(row.setor || "").trim().toUpperCase()) &&
-    (row.item_id === null || row.item_id === undefined)
-  );
-  const sampleQty = sampleRows.reduce((sum, row) => sum + Number(row.quantidade || 0), 0);
-  const sampleAddresses = [...new Set(sampleRows.map((row) => String(row.address || "").trim()))];
-  const sampleAddressText = sampleAddresses.map((address) => '<b>' + esc(address) + '</b>').join(", ");
-
-  if (!sampleRows.length) {
-    return '<div class="notice warn"><b>Endereçamento da amostra dos 10%</b><br>Não localizei a alocação física da amostra no histórico de endereços. Confirme a localização da amostra antes de despachar para a Costura.</div>';
-  }
-
-  const remainderByAddress = new Map();
-  positiveRows.filter((row) =>
-    String(row.setor || "").trim().toUpperCase() === "RM" &&
-    (row.item_id === null || row.item_id === undefined)
-  ).forEach((row) => {
-    const address = String(row.address || "").trim();
-    const current = remainderByAddress.get(address) || 0;
-    remainderByAddress.set(address, current + Number(row.quantidade || 0));
-  });
-  const remainderLocations = [...remainderByAddress.entries()]
-    .map(([address, quantity]) => ({address, quantity}))
-    .sort((a, b) => b.quantity - a.quantity || a.address.localeCompare(b.address, "pt-BR"));
-
-  if (!remainderLocations.length) {
-    return '<div class="notice warn"><b>Amostra dos 10% — destino para Costura</b><br>A amostra está registrada em ' +
-      sampleAddressText + ', mas não encontrei um endereço RM com saldo de volumes para indicar o mesmo destino. Confira a localização física antes do despacho.</div>';
-  }
-
-  const sampleQtyLabel = Number(sampleQty).toLocaleString("pt-BR");
-  if (remainderLocations.length === 1) {
-    const destination = remainderLocations[0];
-    return '<div class="notice warn"><b>Amostra dos 10% — levar junto para a Costura</b><br>A amostra de <b>' +
-      sampleQtyLabel + ' volume(s)</b>, atualmente em ' + sampleAddressText +
-      ', deve acompanhar o restante da mercadoria. Aloque esse volume adicional no mesmo endereço: <b>' +
-      esc(destination.address) + '</b> (' + Number(destination.quantity).toLocaleString("pt-BR") +
-      ' volume(s) do restante registrados ali).</div>';
-  }
-
-  const destinationList = remainderLocations.map((location) =>
-    '<b>' + esc(location.address) + '</b> (' +
-    Number(location.quantity).toLocaleString("pt-BR") + ' volume(s))'
-  ).join("; ");
-  return '<div class="notice warn"><b>Amostra dos 10% — levar junto para a Costura</b><br>A amostra de <b>' +
-    sampleQtyLabel + ' volume(s)</b>, atualmente em ' + sampleAddressText +
-    ', deve acompanhar o restante da mercadoria. O saldo dos volumes está dividido entre ' +
-    destinationList + '. Aloque a amostra no mesmo endereço físico da referência que seguirá para a Costura.</div>';
-}
-
 function cardLocationBannerHtml(rows, failed=false, loading=false, currentSector="") {
   if (loading) {
     return '<section class="card-location-banner" aria-label="Localização da mercadoria"><div class="card-location-heading"><span>LOCALIZAÇÃO DA MERCADORIA</span><small>Endereços físicos registrados</small></div><div class="card-location-empty"><span class="card-location-pulse"></span>Consultando endereços atuais…</div></section>';
@@ -495,11 +438,11 @@ function cardLocationBannerHtml(rows, failed=false, loading=false, currentSector
     const qty = Number(row.quantidade || 0);
     if (!sector || !address || !Number.isFinite(qty) || qty <= 0) return;
     const volumeOnly = row.item_id === null || row.item_id === undefined;
-    const sampleLocation = sector === "QA" && volumeOnly;
+    const sampleLocation = row.allocation_purpose === "TEN_PERCENT_SAMPLE" || (sector === "QA" && volumeOnly);
     const label = address === "QUALIDADE (10%)"
       ? "Amostra reservada na Qualidade"
       : sampleLocation
-        ? "Amostra dos 10% · Qualidade"
+        ? (sector === "QA" ? "Amostra dos 10% · Qualidade" : "Amostra dos 10% · junto ao saldo")
         : (sectorLabels[sector] || sector);
     const unit = volumeOnly ? "volume(s)" : "peça(s)";
     const key = [sector,address,label,unit].join("|");
@@ -533,14 +476,13 @@ async function openCard(cardId, tab = "receiving") {
   currentCardId = cardId;
   const locationRequestId = Number(window.cardLocationRequestId || 0) + 1;
   window.cardLocationRequestId = locationRequestId;
-  window.cardLocationRows = null;
-  window.cardLocationFailed = false;
   window.qaSampleAllocationRequired = false;
   window.qaSampleAllocationComplete = true;
   cardData = await api(`/api/cards/${cardId}`);
   const currentReceiving = cardData.receiving || {};
   window.qaSampleAllocationRequired = Boolean(
     !cardData.source_snapshot_at &&
+    cardData.current_sector === "QUALIDADE" &&
     currentReceiving.ten_percent_required &&
     currentReceiving.ten_percent_status === "CONCLUIDA" &&
     currentReceiving.receiving_type !== "COSTURA"
@@ -602,21 +544,13 @@ async function openCard(cardId, tab = "receiving") {
   apiWithTimeout(`/api/positions/cards/${cardId}/trail`, 8000)
     .then((rows) => {
       if (window.cardLocationRequestId !== locationRequestId || Number(currentCardId) !== Number(cardId)) return;
-      window.cardLocationRows = rows;
-      window.cardLocationFailed = false;
       const slot = $("cardLocationSlot");
       if (slot) slot.innerHTML = cardLocationBannerHtml(rows, false, false, cardData?.current_sector || "");
-      const sampleNotice = $("qualitySampleRelocationNotice");
-      if (sampleNotice) sampleNotice.innerHTML = qualitySampleRelocationNoticeHtml(rows);
     })
     .catch((error) => {
       if (window.cardLocationRequestId !== locationRequestId || Number(currentCardId) !== Number(cardId)) return;
-      window.cardLocationRows = null;
-      window.cardLocationFailed = true;
       const slot = $("cardLocationSlot");
       if (slot) slot.innerHTML = cardLocationBannerHtml(null, true);
-      const sampleNotice = $("qualitySampleRelocationNotice");
-      if (sampleNotice) sampleNotice.innerHTML = qualitySampleRelocationNoticeHtml(null, true);
       console.warn("Não foi possível consultar os endereços do Card:", error);
     });
   if (tab === "casulo") renderCasuloTab();
@@ -648,23 +582,8 @@ function canOperateReceiving() {
 function qualityReadOnlyPreviewHtml() {
   const items = (cardData.items || []).slice(0, 8);
   const rows = items.map((item) => '<tr><td>' + esc(item.product || '—') + '</td><td>' + esc(item.reference || '—') + '</td><td>' + esc(item.color || '—') + '</td><td>' + esc(item.size || '—') + '</td><td>' + Number(item.expected_qty || 0).toLocaleString('pt-BR') + '</td></tr>').join('');
-  const qualityInspection = cardData.quality || {};
-  const showSampleRelocationNotice = currentUser?.role === "qualidade" &&
-    qualityInspection.status === "CONCLUIDA" &&
-    Number(qualityInspection.inspection_type) === 1 &&
-    String(qualityInspection.destination || cardData.quality_destination || "").toUpperCase() === "CD01" &&
-    String(cardData.status || "").toUpperCase() === "AGUARDANDO_DESPACHO_COSTURA";
-  const initialSampleNotice = Array.isArray(window.cardLocationRows)
-    ? qualitySampleRelocationNoticeHtml(window.cardLocationRows)
-    : window.cardLocationFailed
-      ? qualitySampleRelocationNoticeHtml(null, true)
-      : '<div class="notice warn">Consultando o endereço da amostra dos 10% e o local do restante da mercadoria…</div>';
-  const sampleRelocationNotice = showSampleRelocationNotice
-    ? '<h3 class="section-heading">Orientação para a Costura</h3><div id="qualitySampleRelocationNotice">' + initialSampleNotice + '</div>'
-    : '';
   return '<div class="panel-body">' +
     '<div class="notice warn"><b>Visualização somente leitura.</b><br>Setor responsável: <b>' + esc(cardData.current_sector || 'Não definido') + '</b>. Ações operacionais ficam disponíveis somente para o setor responsável.</div>' +
-    sampleRelocationNotice +
     '<div class="summary-grid">' +
       '<div class="summary-box"><span>Compra</span><strong>' + esc(cardData.purchase_id || '—') + '</strong></div>' +
       '<div class="summary-box"><span>Fornecedor</span><strong>' + esc(cardData.supplier || '—') + '</strong></div>' +
@@ -1103,27 +1022,28 @@ async function renderQualityTab() {
     return;
   }
   $("cardTab").innerHTML = qualityInspectionHtml(q);
-  if (canOperateQuality() && !$("posAllocBox")) {
-    $("cardTab").insertAdjacentHTML("beforeend", '<div class="panel-body"><h3 class="section-heading">Endereçamento na Qualidade (QA)</h3><div id="posAllocBox" class="notice">Carregando posições…</div></div>');
-    loadPositionAllocator(cardData.id, "QA");
-  }
 }
 
 function qualitySetupHtml(previousInspection=null, sourceSubset=false) {
   const isCosturaReturn = cardData.receiving_type === "RETORNO";
   const defaultType = isCosturaReturn ? 2 : 1;
   const defaultMode = cardData.purchase_mode || previousInspection?.purchase_mode || "";
+  const routeField = sourceSubset
+    ? `<div class="field" id="qualityDestinationField"><label>Destino da Inspeção 1</label><select id="qualityDestination"><option value="">Selecione</option><option value="CD01">CD01 — retorna ao nosso CD</option><option value="CD02">CD02 — sai do fluxo interno</option></select></div>`
+    : defaultType === 1
+      ? `<div class="field full"><label>Vai para a Costura?</label><select id="qualitySendToCostura" required><option value="">Selecione obrigatoriamente</option><option value="1">Sim — segue para a Costura</option><option value="0">Não — segue direto para Processamento</option></select><small>Esta decisão é obrigatória. Ao concluir a inspeção, o volume da amostra dos 10% será movido automaticamente para o endereço do saldo.</small></div>`
+      : `<div class="field"><label>Vai para a Costura?</label><input class="readonly" readonly value="Não — retorno da Costura segue para Processamento"></div>`;
   return `<div class="panel-body">
     ${sourceSubset ? `<div class="notice success-box"><b>Controle por referência</b><br>Selecione abaixo quais referências entrarão nesta inspeção. As referências não selecionadas não serão movimentadas.</div>${qualitySourceItemsHtml()}` : ""}
     ${previousInspection ? `<div class="notice success-box">A Inspeção ${previousInspection.inspection_type} anterior foi concluída em ${fmtDateTime(previousInspection.completed_at)}. O Card retornou à Qualidade para uma nova rodada.</div>` : ""}
     <div class="notice"><b>Configuração da inspeção</b><br>O tipo da compra vem automaticamente da coluna <b>Tipo</b> do Excel: Private Label = Grade e Saldo = Saldo.</div>
     ${isCosturaReturn
-      ? '<div class="notice warn"><b>Retorno da Costura:</b> a Inspeção 2 é obrigatória e usará a nova amostra de 10% separada pelo Recebimento.</div>'
-      : '<div class="notice success-box"><b>Primeira etapa após o Recebimento:</b> a Inspeção 1 é obrigatória. A Inspeção 2 será feita somente quando a mercadoria retornar da Costura.</div>'}
+      ? '<div class="notice warn"><b>Retorno da Costura:</b> a Inspeção 2 é obrigatória e, ao concluir, seguirá para Processamento com a amostra reunida automaticamente ao saldo.</div>'
+      : '<div class="notice success-box"><b>Primeira etapa após o Recebimento:</b> a Inspeção 1 é obrigatória. Se houver envio à Costura, o Card será encaminhado ao despacho; caso contrário, seguirá direto para Processamento.</div>'}
     <div class="form-grid">
       <div class="field"><label>Tipo de inspeção</label><select id="qualityType" onchange="toggleQualitySetupFields()" disabled><option value="1" ${defaultType===1?"selected":""}>Inspeção 1</option><option value="2" ${defaultType===2?"selected":""}>Inspeção 2</option></select></div>
-      ${["GRADE", "SALDO"].includes(defaultMode)     ? `<div class="field"><label>Tipo da compra</label><input id="qualityPurchaseMode" class="readonly" readonly value="${defaultMode === "GRADE" ? "Grade — controle por item" : "Saldo — quantidade geral"}"></div>`     : `<div class="field"><label>Tipo da compra (não reconhecido — informe)</label><select id="qualityPurchaseMode"><option value="">Selecione</option><option value="GRADE">Grade — controle por item</option><option value="SALDO">Saldo — quantidade geral</option></select></div>`}
-      <div class="field" id="qualityDestinationField"><label>Destino da Inspeção 1</label><select id="qualityDestination"><option value="">Selecione</option><option value="CD01">CD01 — retorna ao nosso CD</option><option value="CD02">CD02 — sai do fluxo interno</option></select></div>
+      ${["GRADE", "SALDO"].includes(defaultMode) ? `<div class="field"><label>Tipo da compra</label><input id="qualityPurchaseMode" class="readonly" readonly value="${defaultMode === "GRADE" ? "Grade — controle por item" : "Saldo — quantidade geral"}"></div>` : `<div class="field"><label>Tipo da compra (não reconhecido — informe)</label><select id="qualityPurchaseMode"><option value="">Selecione</option><option value="GRADE">Grade — controle por item</option><option value="SALDO">Saldo — quantidade geral</option></select></div>`}
+      ${routeField}
       <div class="field"><label>É necessário separar peças para Desenvolvimento?</label><select id="developmentRequired" onchange="toggleDevelopmentSetup()"><option value="">Selecione</option><option value="0">Não</option><option value="1">Sim</option></select></div>
       <div class="field" id="developmentSeparatedField" style="display:none"><label>As peças para Desenvolvimento já foram separadas?</label><select id="developmentSeparated"><option value="">Selecione</option><option value="0">Não</option><option value="1">Sim</option></select></div>
     </div>
@@ -1196,11 +1116,17 @@ async function createQualityInspection() {
   try {
     const requiredValue = $("developmentRequired").value;
     const separatedValue = $("developmentSeparated")?.value ?? "";
+    const inspectionType = Number($("qualityType").value);
+    const sendToCosturaValue = $("qualitySendToCostura")?.value ?? "";
+    if (!window.qualitySourceSubset && inspectionType === 1 && sendToCosturaValue === "") {
+      throw new Error("Responda obrigatoriamente: Vai para a Costura?");
+    }
     await api(`/api/cards/${currentCardId}/quality/inspections`, {
       method: "POST",
       body: JSON.stringify({
         user_id: currentUser.id,
-        inspection_type: Number($("qualityType").value),
+        inspection_type: inspectionType,
+        send_to_costura: !window.qualitySourceSubset && inspectionType === 1 ? (sendToCosturaValue === "" ? null : sendToCosturaValue === "1") : null,
         destination: $("qualityDestination")?.value || null,
         development_required: requiredValue === "" ? null : requiredValue === "1",
         development_separated: requiredValue !== "1" ? null : (separatedValue === "" ? null : separatedValue === "1"),
@@ -1229,9 +1155,19 @@ function qualityInspectionHtml(q) {
     : q.sample_source === "RECEBIMENTO"
       ? `Amostra dos 10% separada pelo Recebimento • ${modeLabel}`
       : `Nova amostra obrigatória de 10% separada pelo Recebimento após o retorno da Costura • ${modeLabel}`;
+  const goesToCostura = q.send_to_costura === 1 || (q.send_to_costura == null && q.destination === "CD01");
+  const routeLabel = q.source_subset
+    ? "Destino definido por referência"
+    : q.inspection_type === 1
+      ? (goesToCostura ? "Sim — vai para a Costura" : "Não — segue direto para Processamento")
+      : "Retorno da Costura — segue para Processamento";
+  const enforcedMovementNotice = isOpen && !q.source_subset
+    ? `<div class="notice warn"><b>Movimentação automática obrigatória</b><br>Ao concluir esta inspeção, o volume da amostra dos 10% será reunido ao saldo no endereço físico já utilizado pelo restante da mercadoria. Se o sistema não encontrar um endereço de saldo em RM ou PR, a conclusão será bloqueada até que o saldo seja endereçado.</div>`
+    : "";
   return `<div class="panel-body">
     <div class="quality-header">
-      <div class="notice ${q.inspection_type===2?"success-box":""}"><b>${typeLabel}</b>${q.inspection_type===1?` — destino <b>${esc(q.destination)}</b>`:""}<br>${sampleLabel}</div>
+      <div class="notice ${q.inspection_type===2?"success-box":""}"><b>${typeLabel}</b><br><b>Vai para a Costura?</b> ${esc(routeLabel)}<br>${sampleLabel}</div>
+      ${enforcedMovementNotice}
       ${q.development_warning ? '<div class="notice warn"><b>Atenção:</b> a separação de peças para o setor Desenvolvimento ainda está pendente. Este aviso não bloqueia a conclusão.</div>' : ''}
     </div>
     <div class="summary-grid quality-summary">
@@ -1262,9 +1198,12 @@ function qualityInspectionHtml(q) {
 function qualityPreviousInspectionsHtml(q) {
   const rows = q.previous_inspections || [];
   if (!rows.length) return "";
+  const routeLabel = (row) => row.inspection_type === 1
+    ? (row.send_to_costura === 1 || (row.send_to_costura == null && row.destination === "CD01") ? "Sim — Costura" : "Não — Processamento")
+    : "Processamento";
   return `<h3 class="section-heading">Rodadas anteriores da Qualidade</h3><div class="table-wrap"><table>
     <thead><tr><th>Inspeção</th><th>Tipo</th><th>Destino</th><th>Amostra</th><th>Aprovada</th><th>Rejeitada</th><th>Retrabalho</th><th>Conclusão</th><th>Desenvolvimento</th></tr></thead>
-    <tbody>${rows.map((row)=>`<tr><td>Inspeção ${row.inspection_type}</td><td>${row.purchase_mode==="SALDO"?"Saldo":"Grade"}</td><td>${esc(row.destination||"—")}</td><td>${row.sample_target_total}</td><td>${row.approved_total}</td><td>${row.rejected_total}</td><td>${row.rework_total}</td><td>${fmtDateTime(row.completed_at)}</td><td>${row.development_pending?'<span class="badge orange">Pendente</span>':'<span class="badge green">Regular</span>'}</td></tr>`).join("")}</tbody>
+    <tbody>${rows.map((row)=>`<tr><td>Inspeção ${row.inspection_type}</td><td>${row.purchase_mode==="SALDO"?"Saldo":"Grade"}</td><td>${esc(routeLabel(row))}</td><td>${row.sample_target_total}</td><td>${row.approved_total}</td><td>${row.rejected_total}</td><td>${row.rework_total}</td><td>${fmtDateTime(row.completed_at)}</td><td>${row.development_pending?'<span class="badge orange">Pendente</span>':'<span class="badge green">Regular</span>'}</td></tr>`).join("")}</tbody>
   </table></div>`;
 }
 
