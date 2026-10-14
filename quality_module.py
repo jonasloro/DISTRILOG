@@ -69,11 +69,48 @@ def latest_receiving_sample(con: sqlite3.Connection, card_id: int, receiving_typ
 
 
 def require_completed_receiving_sample(con: sqlite3.Connection, card_id: int, receiving_type: str) -> sqlite3.Row:
-    """Require the latest receiving operation to contain a saved, completed 10% sample."""
+    """Require a persisted, completed 10% sample; recover the Card's state before blocking."""
     latest = latest_receiving_sample(con, card_id, receiving_type)
+    restore_error = None
     if not latest:
+        # SQLite may be missing an operational row even when it was persisted in Supabase.
+        # Restore only this Card's receiving state, rather than loading every Card's history.
+        try:
+            from supabase_module import restore_receiving_state_from_supabase
+
+            restore_receiving_state_from_supabase(con, card_id=card_id)
+            con.commit()
+            latest = latest_receiving_sample(con, card_id, receiving_type)
+        except Exception as exc:
+            con.rollback()
+            restore_error = str(exc)
+            print(
+                "[qualidade] falha ao restaurar Recebimento do Card {} no Supabase: {}".format(
+                    card_id, exc
+                )
+            )
+    if not latest:
+        existing_types = [
+            str(row["receiving_type"])
+            for row in con.execute(
+                "SELECT DISTINCT receiving_type FROM receivings WHERE card_id=? ORDER BY receiving_type",
+                (card_id,),
+            ).fetchall()
+        ]
+        details = (
+            " Foram encontrados registros de outro tipo: {}.".format(", ".join(existing_types))
+            if existing_types
+            else " Não existe registro correspondente no banco local nem foi possível recuperá-lo do Supabase."
+        )
+        if restore_error:
+            details += " A restauração automática falhou; verifique a conexão persistente do Supabase."
         con.close()
-        raise HTTPException(409, "Não existe registro de Recebimento do tipo {} para este Card. Restaure o registro do Recebimento antes de iniciar a inspeção.".format(receiving_type))
+        raise HTTPException(
+            409,
+            "Não existe registro de Recebimento do tipo {} para este Card. O sistema tentou restaurar os dados persistidos, mas não localizou um registro correspondente.{} A inspeção continua bloqueada para não inventar a quantidade dos 10%; restaure o recebimento original ou reabra o controle no setor Recebimento.".format(
+                receiving_type, details
+            ),
+        )
     if not latest["ten_percent_required"]:
         con.close()
         raise HTTPException(400, "O registro mais recente de Recebimento não está configurado para exigir a separação dos 10%.")

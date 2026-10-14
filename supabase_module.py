@@ -259,14 +259,40 @@ def sync_all_receiving_state_to_supabase(sqlite_con) -> None:
         con.commit()
 
 
-def restore_receiving_state_from_supabase(sqlite_con) -> int:
-    """Restore receiving state by stable identity while preserving local records on ID collisions."""
+def restore_receiving_state_from_supabase(
+    sqlite_con, card_id: int | None = None, receiving_type: str | None = None
+) -> int:
+    """Restore receiving state by stable identity while preserving local records on ID collisions.
+
+    When a specific Card is supplied, fetch only its receiving rows and timer events.
+    This supports on-demand recovery without loading the complete operational history.
+    """
+    if not os.getenv("SUPABASE_DATABASE_URL"):
+        return 0
     with pg_connect() as con:
         with con.cursor() as cur:
-            cur.execute("SELECT * FROM outlog_receivings ORDER BY id")
-            remote_receivings = cur.fetchall()
-            cur.execute("SELECT * FROM outlog_timer_events ORDER BY id")
-            remote_events = cur.fetchall()
+            if card_id is None:
+                cur.execute("SELECT * FROM outlog_receivings ORDER BY id")
+                remote_receivings = cur.fetchall()
+                cur.execute("SELECT * FROM outlog_timer_events ORDER BY id")
+                remote_events = cur.fetchall()
+            else:
+                query = "SELECT * FROM outlog_receivings WHERE card_id=%s"
+                params: tuple = (int(card_id),)
+                if receiving_type is not None:
+                    query += " AND receiving_type=%s"
+                    params += (receiving_type,)
+                cur.execute(query + " ORDER BY id", params)
+                remote_receivings = cur.fetchall()
+                receiving_ids = [int(row["id"]) for row in remote_receivings]
+                if receiving_ids:
+                    cur.execute(
+                        "SELECT * FROM outlog_timer_events WHERE receiving_id = ANY(%s) ORDER BY id",
+                        (receiving_ids,),
+                    )
+                    remote_events = cur.fetchall()
+                else:
+                    remote_events = []
 
     local_card_ids = {
         int(row["id"]) for row in sqlite_con.execute("SELECT id FROM cards").fetchall()
