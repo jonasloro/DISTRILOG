@@ -528,6 +528,45 @@ def allocation_status(card_id: int, setor: str) -> dict[str, Any]:
     }
 
 
+@router.get("/cards/{card_id}/locations")
+def card_locations(card_id: int) -> dict[str, Any]:
+    """Current active address allocations for a Card, including the special QA 10% sample."""
+    group_kind_sql = "CASE WHEN setor='QA' AND item_id IS NULL THEN 'AMOSTRA_10' WHEN item_id IS NULL THEN 'VOLUME' ELSE 'ITEM' END"
+    if not os.getenv("SUPABASE_DATABASE_URL"):
+        con = _local_db_connect()
+        try:
+            rows = con.execute(
+                f"""SELECT setor,address,SUM(quantidade) AS quantidade,{group_kind_sql} AS tipo
+                    FROM card_allocations WHERE card_id=?
+                    GROUP BY setor,address,{group_kind_sql}
+                    ORDER BY CASE setor WHEN 'RM' THEN 1 WHEN 'QA' THEN 2 WHEN 'PR' THEN 3
+                                         WHEN 'ET' THEN 4 WHEN 'EC' THEN 5 ELSE 9 END,address,tipo""",
+                (card_id,),
+            ).fetchall()
+            locations = [{"setor":str(row["setor"]),"address":str(row["address"]),
+                          "quantidade":int(row["quantidade"] or 0),"tipo":str(row["tipo"])} for row in rows]
+        finally:
+            con.close()
+        return {"card_id":card_id,"locations":locations}
+    try:
+        with pg_connect() as con:
+            with con.cursor() as cur:
+                cur.execute(
+                    f"""SELECT setor,address,SUM(quantidade) AS quantidade,{group_kind_sql} AS tipo
+                        FROM card_allocations WHERE card_id=%s
+                        GROUP BY setor,address,{group_kind_sql}
+                        ORDER BY CASE setor WHEN 'RM' THEN 1 WHEN 'QA' THEN 2 WHEN 'PR' THEN 3
+                                             WHEN 'ET' THEN 4 WHEN 'EC' THEN 5 ELSE 9 END,address,tipo""",
+                    (card_id,),
+                )
+                rows=cur.fetchall()
+                locations=[{"setor":str(row["setor"]),"address":str(row["address"]),
+                            "quantidade":int(row["quantidade"] or 0),"tipo":str(row["tipo"])} for row in rows]
+    except RuntimeError as exc:
+        raise HTTPException(503,f"Não foi possível consultar os endereços atuais: {exc}")
+    return {"card_id":card_id,"locations":locations}
+
+
 @router.get("/cards/{card_id}/trail")
 def card_trail(card_id: int) -> list[dict[str, Any]]:
     if not os.getenv("SUPABASE_DATABASE_URL"):
