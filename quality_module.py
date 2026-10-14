@@ -111,7 +111,6 @@ def require_completed_receiving_sample(con: sqlite3.Connection, card_id: int, re
                 receiving_type, details
             ),
         )
-
     if not latest["ten_percent_required"]:
         con.close()
         raise HTTPException(400, "O registro mais recente de Recebimento não está configurado para exigir a separação dos 10%.")
