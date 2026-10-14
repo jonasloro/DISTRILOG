@@ -33,6 +33,7 @@ from supabase_module import (
     sync_all_cards_to_supabase,
     sync_card_items_to_supabase,
     sync_all_receiving_state_to_supabase,
+    sync_receiving_card_state_to_supabase,
     delete_card_from_supabase,
 )
 
@@ -73,14 +74,6 @@ async def persist_card_state(request: Request, call_next):
                 sync_card_items_to_supabase(con, allocation_card_id)
             except Exception as e:
                 print(f"[aviso] não consegui sincronizar os itens do Card {allocation_card_id} antes da alocação: {e}")
-            try:
-                sync_all_receiving_state_to_supabase(con)
-            except Exception as e:
-                print(f"[erro] não consegui sincronizar o Recebimento antes da alocação do Card {allocation_card_id}: {e}")
-                return JSONResponse(
-                    status_code=503,
-                    content={"detail": "Não foi possível confirmar o status dos 10% no armazenamento persistente. Tente novamente."},
-                )
         except Exception as e:
             print(f"[erro] falha ao preparar a alocação do Card {allocation_card_id}: {e}")
             return JSONResponse(
@@ -102,10 +95,19 @@ async def persist_card_state(request: Request, call_next):
                 con,
                 include_items=request.url.path == "/api/import-excel",
             )
-            sync_all_receiving_state_to_supabase(con)
+            if request.url.path == "/api/import-excel":
+                # Imports can create Receiving controls before the operator opens a Card.
+                # Keep this bootstrap/creation path persisted; normal Receiving writes use
+                # targeted write-through before the API reports success.
+                sync_all_receiving_state_to_supabase(con)
             con.close()
         except Exception as e:
             print(f"[aviso] não consegui sincronizar cards com o Supabase: {e}")
+            if request.url.path == "/api/import-excel":
+                return JSONResponse(
+                    status_code=503,
+                    content={"detail": "A importação localizou os Cards, mas não foi possível confirmar seus controles de Recebimento no Supabase. Consulte o histórico antes de repetir a importação."},
+                )
     return response
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
@@ -681,9 +683,24 @@ def init_db() -> None:
         );
         """
     )
-    # Cards/itens persistidos no Supabase são restaurados antes das migrações
-    # de estado abaixo, para que Recebimento/Qualidade/Processamento encontrem
-    # a mesma base lógica após um redeploy.
+    # These Receiving migrations must exist before bootstrap restoration reads Supabase.
+    # Otherwise a fresh local SQLite file can lack columns/links needed to restore the
+    # authoritative remote Receiving record.
+    receiving_columns = {row["name"] for row in con.execute("PRAGMA table_info(receivings)").fetchall()}
+    if "source_subset" not in receiving_columns:
+        con.execute("ALTER TABLE receivings ADD COLUMN source_subset INTEGER NOT NULL DEFAULT 0")
+    con.execute(
+        """CREATE TABLE IF NOT EXISTS receiving_operation_items (
+            receiving_id INTEGER NOT NULL,
+            item_id INTEGER NOT NULL,
+            PRIMARY KEY(receiving_id,item_id),
+            FOREIGN KEY(receiving_id) REFERENCES receivings(id) ON DELETE CASCADE,
+            FOREIGN KEY(item_id) REFERENCES items(id) ON DELETE CASCADE
+        )"""
+    )
+
+    # Cards/items and Receiving state are restored from Supabase before the remaining
+    # migrations, so the durable record is available after a redeploy.
     try:
         persistence = bootstrap_card_persistence(con)
         if persistence.get("mode") == "restored":
