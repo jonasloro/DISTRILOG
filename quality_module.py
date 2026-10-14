@@ -18,6 +18,21 @@ router = APIRouter(prefix="/api", tags=["Qualidade"])
 
 QUALITY_ROLES = {"qualidade", "supervisor", "admin"}
 SUPERVISOR_ROLES = {"supervisor", "admin"}
+QUALITY_HISTORY_EVENT_TYPES = (
+    "RECEBIMENTO_RECUPERADO",
+    "TIPO_COMPRA_MANUAL",
+    "DESTINO_QUALIDADE_POR_REFERENCIA",
+    "DESENVOLVIMENTO",
+    "ATRIBUICAO_QUALIDADE_LOTE",
+    "ATRIBUICAO_QUALIDADE",
+    "ATRIBUICAO_DEVOLVIDA",
+    "ATRIBUICAO_TRANSFERIDA",
+    "RESULTADO_QUALIDADE",
+    "RESULTADO_QUALIDADE_LOTE",
+    "TEMPO_QUALIDADE",
+    "QUALIDADE_CONFIGURADA",
+    "INSPECAO_CONCLUIDA",
+)
 
 
 class QualitySQLiteConnection(sqlite3.Connection):
@@ -288,9 +303,16 @@ def add_history(
     description: str,
     user_id: Optional[int] = None,
 ) -> None:
-    con.execute(
+    created_at = iso_now()
+    cursor = con.execute(
         "INSERT INTO history(card_id,user_id,event_type,description,created_at) VALUES(?,?,?,?,?)",
-        (card_id, user_id, event_type, description, iso_now()),
+        (card_id, user_id, event_type, description, created_at),
+    )
+    con.execute(
+        """INSERT INTO quality_audit_events(
+               id,card_id,user_id,event_type,description,created_at
+           ) VALUES(?,?,?,?,?,?)""",
+        (cursor.lastrowid, card_id, user_id, event_type, description, created_at),
     )
 
 
@@ -418,6 +440,16 @@ def init_quality_db() -> None:
         );
         """
     )
+    con.execute(
+        """CREATE TABLE IF NOT EXISTS quality_audit_events (
+            id INTEGER PRIMARY KEY,
+            card_id INTEGER NOT NULL,
+            user_id INTEGER,
+            event_type TEXT NOT NULL,
+            description TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )"""
+    )
     inspection_columns = {row["name"] for row in con.execute("PRAGMA table_info(quality_inspections)").fetchall()}
     if "purchase_mode" not in inspection_columns:
         con.execute("ALTER TABLE quality_inspections ADD COLUMN purchase_mode TEXT NOT NULL DEFAULT 'GRADE'")
@@ -430,6 +462,20 @@ def init_quality_db() -> None:
     sample_columns = {row["name"] for row in con.execute("PRAGMA table_info(quality_sample_items)").fetchall()}
     if "sample_scope" not in sample_columns:
         con.execute("ALTER TABLE quality_sample_items ADD COLUMN sample_scope TEXT NOT NULL DEFAULT 'ITEM'")
+
+    # Migra eventos antigos da Qualidade para a tabela de auditoria dedicada.
+    event_marks = ",".join(["?"] * len(QUALITY_HISTORY_EVENT_TYPES))
+    legacy_events = con.execute(
+        "SELECT id,card_id,user_id,event_type,description,created_at FROM history WHERE event_type IN ({})".format(event_marks),
+        QUALITY_HISTORY_EVENT_TYPES,
+    ).fetchall()
+    for event in legacy_events:
+        con.execute(
+            """INSERT OR IGNORE INTO quality_audit_events(
+                   id,card_id,user_id,event_type,description,created_at
+               ) VALUES(?,?,?,?,?,?)""",
+            tuple(event[column] for column in ("id","card_id","user_id","event_type","description","created_at")),
+        )
     con.commit()
     con.close()
 
@@ -978,11 +1024,10 @@ async def create_inspection(card_id: int, request: Request):
             raise HTTPException(400, "O tipo da compra não foi reconhecido. Selecione Grade ou Saldo para continuar.")
         purchase_mode = manual_mode
         con.execute("UPDATE cards SET purchase_mode=?,updated_at=? WHERE id=?", (purchase_mode, iso_now(), card_id))
-        con.execute(
-            "INSERT INTO history(card_id,user_id,event_type,description,created_at) VALUES(?,?,?,?,?)",
-            (card_id, user_id, "TIPO_COMPRA_MANUAL",
-             f"{user['name']} informou manualmente o tipo da compra: {'Grade' if purchase_mode == 'GRADE' else 'Saldo'}.",
-             iso_now()),
+        add_history(
+            con, card_id, "TIPO_COMPRA_MANUAL",
+            f"{user['name']} informou manualmente o tipo da compra: {'Grade' if purchase_mode == 'GRADE' else 'Saldo'}.",
+            user_id,
         )
 
     existing = con.execute(
