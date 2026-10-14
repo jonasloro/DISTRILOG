@@ -200,6 +200,35 @@ def persist_receiving_then_commit(
     con.close()
 
 
+def refresh_receiving_operation(con: sqlite3.Connection, receiving_id: int) -> sqlite3.Row:
+    """Refresh one Receiving operation from Supabase before reading or mutating it."""
+    rec = con.execute(
+        "SELECT card_id FROM receivings WHERE id=?", (int(receiving_id),)
+    ).fetchone()
+    if not rec:
+        con.close()
+        raise HTTPException(404, "Recebimento não encontrado. Reabra o Card para carregar o registro persistido.")
+    card_id = int(rec["card_id"])
+    try:
+        restore_receiving_state_from_supabase(con, card_id=card_id)
+        con.commit()
+    except Exception as exc:
+        con.rollback()
+        con.close()
+        print("[erro] falha ao consultar Recebimento {} no Supabase: {}".format(receiving_id, exc))
+        raise HTTPException(
+            503,
+            "Não foi possível consultar o Recebimento atualizado no Supabase. A operação não foi executada; tente novamente.",
+        ) from exc
+    refreshed = con.execute(
+        "SELECT * FROM receivings WHERE id=? AND card_id=?", (int(receiving_id), card_id)
+    ).fetchone()
+    if not refreshed:
+        con.close()
+        raise HTTPException(404, "Este registro de Recebimento não existe mais. Reabra o Card para carregar o registro atualizado.")
+    return refreshed
+
+
 def normalize_text(value: Any) -> str:
     text = "" if value is None else str(value).strip()
     return "".join(
