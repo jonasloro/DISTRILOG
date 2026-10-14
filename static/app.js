@@ -423,8 +423,59 @@ async function setCardPurchaseMode(mode) {
   }
 }
 
+function cardLocationBannerHtml(rows, failed=false, loading=false, currentSector="") {
+  if (loading) {
+    return '<section class="card-location-banner" aria-label="Localização da mercadoria"><div class="card-location-heading"><span>LOCALIZAÇÃO DA MERCADORIA</span><small>Endereços físicos registrados</small></div><div class="card-location-empty"><span class="card-location-pulse"></span>Consultando endereços atuais…</div></section>';
+  }
+  if (failed) {
+    return '<section class="card-location-banner" aria-label="Localização da mercadoria"><div class="card-location-heading"><span>LOCALIZAÇÃO DA MERCADORIA</span><small>Endereços físicos registrados</small></div><div class="card-location-empty">Não foi possível carregar a localização agora. Os demais dados do Card continuam disponíveis.</div></section>';
+  }
+  const sectorLabels = {RM:"Recebimento / Matéria-prima",QA:"Qualidade",PR:"Processamento",ET:"Etiquetagem",EC:"Estocagem",QUALIDADE:"Qualidade"};
+  const locations = new Map();
+  (Array.isArray(rows) ? rows : []).forEach((row) => {
+    const sector = String(row.setor || "").trim().toUpperCase();
+    const address = String(row.address || "").trim();
+    const qty = Number(row.quantidade || 0);
+    if (!sector || !address || !Number.isFinite(qty) || qty <= 0) return;
+    const volumeOnly = row.item_id === null || row.item_id === undefined;
+    const sampleLocation = sector === "QA" && volumeOnly;
+    const label = address === "QUALIDADE (10%)"
+      ? "Amostra reservada na Qualidade"
+      : sampleLocation
+        ? "Amostra dos 10% · Qualidade"
+        : (sectorLabels[sector] || sector);
+    const unit = volumeOnly ? "volume(s)" : "peça(s)";
+    const key = [sector,address,label,unit].join("|");
+    const location = locations.get(key) || {sector,address,label,unit,quantity:0};
+    location.quantity += qty;
+    locations.set(key,location);
+  });
+  const priority = {QA:0,QUALIDADE:0,RM:1,RECEBIMENTO:1,PR:2,PROCESSAMENTO:2,ET:3,ETIQUETAGEM:3,EC:4,ESTOCAGEM:4};
+  const sectorMap = {RECEBIMENTO:"RM",QUALIDADE:"QA",PROCESSAMENTO:"PR",ETIQUETAGEM:"ET",ESTOCAGEM:"EC"};
+  const preferred = sectorMap[String(currentSector || "").toUpperCase()] || String(currentSector || "").toUpperCase();
+  const sorted = [...locations.values()].sort((a,b) => {
+    const ap = a.sector === preferred ? -1 : (priority[a.sector] ?? 9);
+    const bp = b.sector === preferred ? -1 : (priority[b.sector] ?? 9);
+    return ap-bp || a.address.localeCompare(b.address, "pt-BR");
+  });
+  const body = sorted.length
+    ? '<div class="card-location-addresses">' + sorted.map((location) =>
+        '<div class="card-location-address"><div class="card-location-address-main"><strong>' +
+          esc(location.address) + '</strong><span>' + esc(location.label) +
+        '</span></div><div class="card-location-quantity"><b>' +
+          Number(location.quantity).toLocaleString("pt-BR") + '</b><small>' + esc(location.unit) +
+        '</small></div></div>'
+      ).join("") + '</div>'
+    : '<div class="card-location-empty"><b>Endereçamento ainda não registrado</b><span>As posições da mercadoria aparecerão aqui assim que forem alocadas.</span></div>';
+  return '<section class="card-location-banner" aria-label="Localização da mercadoria"><div class="card-location-heading"><span>LOCALIZAÇÃO DA MERCADORIA</span><small>' +
+    (sorted.length ? sorted.length + ' localização(ões) física(s)' : 'Nenhum endereço registrado') +
+    '</small></div>' + body + '</section>';
+}
+
 async function openCard(cardId, tab = "receiving") {
   currentCardId = cardId;
+  const locationRequestId = Number(window.cardLocationRequestId || 0) + 1;
+  window.cardLocationRequestId = locationRequestId;
   window.qaSampleAllocationRequired = false;
   window.qaSampleAllocationComplete = true;
   cardData = await api(`/api/cards/${cardId}`);
@@ -466,6 +517,7 @@ async function openCard(cardId, tab = "receiving") {
     canOperateQuality();
   $("modalBody").innerHTML = `
     <div class="card-title"><div><h2>Card ${esc(cardDisplayName)}</h2><div class="card-subtitle">${esc(cardData.supplier||"—")} • ${esc(cardData.brand||"—")} • ${cardData.expected_total} peças</div></div><div class="card-title-actions"><span class="badge ${statusClass(cardData.status)}">${esc(cardData.status_label)}</span>${currentUser?.role==="admin"?`<button class="danger small-btn" onclick="deleteCard(${cardData.id})">Excluir Card</button>`:""}</div></div>
+    <div id="cardLocationSlot">${cardLocationBannerHtml(null,false,true)}</div>
     <div class="summary-grid">
       <div class="summary-box"><span>Setor atual</span><strong>${esc(cardData.current_sector)}</strong></div>
       <div class="summary-box"><span>Tipo de entrada</span><strong>${cardData.receiving_type === "RETORNO" ? "Retorno da Costura" : "Mercadoria nova"}</strong></div>
@@ -487,6 +539,19 @@ async function openCard(cardId, tab = "receiving") {
     </div>
     <div id="cardTab"></div>`;
   $("modal").classList.remove("hidden");
+  // Fetch physical locations without blocking the Card modal or its tabs.
+  apiWithTimeout(`/api/positions/cards/${cardId}/trail`, 8000)
+    .then((rows) => {
+      if (window.cardLocationRequestId !== locationRequestId || Number(currentCardId) !== Number(cardId)) return;
+      const slot = $("cardLocationSlot");
+      if (slot) slot.innerHTML = cardLocationBannerHtml(rows, false, false, cardData?.current_sector || "");
+    })
+    .catch((error) => {
+      if (window.cardLocationRequestId !== locationRequestId || Number(currentCardId) !== Number(cardId)) return;
+      const slot = $("cardLocationSlot");
+      if (slot) slot.innerHTML = cardLocationBannerHtml(null, true);
+      console.warn("Não foi possível consultar os endereços do Card:", error);
+    });
   if (tab === "casulo") renderCasuloTab();
   else if (tab === "quality") renderQualityTab();
   else if (tab === "processing") renderProcessingTab();
