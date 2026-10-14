@@ -1006,6 +1006,15 @@ def _move_ten_percent_sample_into_balance_local(card_id: int) -> dict[str, Any]:
             (card_id,),
         ).fetchall()
         if not samples:
+            previously_moved = con.execute(
+                """SELECT setor,address,SUM(quantidade) qty FROM card_allocations
+                   WHERE card_id=? AND setor IN ('RM','PR') AND allocation_purpose='TEN_PERCENT_SAMPLE'
+                   GROUP BY setor,address ORDER BY MAX(created_at) DESC,address LIMIT 1""",
+                (card_id,),
+            ).fetchone()
+            if previously_moved:
+                con.commit()
+                return {"sector": str(previously_moved["setor"]), "address": str(previously_moved["address"]), "quantity": int(previously_moved["qty"] or 0)}
             raise HTTPException(409, "A amostra dos 10% não está endereçada na Qualidade. Retorne ao Recebimento e confira o endereço da amostra antes de concluir.")
         sample_qty = sum(int(row["quantidade"] or 0) for row in samples)
         if sample_qty <= 0:
@@ -1067,6 +1076,16 @@ def move_ten_percent_sample_into_balance(card_id: int) -> dict[str, Any]:
         )
         samples = cur.fetchall()
         if not samples:
+            cur.execute(
+                """SELECT setor,address,SUM(quantidade) qty FROM card_allocations
+                   WHERE card_id=%s AND setor = ANY(%s) AND allocation_purpose='TEN_PERCENT_SAMPLE'
+                   GROUP BY setor,address ORDER BY MAX(created_at) DESC,address LIMIT 1""",
+                (card_id, ["RM", "PR"]),
+            )
+            previously_moved = cur.fetchone()
+            if previously_moved:
+                con.commit()
+                return {"sector": str(previously_moved["setor"]), "address": str(previously_moved["address"]), "quantity": int(previously_moved["qty"] or 0)}
             raise HTTPException(409, "A amostra dos 10% não está endereçada na Qualidade. Retorne ao Recebimento e confira o endereço da amostra antes de concluir.")
         sample_qty = sum(int(row["quantidade"] or 0) for row in samples)
         if sample_qty <= 0:
