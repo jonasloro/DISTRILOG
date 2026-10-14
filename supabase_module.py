@@ -536,37 +536,6 @@ def restore_receiving_state_from_supabase(
         )
         sqlite_con.execute("DELETE FROM timer_events WHERE id=?", (old_id,))
 
-    def merge_completed_sample(local_id: int, remote_row) -> int:
-        local_row = sqlite_con.execute("SELECT * FROM receivings WHERE id=?", (local_id,)).fetchone()
-        if not local_row:
-            return 0
-        remote_done = (
-            remote_row["ten_percent_status"] == "CONCLUIDA"
-            and int(remote_row["ten_percent_actual"] or 0) > 0
-        )
-        local_done = (
-            local_row["ten_percent_status"] == "CONCLUIDA"
-            and int(local_row["ten_percent_actual"] or 0) > 0
-        )
-        if remote_done and not local_done:
-            sqlite_con.execute(
-                """UPDATE receivings SET
-                   volumes=COALESCE(?,volumes),
-                   received_qty=COALESCE(?,received_qty),
-                   ten_percent_required=?,
-                   ten_percent_min=COALESCE(?,ten_percent_min),
-                   ten_percent_actual=?,
-                   ten_percent_status='CONCLUIDA'
-                   WHERE id=?""",
-                (
-                    remote_row["volumes"], remote_row["received_qty"],
-                    remote_row["ten_percent_required"], remote_row["ten_percent_min"],
-                    remote_row["ten_percent_actual"], local_id,
-                ),
-            )
-            return 1
-        return 0
-
     for row in remote_receivings:
         remote_id = int(row["id"])
         card_id = int(row["card_id"])
