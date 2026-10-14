@@ -59,7 +59,8 @@ def init_positions_db() -> None:
                         responsavel TEXT,
                         created_at TEXT NOT NULL,
                         item_id INTEGER,
-                        allocation_purpose TEXT NOT NULL DEFAULT 'STOCK'
+                        allocation_purpose TEXT NOT NULL DEFAULT 'STOCK',
+                        active BOOLEAN NOT NULL DEFAULT TRUE
                     );
                     CREATE INDEX IF NOT EXISTS idx_card_allocations_card ON card_allocations(card_id, setor);
                     """
@@ -69,6 +70,9 @@ def init_positions_db() -> None:
                 )
                 cur.execute(
                     "ALTER TABLE card_allocations ADD COLUMN IF NOT EXISTS allocation_purpose TEXT NOT NULL DEFAULT 'STOCK'"
+                )
+                cur.execute(
+                    "ALTER TABLE card_allocations ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT TRUE"
                 )
                 cur.execute(
                     """UPDATE card_allocations SET allocation_purpose='TEN_PERCENT_SAMPLE'
@@ -121,7 +125,7 @@ def list_positions(setor: str, zona: Optional[str] = None) -> list[dict[str, Any
                 sql = """SELECT p.address,p.setor,p.zona,p.casulo,p.nivel,
                          COALESCE(SUM(a.quantidade),0) AS ocupado
                          FROM sector_positions p
-                         LEFT JOIN card_allocations a ON a.address=p.address AND a.setor=p.setor
+                         LEFT JOIN card_allocations a ON a.address=p.address AND a.setor=p.setor AND a.active IS TRUE
                          WHERE p.setor=%s"""
                 args: list[Any] = [setor]
                 if zona:
@@ -190,7 +194,7 @@ def _global_allocated(cur, card_id: int) -> int:
     """Saldo dos volumes recebidos em RM + QA + PR, sem contar o bag extra da amostra."""
     cur.execute(
         """SELECT COALESCE(SUM(quantidade),0) t FROM card_allocations
-           WHERE card_id=%s AND setor = ANY(%s)
+           WHERE card_id=%s AND setor = ANY(%s) AND active IS TRUE
              AND COALESCE(allocation_purpose,'STOCK') <> 'TEN_PERCENT_SAMPLE'
              AND NOT (setor='QA' AND item_id IS NULL)""",
         (card_id, list(GLOBAL_ALLOCATION_SECTORS)),
@@ -259,7 +263,7 @@ def allocate(card_id: int, payload: dict[str, Any]) -> dict[str, Any]:
                     ten_percent_target = _ten_percent_volume_target(receiving["volumes"])
                     cur.execute(
                         """SELECT COALESCE(SUM(quantidade),0) total FROM card_allocations
-                           WHERE card_id=%s AND setor='QA' AND item_id IS NULL""",
+                           WHERE card_id=%s AND setor='QA' AND item_id IS NULL AND active IS TRUE""",
                         (card_id,),
                     )
                     ten_percent_allocated = int(cur.fetchone()["total"] or 0)
@@ -311,7 +315,7 @@ def allocate(card_id: int, payload: dict[str, Any]) -> dict[str, Any]:
                         sample_target = _ten_percent_volume_target(sample_receiving["volumes"])
                         cur.execute(
                             """SELECT COALESCE(SUM(quantidade),0) total FROM card_allocations
-                               WHERE card_id=%s AND setor='QA' AND item_id IS NULL""",
+                               WHERE card_id=%s AND setor='QA' AND item_id IS NULL AND active IS TRUE""",
                             (card_id,),
                         )
                         sample_allocated = int(cur.fetchone()["total"] or 0)
@@ -368,7 +372,7 @@ def allocate(card_id: int, payload: dict[str, Any]) -> dict[str, Any]:
                         cur.execute(
                             """SELECT COALESCE(SUM(quantidade),0) qty
                                FROM card_allocations
-                               WHERE card_id=%s AND setor=%s AND item_id=%s""",
+                               WHERE card_id=%s AND setor=%s AND active IS TRUE AND item_id=%s""",
                             (card_id, setor, item_id),
                         )
                         already = int(cur.fetchone()["qty"] or 0)
@@ -404,7 +408,7 @@ def allocation_status(card_id: int, setor: str) -> dict[str, Any]:
                 cur.execute(
                     """SELECT address,SUM(quantidade) qty
                        FROM card_allocations
-                       WHERE card_id=%s AND setor=%s
+                       WHERE card_id=%s AND setor=%s AND active IS TRUE
                        GROUP BY address
                        ORDER BY address""",
                     (card_id, setor),
@@ -416,7 +420,7 @@ def allocation_status(card_id: int, setor: str) -> dict[str, Any]:
                               i.product,i.reference,i.sku,i.color,i.size,i.expected_qty
                        FROM card_allocations a
                        LEFT JOIN outlog_items i ON i.id=a.item_id
-                       WHERE a.card_id=%s AND a.setor=%s
+                       WHERE a.card_id=%s AND a.setor=%s AND a.active IS TRUE
                        GROUP BY a.item_id,i.product,i.reference,i.sku,i.color,i.size,i.expected_qty
                        ORDER BY i.product,i.reference,i.color,i.size,a.item_id""",
                     (card_id, setor),
@@ -426,7 +430,7 @@ def allocation_status(card_id: int, setor: str) -> dict[str, Any]:
                 cur.execute(
                     """SELECT item_id,address,SUM(quantidade) qty
                        FROM card_allocations
-                       WHERE card_id=%s AND setor=%s AND item_id IS NOT NULL
+                       WHERE card_id=%s AND setor=%s AND active IS TRUE AND item_id IS NOT NULL
                        GROUP BY item_id,address
                        ORDER BY item_id,address""",
                     (card_id, setor),
@@ -436,7 +440,7 @@ def allocation_status(card_id: int, setor: str) -> dict[str, Any]:
                 cur.execute(
                     """SELECT COALESCE(SUM(quantidade),0) total
                        FROM card_allocations
-                       WHERE card_id=%s AND setor IN (%s,%s,%s)
+                       WHERE card_id=%s AND setor IN (%s,%s,%s) AND active IS TRUE
                          AND COALESCE(allocation_purpose,'STOCK') <> 'TEN_PERCENT_SAMPLE'
                          AND NOT (setor='QA' AND item_id IS NULL)""",
                     (card_id, *GLOBAL_ALLOCATION_SECTORS),
@@ -444,7 +448,7 @@ def allocation_status(card_id: int, setor: str) -> dict[str, Any]:
                 global_total = int(cur.fetchone()["total"] or 0)
                 cur.execute(
                     """SELECT COALESCE(SUM(quantidade),0) total FROM card_allocations
-                       WHERE card_id=%s AND setor='QA' AND item_id IS NULL""",
+                       WHERE card_id=%s AND setor='QA' AND item_id IS NULL AND active IS TRUE""",
                     (card_id,),
                 )
                 ten_percent_sample_allocated = int(cur.fetchone()["total"] or 0)
@@ -455,7 +459,7 @@ def allocation_status(card_id: int, setor: str) -> dict[str, Any]:
                        FROM card_allocations a
                        LEFT JOIN outlog_items i ON i.id=a.item_id
                        WHERE a.card_id=%s
-                         AND a.setor IN (%s,%s,%s)
+                         AND a.setor IN (%s,%s,%s) AND a.active IS TRUE
                          AND a.item_id IS NOT NULL
                        GROUP BY a.item_id,i.product,i.reference,i.sku,i.color,i.size,i.expected_qty
                        ORDER BY i.product,i.reference,i.color,i.size,a.item_id""",
@@ -466,7 +470,7 @@ def allocation_status(card_id: int, setor: str) -> dict[str, Any]:
                 cur.execute(
                     """SELECT setor,COALESCE(SUM(quantidade),0) qty
                        FROM card_allocations
-                       WHERE card_id=%s AND setor = ANY(%s)
+                       WHERE card_id=%s AND setor = ANY(%s) AND active IS TRUE
                          AND COALESCE(allocation_purpose,'STOCK') <> 'TEN_PERCENT_SAMPLE'
                          AND NOT (setor='QA' AND item_id IS NULL)
                        GROUP BY setor""",
@@ -550,7 +554,7 @@ def card_trail(card_id: int) -> list[dict[str, Any]]:
         with pg_connect() as con:
             with con.cursor() as cur:
                 cur.execute(
-                    """SELECT a.setor,a.address,a.quantidade,a.responsavel,a.created_at,a.item_id,a.allocation_purpose,
+                    """SELECT a.setor,a.address,a.quantidade,a.responsavel,a.created_at,a.item_id,a.allocation_purpose,a.active,a.active,
                               i.product,i.reference,i.sku,i.color,i.size
                        FROM card_allocations a
                        LEFT JOIN outlog_items i ON i.id=a.item_id
@@ -580,7 +584,7 @@ def item_allocation_totals(card_id: int, setor: str = "RM") -> dict[int, int]:
                 cur.execute(
                     """SELECT item_id,COALESCE(SUM(quantidade),0) qty
                        FROM card_allocations
-                       WHERE card_id=%s AND setor = ANY(%s) AND item_id IS NOT NULL
+                       WHERE card_id=%s AND setor = ANY(%s) AND item_id IS NOT NULL AND active IS TRUE
                        GROUP BY item_id""",
                     (card_id, _sector_scope(setor)),
                 )
@@ -602,7 +606,7 @@ def total_allocated(setor: str, card_id: int) -> int:
             with con.cursor() as cur:
                 cur.execute(
                     """SELECT COALESCE(SUM(quantidade),0) t FROM card_allocations
-                       WHERE card_id=%s AND setor = ANY(%s)
+                       WHERE card_id=%s AND setor = ANY(%s) AND active IS TRUE
                          AND COALESCE(allocation_purpose,'STOCK') <> 'TEN_PERCENT_SAMPLE'
                          AND NOT (setor='QA' AND item_id IS NULL)""",
                     (card_id, _sector_scope(setor)),
@@ -618,11 +622,11 @@ def release_card_allocations(card_id: int, keep_quality_qty: int = 0) -> int:
     """Libera o endereço do card quando a produção começa. Os 10% ficam na Qualidade
     (registrados no setor QUALIDADE); o restante sai do endereço original."""
     with pg_connect() as conn, conn.cursor() as cur:
-        cur.execute("SELECT COALESCE(SUM(quantidade),0) t FROM card_allocations WHERE card_id=%s AND setor<>'QUALIDADE'", (card_id,))
+        cur.execute("SELECT COALESCE(SUM(quantidade),0) t FROM card_allocations WHERE card_id=%s AND setor<>'QUALIDADE' AND active IS TRUE", (card_id,))
         total = int(cur.fetchone()["t"] or 0)
         if total <= 0:
             return 0
-        cur.execute("DELETE FROM card_allocations WHERE card_id=%s AND setor<>'QUALIDADE'", (card_id,))
+        cur.execute("UPDATE card_allocations SET active=FALSE WHERE card_id=%s AND setor<>'QUALIDADE' AND active IS TRUE", (card_id,))
         keep = max(0, min(int(keep_quality_qty or 0), total))
         if keep:
             cur.execute(
@@ -666,7 +670,8 @@ def _init_local_positions_db() -> None:
                 responsavel TEXT,
                 created_at TEXT NOT NULL,
                 item_id INTEGER,
-                allocation_purpose TEXT NOT NULL DEFAULT 'STOCK'
+                allocation_purpose TEXT NOT NULL DEFAULT 'STOCK',
+                active INTEGER NOT NULL DEFAULT 1
             );
             CREATE INDEX IF NOT EXISTS idx_card_allocations_card ON card_allocations(card_id,setor);
             CREATE INDEX IF NOT EXISTS idx_card_allocations_item ON card_allocations(item_id,setor,address);
@@ -674,6 +679,8 @@ def _init_local_positions_db() -> None:
         allocation_columns = {row["name"] for row in con.execute("PRAGMA table_info(card_allocations)").fetchall()}
         if "allocation_purpose" not in allocation_columns:
             con.execute("ALTER TABLE card_allocations ADD COLUMN allocation_purpose TEXT NOT NULL DEFAULT 'STOCK'")
+        if "active" not in allocation_columns:
+            con.execute("ALTER TABLE card_allocations ADD COLUMN active INTEGER NOT NULL DEFAULT 1")
         con.execute(
             """UPDATE card_allocations SET allocation_purpose='TEN_PERCENT_SAMPLE'
                WHERE setor='QA' AND item_id IS NULL AND allocation_purpose='STOCK'"""
@@ -695,8 +702,8 @@ def _list_positions_local(setor: str, zona: Optional[str] = None) -> list[dict[s
     try:
         sql="""SELECT p.address,p.setor,p.zona,p.casulo,p.nivel,COALESCE(SUM(a.quantidade),0) AS ocupado
                FROM sector_positions p LEFT JOIN card_allocations a
-                 ON a.address=p.address AND a.setor=p.setor
-               WHERE p.setor=?"""
+                 ON a.address=p.address AND a.setor=p.setor AND a.active=1
+                WHERE p.setor=?"""
         args: list[Any]=[setor]
         if zona:
             sql+=" AND p.zona=?"; args.append(str(zona))
@@ -726,7 +733,7 @@ def _local_card_volumes(con: sqlite3.Connection, card_id: int, receiving_id: Opt
 def _local_global_allocated(con: sqlite3.Connection, card_id: int) -> int:
     marks=",".join("?" for _ in GLOBAL_ALLOCATION_SECTORS)
     row=con.execute(f"""SELECT COALESCE(SUM(quantidade),0) total FROM card_allocations
-                         WHERE card_id=? AND setor IN ({marks})
+                         WHERE card_id=? AND setor IN ({marks}) AND active=1
                            AND COALESCE(allocation_purpose,'STOCK') <> 'TEN_PERCENT_SAMPLE'
                            AND NOT (setor='QA' AND item_id IS NULL)""",
                     (card_id,*GLOBAL_ALLOCATION_SECTORS)).fetchone()
@@ -767,7 +774,7 @@ def _allocate_local(card_id: int, payload: dict[str, Any]) -> dict[str, Any]:
                 raise HTTPException(400,"A alocação especial dos 10% está disponível somente para recebimentos que exigem amostra.")
             ten_percent_target=_ten_percent_volume_target(receiving["volumes"])
             ten_percent_allocated=int(con.execute(
-                "SELECT COALESCE(SUM(quantidade),0) total FROM card_allocations WHERE card_id=? AND setor='QA' AND item_id IS NULL",
+                "SELECT COALESCE(SUM(quantidade),0) total FROM card_allocations WHERE card_id=? AND setor='QA' AND item_id IS NULL AND active=1",
                 (card_id,),
             ).fetchone()["total"] or 0)
             if is_ten_percent_sample:
@@ -802,7 +809,7 @@ def _allocate_local(card_id: int, payload: dict[str, Any]) -> dict[str, Any]:
             if sample_receiving and sample_receiving["receiving_type"] in {"NOVA","RETORNO"} and sample_receiving["ten_percent_required"]:
                 sample_target=_ten_percent_volume_target(sample_receiving["volumes"])
                 sample_allocated=int(con.execute(
-                    "SELECT COALESCE(SUM(quantidade),0) total FROM card_allocations WHERE card_id=? AND setor='QA' AND item_id IS NULL",
+                    "SELECT COALESCE(SUM(quantidade),0) total FROM card_allocations WHERE card_id=? AND setor='QA' AND item_id IS NULL AND active=1",
                     (card_id,),
                 ).fetchone()["total"] or 0)
                 if sample_receiving["ten_percent_status"]!="CONCLUIDA" or sample_target<=0:
@@ -841,7 +848,7 @@ def _allocate_local(card_id: int, payload: dict[str, Any]) -> dict[str, Any]:
                     raise HTTPException(400,f"Saldo insuficiente: o Card tem {volumes} volume(s), {global_total} já alocado(s) (RM + QA + PR) e restam {remaining}.")
                 global_total+=qty
             else:
-                row=con.execute("SELECT COALESCE(SUM(quantidade),0) total FROM card_allocations WHERE card_id=? AND setor=? AND item_id=?",
+                row=con.execute("SELECT COALESCE(SUM(quantidade),0) total FROM card_allocations WHERE card_id=? AND setor=? AND active=1 AND item_id=?",
                                 (card_id,setor,item_id)).fetchone()
                 already=int(row["total"] or 0); expected=int(item["expected_qty"] or 0)
                 if already+qty>expected:
@@ -861,28 +868,28 @@ def _allocate_local(card_id: int, payload: dict[str, Any]) -> dict[str, Any]:
 def _allocation_status_local(card_id: int, setor: str) -> dict[str, Any]:
     setor=str(setor or "").upper(); con=_local_db_connect()
     try:
-        rows=con.execute("SELECT address,SUM(quantidade) qty FROM card_allocations WHERE card_id=? AND setor=? GROUP BY address ORDER BY address",
+        rows=con.execute("SELECT address,SUM(quantidade) qty FROM card_allocations WHERE card_id=? AND setor=? AND active=1 GROUP BY address ORDER BY address",
                          (card_id,setor)).fetchall()
         items=con.execute("""SELECT a.item_id,SUM(a.quantidade) qty,i.product,i.reference,i.sku,i.color,i.size,i.expected_qty
                              FROM card_allocations a LEFT JOIN items i ON i.id=a.item_id
                              WHERE a.card_id=? AND a.setor=? GROUP BY a.item_id,i.product,i.reference,i.sku,i.color,i.size,i.expected_qty
                              ORDER BY i.product,i.reference,i.color,i.size,a.item_id""",(card_id,setor)).fetchall()
-        item_positions=con.execute("SELECT item_id,address,SUM(quantidade) qty FROM card_allocations WHERE card_id=? AND setor=? AND item_id IS NOT NULL GROUP BY item_id,address ORDER BY item_id,address",
+        item_positions=con.execute("SELECT item_id,address,SUM(quantidade) qty FROM card_allocations WHERE card_id=? AND setor=? AND active=1 AND item_id IS NOT NULL GROUP BY item_id,address ORDER BY item_id,address",
                                     (card_id,setor)).fetchall()
         global_total=_local_global_allocated(con,card_id)
         ten_percent_sample_allocated=int(con.execute(
-            "SELECT COALESCE(SUM(quantidade),0) total FROM card_allocations WHERE card_id=? AND setor='QA' AND item_id IS NULL",
+            "SELECT COALESCE(SUM(quantidade),0) total FROM card_allocations WHERE card_id=? AND setor='QA' AND item_id IS NULL AND active=1",
             (card_id,),
         ).fetchone()["total"] or 0)
         marks=",".join("?" for _ in GLOBAL_ALLOCATION_SECTORS)
         global_items=con.execute(f"""SELECT a.item_id,SUM(a.quantidade) qty,i.product,i.reference,i.sku,i.color,i.size,i.expected_qty
                                      FROM card_allocations a LEFT JOIN items i ON i.id=a.item_id
-                                     WHERE a.card_id=? AND a.setor IN ({marks}) AND a.item_id IS NOT NULL
+                                     WHERE a.card_id=? AND a.setor IN ({marks}) AND a.active=1 AND a.item_id IS NOT NULL
                                      GROUP BY a.item_id,i.product,i.reference,i.sku,i.color,i.size,i.expected_qty
                                      ORDER BY i.product,i.reference,i.color,i.size,a.item_id""",
                                  (card_id,*GLOBAL_ALLOCATION_SECTORS)).fetchall()
         by_sector=con.execute(f"""SELECT setor,COALESCE(SUM(quantidade),0) qty FROM card_allocations
-                                  WHERE card_id=? AND setor IN ({marks})
+                                  WHERE card_id=? AND setor IN ({marks}) AND active=1
                                     AND COALESCE(allocation_purpose,'STOCK') <> 'TEN_PERCENT_SAMPLE'
                                     AND NOT (setor='QA' AND item_id IS NULL)
                                   GROUP BY setor""",
@@ -915,7 +922,7 @@ def _allocation_status_local(card_id: int, setor: str) -> dict[str, Any]:
 def _card_trail_local(card_id: int) -> list[dict[str, Any]]:
     con=_local_db_connect()
     try:
-        rows=con.execute("""SELECT a.setor,a.address,a.quantidade,a.responsavel,a.created_at,a.item_id,a.allocation_purpose,
+        rows=con.execute("""SELECT a.setor,a.address,a.quantidade,a.responsavel,a.created_at,a.item_id,a.allocation_purpose,a.active,a.active,
                                    i.product,i.reference,i.sku,i.color,i.size
                             FROM card_allocations a LEFT JOIN items i ON i.id=a.item_id
                             WHERE a.card_id=? ORDER BY a.created_at,a.id""",(card_id,)).fetchall()
@@ -926,7 +933,7 @@ def _card_trail_local(card_id: int) -> list[dict[str, Any]]:
 def _item_allocation_totals_local(card_id: int, setor: str = "RM") -> dict[int, int]:
     sectors=_sector_scope(setor); marks=",".join("?" for _ in sectors); con=_local_db_connect()
     try:
-        rows=con.execute(f"SELECT item_id,COALESCE(SUM(quantidade),0) qty FROM card_allocations WHERE card_id=? AND setor IN ({marks}) AND item_id IS NOT NULL GROUP BY item_id",
+        rows=con.execute(f"SELECT item_id,COALESCE(SUM(quantidade),0) qty FROM card_allocations WHERE card_id=? AND setor IN ({marks}) AND item_id IS NOT NULL AND active=1 GROUP BY item_id",
                          (card_id,*sectors)).fetchall()
         return {int(r["item_id"]):int(r["qty"] or 0) for r in rows}
     finally: con.close()
@@ -936,7 +943,7 @@ def _total_allocated_local(setor: str, card_id: int) -> int:
     sectors=_sector_scope(setor); marks=",".join("?" for _ in sectors); con=_local_db_connect()
     try:
         row=con.execute(f"""SELECT COALESCE(SUM(quantidade),0) total FROM card_allocations
-                             WHERE card_id=? AND setor IN ({marks})
+                             WHERE card_id=? AND setor IN ({marks}) AND active=1
                                AND COALESCE(allocation_purpose,'STOCK') <> 'TEN_PERCENT_SAMPLE'
                                AND NOT (setor='QA' AND item_id IS NULL)""",
                         (card_id,*sectors)).fetchone()
@@ -952,7 +959,7 @@ def total_volume_only_allocated(setor: str, card_id: int) -> int:
         try:
             row = con.execute(
                 """SELECT COALESCE(SUM(quantidade),0) total FROM card_allocations
-                   WHERE card_id=? AND setor=? AND item_id IS NULL""",
+                   WHERE card_id=? AND setor=? AND active=1 AND item_id IS NULL""",
                 (card_id, setor),
             ).fetchone()
             return int(row["total"] or 0)
@@ -963,7 +970,7 @@ def total_volume_only_allocated(setor: str, card_id: int) -> int:
             with con.cursor() as cur:
                 cur.execute(
                     """SELECT COALESCE(SUM(quantidade),0) total FROM card_allocations
-                       WHERE card_id=%s AND setor=%s AND item_id IS NULL""",
+                       WHERE card_id=%s AND setor=%s AND active IS TRUE AND item_id IS NULL""",
                     (card_id, setor),
                 )
                 return int(cur.fetchone()["total"] or 0)
@@ -975,10 +982,10 @@ def _release_card_allocations_local(card_id: int, keep_quality_qty: int = 0) -> 
     con=_local_db_connect()
     try:
         con.execute("BEGIN IMMEDIATE")
-        row=con.execute("SELECT COALESCE(SUM(quantidade),0) total FROM card_allocations WHERE card_id=? AND setor<>'QUALIDADE'",(card_id,)).fetchone()
+        row=con.execute("SELECT COALESCE(SUM(quantidade),0) total FROM card_allocations WHERE card_id=? AND setor<>'QUALIDADE' AND active=1",(card_id,)).fetchone()
         total=int(row["total"] or 0)
         if total<=0: con.commit(); return 0
-        con.execute("DELETE FROM card_allocations WHERE card_id=? AND setor<>'QUALIDADE'",(card_id,))
+        con.execute("UPDATE card_allocations SET active=0 WHERE card_id=? AND setor<>'QUALIDADE' AND active=1",(card_id,))
         keep=max(0,min(int(keep_quality_qty or 0),total))
         if keep:
             con.execute("INSERT INTO card_allocations(card_id,setor,address,quantidade,responsavel,created_at,allocation_purpose) VALUES(?,?,?,?,?,?,?)",
@@ -1001,7 +1008,7 @@ def total_ten_percent_sample_in_balance(card_id: int) -> int:
             row = con.execute(
                 """SELECT COALESCE(SUM(quantidade),0) total FROM card_allocations
                    WHERE card_id=? AND setor IN ('RM','PR') AND item_id IS NULL
-                     AND allocation_purpose='TEN_PERCENT_SAMPLE'""",
+                     AND active=1 AND allocation_purpose='TEN_PERCENT_SAMPLE'""",
                 (card_id,),
             ).fetchone()
             return int(row["total"] or 0)
@@ -1013,7 +1020,7 @@ def total_ten_percent_sample_in_balance(card_id: int) -> int:
                 cur.execute(
                     """SELECT COALESCE(SUM(quantidade),0) total FROM card_allocations
                        WHERE card_id=%s AND setor = ANY(%s) AND item_id IS NULL
-                         AND allocation_purpose='TEN_PERCENT_SAMPLE'""",
+                         AND active IS TRUE AND allocation_purpose='TEN_PERCENT_SAMPLE'""",
                     (card_id, ["RM", "PR"]),
                 )
                 return int(cur.fetchone()["total"] or 0)
@@ -1029,7 +1036,7 @@ def _move_ten_percent_sample_into_balance_local(card_id: int) -> dict[str, Any]:
             raise HTTPException(404, "Card não encontrado.")
         samples = con.execute(
             """SELECT id,quantidade FROM card_allocations
-               WHERE card_id=? AND setor='QA' AND item_id IS NULL
+               WHERE card_id=? AND setor='QA' AND item_id IS NULL AND active=1
                  AND allocation_purpose='TEN_PERCENT_SAMPLE'
                ORDER BY created_at,id""",
             (card_id,),
@@ -1037,7 +1044,7 @@ def _move_ten_percent_sample_into_balance_local(card_id: int) -> dict[str, Any]:
         if not samples:
             previously_moved = con.execute(
                 """SELECT setor,address,SUM(quantidade) qty FROM card_allocations
-                   WHERE card_id=? AND setor IN ('RM','PR') AND allocation_purpose='TEN_PERCENT_SAMPLE'
+                   WHERE card_id=? AND setor IN ('RM','PR') AND active=1 AND allocation_purpose='TEN_PERCENT_SAMPLE'
                    GROUP BY setor,address ORDER BY MAX(created_at) DESC,address LIMIT 1""",
                 (card_id,),
             ).fetchone()
@@ -1050,7 +1057,7 @@ def _move_ten_percent_sample_into_balance_local(card_id: int) -> dict[str, Any]:
             raise HTTPException(409, "A amostra dos 10% não possui uma quantidade física válida para movimentar.")
         destination = con.execute(
             """SELECT address,SUM(quantidade) qty FROM card_allocations
-               WHERE card_id=? AND setor='RM' AND item_id IS NULL
+               WHERE card_id=? AND setor='RM' AND item_id IS NULL AND active=1
                  AND COALESCE(allocation_purpose,'STOCK') <> 'TEN_PERCENT_SAMPLE'
                GROUP BY address HAVING SUM(quantidade)>0
                ORDER BY SUM(quantidade) DESC,address LIMIT 1""",
@@ -1060,7 +1067,7 @@ def _move_ten_percent_sample_into_balance_local(card_id: int) -> dict[str, Any]:
         if not destination:
             destination = con.execute(
                 """SELECT address,SUM(quantidade) qty FROM card_allocations
-                   WHERE card_id=? AND setor='PR'
+                   WHERE card_id=? AND setor='PR' AND active=1
                      AND COALESCE(allocation_purpose,'STOCK') <> 'TEN_PERCENT_SAMPLE'
                    GROUP BY address HAVING SUM(quantidade)>0
                    ORDER BY SUM(quantidade) DESC,address LIMIT 1""",
@@ -1071,7 +1078,7 @@ def _move_ten_percent_sample_into_balance_local(card_id: int) -> dict[str, Any]:
             raise HTTPException(409, "Não foi encontrado um endereço do saldo em RM ou PR. Enderece o saldo do Card no Recebimento antes de concluir; a amostra será reunida automaticamente ao saldo nesse endereço.")
         sample_ids = [int(row["id"]) for row in samples]
         marks = ",".join("?" for _ in sample_ids)
-        con.execute(f"DELETE FROM card_allocations WHERE card_id=? AND id IN ({marks})", (card_id, *sample_ids))
+        con.execute(f"UPDATE card_allocations SET active=0 WHERE card_id=? AND id IN ({marks}) AND active=1", (card_id, *sample_ids))
         address = str(destination["address"])
         con.execute(
             """INSERT INTO card_allocations(
@@ -1098,7 +1105,7 @@ def move_ten_percent_sample_into_balance(card_id: int) -> dict[str, Any]:
         _card_or_404(cur, card_id, lock=True)
         cur.execute(
             """SELECT id,quantidade FROM card_allocations
-               WHERE card_id=%s AND setor='QA' AND item_id IS NULL
+               WHERE card_id=%s AND setor='QA' AND item_id IS NULL AND active IS TRUE
                  AND allocation_purpose='TEN_PERCENT_SAMPLE'
                ORDER BY created_at,id FOR UPDATE""",
             (card_id,),
@@ -1107,7 +1114,7 @@ def move_ten_percent_sample_into_balance(card_id: int) -> dict[str, Any]:
         if not samples:
             cur.execute(
                 """SELECT setor,address,SUM(quantidade) qty FROM card_allocations
-                   WHERE card_id=%s AND setor = ANY(%s) AND allocation_purpose='TEN_PERCENT_SAMPLE'
+                   WHERE card_id=%s AND setor = ANY(%s) AND active IS TRUE AND allocation_purpose='TEN_PERCENT_SAMPLE'
                    GROUP BY setor,address ORDER BY MAX(created_at) DESC,address LIMIT 1""",
                 (card_id, ["RM", "PR"]),
             )
@@ -1121,7 +1128,7 @@ def move_ten_percent_sample_into_balance(card_id: int) -> dict[str, Any]:
             raise HTTPException(409, "A amostra dos 10% não possui uma quantidade física válida para movimentar.")
         cur.execute(
             """SELECT address,SUM(quantidade) qty FROM card_allocations
-               WHERE card_id=%s AND setor='RM' AND item_id IS NULL
+               WHERE card_id=%s AND setor='RM' AND item_id IS NULL AND active IS TRUE
                  AND COALESCE(allocation_purpose,'STOCK') <> 'TEN_PERCENT_SAMPLE'
                GROUP BY address HAVING SUM(quantidade)>0
                ORDER BY SUM(quantidade) DESC,address LIMIT 1""",
@@ -1132,7 +1139,7 @@ def move_ten_percent_sample_into_balance(card_id: int) -> dict[str, Any]:
         if not destination:
             cur.execute(
                 """SELECT address,SUM(quantidade) qty FROM card_allocations
-                   WHERE card_id=%s AND setor='PR'
+                   WHERE card_id=%s AND setor='PR' AND active IS TRUE
                      AND COALESCE(allocation_purpose,'STOCK') <> 'TEN_PERCENT_SAMPLE'
                    GROUP BY address HAVING SUM(quantidade)>0
                    ORDER BY SUM(quantidade) DESC,address LIMIT 1""",
@@ -1143,7 +1150,7 @@ def move_ten_percent_sample_into_balance(card_id: int) -> dict[str, Any]:
         if not destination:
             raise HTTPException(409, "Não foi encontrado um endereço do saldo em RM ou PR. Enderece o saldo do Card no Recebimento antes de concluir; a amostra será reunida automaticamente ao saldo nesse endereço.")
         sample_ids = [int(row["id"]) for row in samples]
-        cur.execute("DELETE FROM card_allocations WHERE card_id=%s AND id = ANY(%s)", (card_id, sample_ids))
+        cur.execute("UPDATE card_allocations SET active=FALSE WHERE card_id=%s AND id = ANY(%s) AND active IS TRUE", (card_id, sample_ids))
         address = str(destination["address"])
         cur.execute(
             """INSERT INTO card_allocations(

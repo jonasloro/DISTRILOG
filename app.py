@@ -217,10 +217,14 @@ def iso_now() -> str:
 def persist_receiving_then_commit(
     con: sqlite3.Connection, card_id: int, failure_message: str,
     sync_item_ids: list[int] | None = None,
+    release_stock_allocations: bool = False,
 ) -> None:
     """Persist Receiving to Supabase first; only then commit the local working copy."""
     try:
-        sync_receiving_card_state_to_supabase(con, card_id, sync_item_ids=sync_item_ids)
+        sync_receiving_card_state_to_supabase(
+            con, card_id, sync_item_ids=sync_item_ids,
+            release_stock_allocations=release_stock_allocations,
+        )
     except Exception as exc:
         con.rollback()
         con.close()
@@ -2404,10 +2408,18 @@ async def complete_dispatch(card_id: int, request: Request):
         (next_sector, next_status, "COSTURA" if destination == "CD01" else card["receiving_type"], iso_now(), card_id),
     )
     add_history(con, card_id, "DESPACHO_COSTURA", description, user_id)
+    # A mercadoria saiu fisicamente dos endereços internos. Preserve a trilha,
+    # mas deixe de contar essas alocações no saldo disponível após o despacho.
+    con.execute(
+        """UPDATE card_allocations SET active=0
+           WHERE card_id=? AND active=1 AND setor IN ('RM','QA','PR')""",
+        (card_id,),
+    )
     persist_receiving_then_commit(
         con, card_id,
         "O despacho não foi confirmado no armazenamento persistente. Tente novamente.",
         sync_item_ids=item_ids,
+        release_stock_allocations=True,
     )
     return {"ok": True, "next_status": next_status, "item_ids": item_ids}
 
