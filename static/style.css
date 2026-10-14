@@ -875,3 +875,21 @@ input:disabled,select:disabled,textarea:disabled{
 .quality-grade-table tbody tr:hover .quality-color-group{
   background:#332a23;
 }
+
+
+/* Qualidade: resultados por SKU em lote */
+.quality-results-wrap{max-width:100%;max-height:62vh;overflow:auto;border:1px solid var(--border);border-radius:8px}
+.quality-results-table{min-width:1400px;font-size:10px}
+.quality-results-table thead{position:sticky;top:0;z-index:4}
+.quality-results-table th{white-space:nowrap;padding:8px}
+.quality-results-table td{vertical-align:top;padding:7px;min-width:70px}
+.quality-results-table td:first-child{min-width:190px}
+.quality-results-table td small{display:block;color:var(--muted);font-size:10px;margin-top:3px}
+.quality-results-table .quality-result-qty{width:68px;min-width:68px}
+.quality-results-table .quality-result-text{width:160px;min-width:160px}
+.quality-results-table .quality-result-observation{width:185px;min-width:185px;min-height:54px;resize:vertical}
+.quality-result-actions{display:flex;flex-direction:column;align-items:flex-start;gap:5px;min-width:105px}
+.quality-evidence-upload{display:inline-block;padding:7px 9px;cursor:pointer;border-radius:6px;font-weight:700}
+.quality-manage-details summary{cursor:pointer;color:var(--blue);font-weight:700;padding:5px 0}
+.quality-manage-details select,.quality-manage-details input{display:block;width:145px;max-width:100%;margin:5px 0;padding:7px;border:1px solid var(--border);border-radius:6px}
+@media(max-width:760px){.quality-results-wrap{max-height:none}.quality-results-table{min-width:1300px}}
