@@ -1028,11 +1028,14 @@ function qualitySetupHtml(previousInspection=null, sourceSubset=false) {
   const isCosturaReturn = cardData.receiving_type === "RETORNO";
   const defaultType = isCosturaReturn ? 2 : 1;
   const defaultMode = cardData.purchase_mode || previousInspection?.purchase_mode || "";
-  const routeField = sourceSubset
-    ? `<div class="field" id="qualityDestinationField"><label>Destino da Inspeção 1</label><select id="qualityDestination"><option value="">Selecione</option><option value="CD01">CD01 — retorna ao nosso CD</option><option value="CD02">CD02 — sai do fluxo interno</option></select></div>`
+  const destinationField = defaultType === 1
+    ? `<div class="field" id="qualityDestinationField"><label for="qualityDestination">Destino da Inspeção 1</label><select id="qualityDestination" required><option value="">Selecione CD01 ou CD02</option><option value="CD01">CD01 — retorna ao nosso CD</option><option value="CD02">CD02 — sai do fluxo interno</option></select><small>Defina o destino do fluxo da Inspeção 1.</small></div>`
+    : "";
+  const costuraField = sourceSubset
+    ? ""
     : defaultType === 1
-      ? `<div class="field full"><label>Vai para a Costura?</label><div class="actions compact-actions"><button type="button" class="secondary" id="qualityCosturaYes" aria-pressed="false" onclick="setQualityCosturaChoice('1')">Sim — segue para a Costura</button><button type="button" class="secondary" id="qualityCosturaNo" aria-pressed="false" onclick="setQualityCosturaChoice('0')">Não — segue direto para Processamento</button></div><input id="qualitySendToCostura" type="hidden" value=""><small>Selecione uma opção para liberar a criação da inspeção. Ao concluir, a amostra dos 10% será reunida automaticamente ao saldo.</small></div>`
-      : `<div class="field"><label>Vai para a Costura?</label><input class="readonly" readonly value="Não — retorno da Costura segue para Processamento"></div>`;
+      ? `<div class="field full quality-costura-field"><span class="field-label" id="qualitySendToCosturaLabel">Vai para a Costura?</span><div class="quality-choice-options" role="radiogroup" aria-labelledby="qualitySendToCosturaLabel"><label class="quality-choice-card" id="qualityCosturaYesCard" for="qualitySendToCosturaYes"><input type="radio" id="qualitySendToCosturaYes" name="qualitySendToCostura" value="1" required onchange="setQualityCosturaChoice(this.value)"><span class="quality-choice-indicator" aria-hidden="true"></span><span class="quality-choice-copy"><strong>Sim</strong><small>Segue para a Costura</small></span></label><label class="quality-choice-card" id="qualityCosturaNoCard" for="qualitySendToCosturaNo"><input type="radio" id="qualitySendToCosturaNo" name="qualitySendToCostura" value="0" required onchange="setQualityCosturaChoice(this.value)"><span class="quality-choice-indicator" aria-hidden="true"></span><span class="quality-choice-copy"><strong>Não</strong><small>Segue direto para Processamento</small></span></label></div><small class="quality-choice-help">Selecione uma opção. Ao concluir a inspeção, a amostra dos 10% será reunida automaticamente ao saldo.</small></div>`
+      : `<div class="field full"><label>Vai para a Costura?</label><input class="readonly" readonly value="Não — retorno da Costura segue para Processamento"></div>`;
   return `<div class="panel-body">
     ${sourceSubset ? `<div class="notice success-box"><b>Controle por referência</b><br>Selecione abaixo quais referências entrarão nesta inspeção. As referências não selecionadas não serão movimentadas.</div>${qualitySourceItemsHtml()}` : ""}
     ${previousInspection ? `<div class="notice success-box">A Inspeção ${previousInspection.inspection_type} anterior foi concluída em ${fmtDateTime(previousInspection.completed_at)}. O Card retornou à Qualidade para uma nova rodada.</div>` : ""}
@@ -1043,7 +1046,8 @@ function qualitySetupHtml(previousInspection=null, sourceSubset=false) {
     <div class="form-grid">
       <div class="field"><label>Tipo de inspeção</label><select id="qualityType" onchange="toggleQualitySetupFields()" disabled><option value="1" ${defaultType===1?"selected":""}>Inspeção 1</option><option value="2" ${defaultType===2?"selected":""}>Inspeção 2</option></select></div>
       ${["GRADE", "SALDO"].includes(defaultMode) ? `<div class="field"><label>Tipo da compra</label><input id="qualityPurchaseMode" class="readonly" readonly value="${defaultMode === "GRADE" ? "Grade — controle por item" : "Saldo — quantidade geral"}"></div>` : `<div class="field"><label>Tipo da compra (não reconhecido — informe)</label><select id="qualityPurchaseMode"><option value="">Selecione</option><option value="GRADE">Grade — controle por item</option><option value="SALDO">Saldo — quantidade geral</option></select></div>`}
-      ${routeField}
+      ${destinationField}
+      ${costuraField}
       <div class="field"><label>É necessário separar peças para Desenvolvimento?</label><select id="developmentRequired" onchange="toggleDevelopmentSetup()"><option value="">Selecione</option><option value="0">Não</option><option value="1">Sim</option></select></div>
       <div class="field" id="developmentSeparatedField" style="display:none"><label>As peças para Desenvolvimento já foram separadas?</label><select id="developmentSeparated"><option value="">Selecione</option><option value="0">Não</option><option value="1">Sim</option></select></div>
     </div>
@@ -1054,21 +1058,10 @@ function qualitySetupHtml(previousInspection=null, sourceSubset=false) {
 function setQualityCosturaChoice(value) {
   const choice = String(value);
   if (choice !== "1" && choice !== "0") return;
-  const input = $("qualitySendToCostura");
-  if (!input) return;
-  input.value = choice;
-  const yes = $("qualityCosturaYes");
-  const no = $("qualityCosturaNo");
-  if (yes) {
-    yes.classList.toggle("primary", choice === "1");
-    yes.classList.toggle("secondary", choice !== "1");
-    yes.setAttribute("aria-pressed", choice === "1" ? "true" : "false");
-  }
-  if (no) {
-    no.classList.toggle("primary", choice === "0");
-    no.classList.toggle("secondary", choice !== "0");
-    no.setAttribute("aria-pressed", choice === "0" ? "true" : "false");
-  }
+  const selected = document.querySelector(`input[name="qualitySendToCostura"]:checked`);
+  if (!selected || selected.value !== choice) return;
+  $("qualityCosturaYesCard")?.classList.toggle("is-selected", choice === "1");
+  $("qualityCosturaNoCard")?.classList.toggle("is-selected", choice === "0");
 }
 
 function toggleQualitySetupFields() {
@@ -1137,7 +1130,7 @@ async function createQualityInspection() {
     const requiredValue = $("developmentRequired").value;
     const separatedValue = $("developmentSeparated")?.value ?? "";
     const inspectionType = Number($("qualityType").value);
-    const sendToCosturaValue = $("qualitySendToCostura")?.value ?? "";
+    const sendToCosturaValue = document.querySelector('input[name="qualitySendToCostura"]:checked')?.value ?? "";
     if (!window.qualitySourceSubset && inspectionType === 1 && sendToCosturaValue === "") {
       throw new Error("Responda obrigatoriamente: Vai para a Costura?");
     }
@@ -1181,12 +1174,17 @@ function qualityInspectionHtml(q) {
     : q.inspection_type === 1
       ? (goesToCostura ? "Sim — vai para a Costura" : "Não — segue direto para Processamento")
       : "Retorno da Costura — segue para Processamento";
+  const destinationLabel = q.destination === "CD01"
+    ? "CD01 — retorna ao nosso CD"
+    : q.destination === "CD02"
+      ? "CD02 — sai do fluxo interno"
+      : q.inspection_type === 2 ? "Processamento — retorno da Costura" : "Não definido";
   const enforcedMovementNotice = isOpen && !q.source_subset
     ? `<div class="notice warn"><b>Movimentação automática obrigatória</b><br>Ao concluir esta inspeção, o volume da amostra dos 10% será reunido ao saldo no endereço físico já utilizado pelo restante da mercadoria. Se o sistema não encontrar um endereço de saldo em RM ou PR, a conclusão será bloqueada até que o saldo seja endereçado.</div>`
     : "";
   return `<div class="panel-body">
     <div class="quality-header">
-      <div class="notice ${q.inspection_type===2?"success-box":""}"><b>${typeLabel}</b><br><b>Vai para a Costura?</b> ${esc(routeLabel)}<br>${sampleLabel}</div>
+      <div class="notice ${q.inspection_type===2?"success-box":""}"><b>${typeLabel}</b><br><b>Destino:</b> ${esc(destinationLabel)}<br><b>Vai para a Costura?</b> ${esc(routeLabel)}<br>${sampleLabel}</div>
       ${enforcedMovementNotice}
       ${q.development_warning ? '<div class="notice warn"><b>Atenção:</b> a separação de peças para o setor Desenvolvimento ainda está pendente. Este aviso não bloqueia a conclusão.</div>' : ''}
     </div>
@@ -1218,11 +1216,15 @@ function qualityInspectionHtml(q) {
 function qualityPreviousInspectionsHtml(q) {
   const rows = q.previous_inspections || [];
   if (!rows.length) return "";
-  const routeLabel = (row) => row.source_subset
-    ? "Destino por referência"
-    : row.inspection_type === 1
-      ? (row.send_to_costura === 1 || (row.send_to_costura == null && row.destination === "CD01") ? "Sim — Costura" : "Não — Processamento")
-      : "Processamento";
+  const routeLabel = (row) => {
+    const destination = row.destination === "CD01" ? "CD01 — nosso CD" : row.destination === "CD02" ? "CD02 — sai do fluxo" : "Destino não definido";
+    const flow = row.source_subset
+      ? "Destino por referência"
+      : row.inspection_type === 1
+        ? (row.send_to_costura === 1 || (row.send_to_costura == null && row.destination === "CD01") ? "Costura" : "Processamento")
+        : "Processamento";
+    return `${destination} · ${flow}`;
+  };
   return `<h3 class="section-heading">Rodadas anteriores da Qualidade</h3><div class="table-wrap"><table>
     <thead><tr><th>Inspeção</th><th>Tipo</th><th>Destino</th><th>Amostra</th><th>Aprovada</th><th>Rejeitada</th><th>Retrabalho</th><th>Conclusão</th><th>Desenvolvimento</th></tr></thead>
     <tbody>${rows.map((row)=>`<tr><td>Inspeção ${row.inspection_type}</td><td>${row.purchase_mode==="SALDO"?"Saldo":"Grade"}</td><td>${esc(routeLabel(row))}</td><td>${row.sample_target_total}</td><td>${row.approved_total}</td><td>${row.rejected_total}</td><td>${row.rework_total}</td><td>${fmtDateTime(row.completed_at)}</td><td>${row.development_pending?'<span class="badge orange">Pendente</span>':'<span class="badge green">Regular</span>'}</td></tr>`).join("")}</tbody>
