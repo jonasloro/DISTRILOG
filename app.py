@@ -85,6 +85,30 @@ async def persist_card_state(request: Request, call_next):
             if con is not None:
                 con.close()
 
+    if request.method == "POST" and request.url.path == "/api/import-excel":
+        con = None
+        try:
+            con = db_connect()
+            # Import routing depends on whether a Card already has local workflow.
+            # Refresh persisted Receiving/Card state first so the import cannot sync
+            # stale local receiving values over a newer Supabase record.
+            restore_receiving_state_from_supabase(con)
+            con.commit()
+        except Exception as exc:
+            if con is not None:
+                try:
+                    con.rollback()
+                except Exception:
+                    pass
+            print("[erro] não consegui atualizar o estado do Recebimento antes da importação: {}".format(exc))
+            return JSONResponse(
+                status_code=503,
+                content={"detail": "Não foi possível atualizar o estado do Recebimento no Supabase. A importação não foi executada; tente novamente."},
+            )
+        finally:
+            if con is not None:
+                con.close()
+
     response = await call_next(request)
     if (
         request.method in {"POST", "PUT", "PATCH", "DELETE"}
