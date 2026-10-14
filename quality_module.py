@@ -83,9 +83,16 @@ def require_completed_receiving_sample(con: sqlite3.Connection, card_id: int, re
         if not remote_latest:
             local_candidate = latest_receiving_sample(con, card_id, receiving_type)
             if local_candidate:
-                sync_receiving_card_state_to_supabase(con, card_id)
-                remote_latest = get_latest_receiving_from_supabase(card_id, receiving_type)
-
+                # Refresh canonical Receiving rows first, then backfill only the legacy
+                # operation that is missing remotely.
+                restore_receiving_state_from_supabase(con, card_id=card_id)
+                con.commit()
+                local_candidate = latest_receiving_sample(con, card_id, receiving_type)
+                if local_candidate:
+                    sync_receiving_card_state_to_supabase(
+                        con, card_id, receiving_type=receiving_type
+                    )
+                    remote_latest = get_latest_receiving_from_supabase(card_id, receiving_type)
         # Load the authoritative row (and events/links) into SQLite only as the local
         # working copy required by existing Quality tables and foreign keys.
         restore_receiving_state_from_supabase(con, card_id=card_id)
