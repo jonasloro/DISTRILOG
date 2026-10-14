@@ -423,6 +423,63 @@ async function setCardPurchaseMode(mode) {
   }
 }
 
+function qualitySampleRelocationNoticeHtml(rows, failed=false) {
+  if (failed || !Array.isArray(rows)) {
+    return '<div class="notice warn"><b>Endereçamento da amostra dos 10%</b><br>Não foi possível confirmar os endereços físicos agora. Confira a localização da mercadoria antes de despachar para a Costura.</div>';
+  }
+  const positiveRows = rows.filter((row) =>
+    String(row.address || "").trim() && Number(row.quantidade || 0) > 0
+  );
+  const sampleRows = positiveRows.filter((row) =>
+    ["QA", "QUALIDADE"].includes(String(row.setor || "").trim().toUpperCase()) &&
+    (row.item_id === null || row.item_id === undefined)
+  );
+  const sampleQty = sampleRows.reduce((sum, row) => sum + Number(row.quantidade || 0), 0);
+  const sampleAddresses = [...new Set(sampleRows.map((row) => String(row.address || "").trim()))];
+  const sampleAddressText = sampleAddresses.map((address) => '<b>' + esc(address) + '</b>').join(", ");
+
+  if (!sampleRows.length) {
+    return '<div class="notice warn"><b>Endereçamento da amostra dos 10%</b><br>Não localizei a alocação física da amostra no histórico de endereços. Confirme a localização da amostra antes de despachar para a Costura.</div>';
+  }
+
+  const remainderByAddress = new Map();
+  positiveRows.filter((row) =>
+    String(row.setor || "").trim().toUpperCase() === "RM" &&
+    (row.item_id === null || row.item_id === undefined)
+  ).forEach((row) => {
+    const address = String(row.address || "").trim();
+    const current = remainderByAddress.get(address) || 0;
+    remainderByAddress.set(address, current + Number(row.quantidade || 0));
+  });
+  const remainderLocations = [...remainderByAddress.entries()]
+    .map(([address, quantity]) => ({address, quantity}))
+    .sort((a, b) => b.quantity - a.quantity || a.address.localeCompare(b.address, "pt-BR"));
+
+  if (!remainderLocations.length) {
+    return '<div class="notice warn"><b>Amostra dos 10% — destino para Costura</b><br>A amostra está registrada em ' +
+      sampleAddressText + ', mas não encontrei um endereço RM com saldo de volumes para indicar o mesmo destino. Confira a localização física antes do despacho.</div>';
+  }
+
+  const sampleQtyLabel = Number(sampleQty).toLocaleString("pt-BR");
+  if (remainderLocations.length === 1) {
+    const destination = remainderLocations[0];
+    return '<div class="notice warn"><b>Amostra dos 10% — levar junto para a Costura</b><br>A amostra de <b>' +
+      sampleQtyLabel + ' volume(s)</b>, atualmente em ' + sampleAddressText +
+      ', deve acompanhar o restante da mercadoria. Aloque esse volume adicional no mesmo endereço: <b>' +
+      esc(destination.address) + '</b> (' + Number(destination.quantity).toLocaleString("pt-BR") +
+      ' volume(s) do restante registrados ali).</div>';
+  }
+
+  const destinationList = remainderLocations.map((location) =>
+    '<b>' + esc(location.address) + '</b> (' +
+    Number(location.quantity).toLocaleString("pt-BR") + ' volume(s))'
+  ).join("; ");
+  return '<div class="notice warn"><b>Amostra dos 10% — levar junto para a Costura</b><br>A amostra de <b>' +
+    sampleQtyLabel + ' volume(s)</b>, atualmente em ' + sampleAddressText +
+    ', deve acompanhar o restante da mercadoria. O saldo dos volumes está dividido entre ' +
+    destinationList + '. Aloque a amostra no mesmo endereço físico da referência que seguirá para a Costura.</div>';
+}
+
 function cardLocationBannerHtml(rows, failed=false, loading=false, currentSector="") {
   if (loading) {
     return '<section class="card-location-banner" aria-label="Localização da mercadoria"><div class="card-location-heading"><span>LOCALIZAÇÃO DA MERCADORIA</span><small>Endereços físicos registrados</small></div><div class="card-location-empty"><span class="card-location-pulse"></span>Consultando endereços atuais…</div></section>';
@@ -545,11 +602,15 @@ async function openCard(cardId, tab = "receiving") {
       if (window.cardLocationRequestId !== locationRequestId || Number(currentCardId) !== Number(cardId)) return;
       const slot = $("cardLocationSlot");
       if (slot) slot.innerHTML = cardLocationBannerHtml(rows, false, false, cardData?.current_sector || "");
+      const sampleNotice = $("qualitySampleRelocationNotice");
+      if (sampleNotice) sampleNotice.innerHTML = qualitySampleRelocationNoticeHtml(rows);
     })
     .catch((error) => {
       if (window.cardLocationRequestId !== locationRequestId || Number(currentCardId) !== Number(cardId)) return;
       const slot = $("cardLocationSlot");
       if (slot) slot.innerHTML = cardLocationBannerHtml(null, true);
+      const sampleNotice = $("qualitySampleRelocationNotice");
+      if (sampleNotice) sampleNotice.innerHTML = qualitySampleRelocationNoticeHtml(null, true);
       console.warn("Não foi possível consultar os endereços do Card:", error);
     });
   if (tab === "casulo") renderCasuloTab();
@@ -834,6 +895,9 @@ function dispatchHtml() {
   const operate = canOperateReceiving();
   return `<div class="panel-body">
     <div class="notice warn"><b>Inspeção 1 concluída.</b> A Qualidade definiu o destino <b>${esc(cardData.quality_destination)}</b>. O Recebimento é responsável pelo despacho.</div>
+    ${String(cardData.quality_destination || "").toUpperCase() === "CD01" && String(cardData.receiving_type || "").toUpperCase() === "NOVA"
+      ? '<div id="qualitySampleRelocationNotice"><div class="notice warn">Consultando o endereço da amostra dos 10% e o local do restante da mercadoria…</div></div>'
+      : ""}
     <div class="form-grid">
       <div class="field"><label>Destino definido pela Qualidade</label><input class="readonly" readonly value="${esc(cardData.quality_destination)}"></div>
       <div class="field"><label>Transportadora</label><input id="dispatchCarrier" ${operate?"":"readonly"}></div>
