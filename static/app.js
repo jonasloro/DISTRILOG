@@ -466,6 +466,7 @@ async function openCard(cardId, tab = "receiving") {
     canOperateQuality();
   $("modalBody").innerHTML = `
     <div class="card-title"><div><h2>Card ${esc(cardDisplayName)}</h2><div class="card-subtitle">${esc(cardData.supplier||"—")} • ${esc(cardData.brand||"—")} • ${cardData.expected_total} peças</div></div><div class="card-title-actions"><span class="badge ${statusClass(cardData.status)}">${esc(cardData.status_label)}</span>${currentUser?.role==="admin"?`<button class="danger small-btn" onclick="deleteCard(${cardData.id})">Excluir Card</button>`:""}</div></div>
+    <div id="cardLocationSummary" class="card-location-banner"><div class="card-location-heading"><span class="card-location-icon">⌖</span><div><span class="card-location-eyebrow">LOCALIZAÇÃO ATUAL DA MERCADORIA</span><strong>Consultando endereços do WMS…</strong></div></div></div>
     <div class="summary-grid">
       <div class="summary-box"><span>Setor atual</span><strong>${esc(cardData.current_sector)}</strong></div>
       <div class="summary-box"><span>Tipo de entrada</span><strong>${cardData.receiving_type === "RETORNO" ? "Retorno da Costura" : "Mercadoria nova"}</strong></div>
@@ -487,6 +488,7 @@ async function openCard(cardId, tab = "receiving") {
     </div>
     <div id="cardTab"></div>`;
   $("modal").classList.remove("hidden");
+  void loadCardLocationSummary(cardId);
   if (tab === "casulo") renderCasuloTab();
   else if (tab === "quality") renderQualityTab();
   else if (tab === "processing") renderProcessingTab();
@@ -495,6 +497,49 @@ async function openCard(cardId, tab = "receiving") {
   else if (tab === "products") renderProductsTab();
   else if (tab === "history") renderCardHistory();
   else renderReceivingTab();
+}
+
+const CARD_LOCATION_SECTOR_LABELS = {
+  RM: "Recebimento / RM", QA: "Qualidade / QA", PR: "Processamento / PR",
+  ET: "Etiquetagem / ET", EC: "Estocagem / EC",
+};
+function formatCardLocationQuantity(location) {
+  const qty = Number(location.quantidade || 0).toLocaleString("pt-BR");
+  return ["RM","QA","PR"].includes(String(location.setor || "").toUpperCase()) ? `${qty} vol.` : `${qty} un.`;
+}
+function cardLocationSummaryHtml(card, rawLocations) {
+  const locations = (rawLocations || []).map((location) => ({...location,setor:String(location.setor||"").toUpperCase(),quantidade:Number(location.quantidade||0)})).filter((location)=>location.quantidade>0);
+  if (!locations.length) return `<div class="card-location-heading"><span class="card-location-icon">⌖</span><div><span class="card-location-eyebrow">LOCALIZAÇÃO ATUAL DA MERCADORIA</span><strong>Sem endereço ativo registrado</strong><small>O WMS ainda não tem uma posição associada aos volumes deste Card.</small></div></div>`;
+  const locationChips = locations.map((location) => {
+    const sample = location.tipo === "AMOSTRA_10";
+    return `<div class="card-location-chip ${sample?"sample-location":""}"><span class="card-location-sector">${esc(CARD_LOCATION_SECTOR_LABELS[location.setor]||location.setor)}</span><strong>${esc(location.address||"Endereço não informado")}</strong><span class="card-location-quantity">${formatCardLocationQuantity(location)}</span>${sample?'<span class="card-location-kind">Amostra dos 10%</span>':""}</div>`;
+  }).join("");
+  const sampleInQuality = locations.some((location)=>location.setor==="QA"&&location.tipo==="AMOSTRA_10");
+  const sendingToSewing = card.status==="AGUARDANDO_DESPACHO_COSTURA"&&card.quality_destination==="CD01";
+  let sewingGuidance = "";
+  if (sendingToSewing && sampleInQuality) {
+    const mainBulkLocations = locations.filter((location)=>location.setor==="RM"&&location.tipo!=="AMOSTRA_10");
+    const fallBackLocations = mainBulkLocations.length ? mainBulkLocations : locations.filter((location)=>["PR","QA"].includes(location.setor)&&location.tipo!=="AMOSTRA_10");
+    const uniqueRemainderLocations = [...new Map(fallBackLocations.map((location)=>[`${location.setor}|${location.address}`,location])).values()].sort((a,b)=>b.quantidade-a.quantidade);
+    const targetAddresses = uniqueRemainderLocations.map((location)=>`<span class="sewing-target-address"><b>${esc(location.address)}</b><small>${formatCardLocationQuantity(location)}</small></span>`).join("");
+    sewingGuidance = `<div class="card-sewing-guidance"><div class="card-sewing-guidance-icon">↗</div><div class="card-sewing-guidance-content"><strong>Amostra dos 10% — encaminhamento para Costura</strong><p>Após a Inspeção 1, o volume da amostra deve seguir junto com o restante da mercadoria. Ao consolidar o endereçamento para a Costura, use o mesmo endereço do saldo restante:${targetAddresses?"":" ainda não encontrei um endereço do saldo restante; enderece o restante primeiro e use a mesma posição para a amostra."}</p>${targetAddresses?`<div class="sewing-target-addresses">${targetAddresses}</div>`:""}</div></div>`;
+  }
+  const title = locations.length===1 ? "Mercadoria em 1 endereço" : `Mercadoria distribuída em ${locations.length} posições`;
+  return `<div class="card-location-heading"><span class="card-location-icon">⌖</span><div><span class="card-location-eyebrow">LOCALIZAÇÃO ATUAL DA MERCADORIA</span><strong>${title}</strong><small>Endereços ativos registrados no WMS</small></div></div><div class="card-location-list">${locationChips}</div>${sewingGuidance}`;
+}
+async function loadCardLocationSummary(cardId) {
+  try {
+    const data = await apiWithTimeout(`/api/positions/cards/${cardId}/locations`);
+    if (Number(currentCardId)!==Number(cardId)) return;
+    const target=$("cardLocationSummary");
+    if (!target||Number(cardData?.id)!==Number(cardId)) return;
+    target.innerHTML=cardLocationSummaryHtml(cardData,data.locations||[]);
+  } catch(error) {
+    if (Number(currentCardId)!==Number(cardId)) return;
+    const target=$("cardLocationSummary");
+    if(target) target.innerHTML='<div class="card-location-heading"><span class="card-location-icon">⌖</span><div><span class="card-location-eyebrow">LOCALIZAÇÃO ATUAL DA MERCADORIA</span><strong>Endereços indisponíveis no momento</strong><small>Não foi possível consultar o WMS. Os demais dados do Card continuam disponíveis.</small></div></div>';
+    console.warn("Não foi possível carregar os endereços do Card:",error);
+  }
 }
 
 function activateTab(id) {
@@ -962,17 +1007,18 @@ async function renderQualityTab() {
 }
 
 function qualitySetupHtml(previousInspection=null, sourceSubset=false) {
-  const defaultType = cardData.receiving_type === "RETORNO" ? 2 : 1;
+  const cameFromSewing = cardData.receiving_type === "RETORNO";
+  const defaultType = cameFromSewing ? 2 : 1;
   const defaultMode = cardData.purchase_mode || previousInspection?.purchase_mode || "";
   return `<div class="panel-body">
     ${sourceSubset ? `<div class="notice success-box"><b>Controle por referência</b><br>Selecione abaixo quais referências entrarão nesta inspeção. As referências não selecionadas não serão movimentadas.</div>${qualitySourceItemsHtml()}` : ""}
     ${previousInspection ? `<div class="notice success-box">A Inspeção ${previousInspection.inspection_type} anterior foi concluída em ${fmtDateTime(previousInspection.completed_at)}. O Card retornou à Qualidade para uma nova rodada.</div>` : ""}
     <div class="notice"><b>Configuração da inspeção</b><br>O tipo da compra vem automaticamente da coluna <b>Tipo</b> do Excel: Private Label = Grade e Saldo = Saldo.</div>
-    ${cardData.receiving_type === "RETORNO"
-      ? '<div class="notice warn"><b>Retorno da Costura:</b> a Inspeção 2 é obrigatória e usará a nova amostra de 10% separada pelo Recebimento.</div>'
-      : '<div class="notice success-box"><b>Mercadoria nova:</b> escolha Inspeção 1 somente quando a mercadoria precisar ir para Costura. Escolha Inspeção 2 quando ela já puder seguir diretamente para Processamento. Nos dois casos será usada a amostra dos 10% separada pelo Recebimento.</div>'}
+    ${cameFromSewing
+      ? '<div class="notice warn"><b>Retorno da Costura:</b> a origem do Card define automaticamente a Inspeção 2, usando a nova amostra de 10% registrada no Recebimento do retorno.</div>'
+      : '<div class="notice success-box"><b>Primeira etapa após o Recebimento:</b> a origem do Card define automaticamente a Inspeção 1. Se a mercadoria seguir para a Costura, o volume da amostra dos 10% deve acompanhar o restante.</div>'}
     <div class="form-grid">
-      <div class="field"><label>Tipo de inspeção</label><select id="qualityType" onchange="toggleQualitySetupFields()" ${cardData.receiving_type === "RETORNO" ? "disabled" : ""}><option value="1" ${defaultType===1?"selected":""}>Inspeção 1</option><option value="2" ${defaultType===2?"selected":""}>Inspeção 2</option></select></div>
+      <div class="field"><label>Etapa da inspeção (definida pela origem)</label><select id="qualityType" disabled><option value="1" ${defaultType===1?"selected":""}>Inspeção 1 — Recebimento inicial</option><option value="2" ${defaultType===2?"selected":""}>Inspeção 2 — Retorno da Costura</option></select></div>
       ${["GRADE", "SALDO"].includes(defaultMode)     ? `<div class="field"><label>Tipo da compra</label><input id="qualityPurchaseMode" class="readonly" readonly value="${defaultMode === "GRADE" ? "Grade — controle por item" : "Saldo — quantidade geral"}"></div>`     : `<div class="field"><label>Tipo da compra (não reconhecido — informe)</label><select id="qualityPurchaseMode"><option value="">Selecione</option><option value="GRADE">Grade — controle por item</option><option value="SALDO">Saldo — quantidade geral</option></select></div>`}
       <div class="field" id="qualityDestinationField"><label>Destino da Inspeção 1</label><select id="qualityDestination"><option value="">Selecione</option><option value="CD01">CD01 — retorna ao nosso CD</option><option value="CD02">CD02 — sai do fluxo interno</option></select></div>
       <div class="field"><label>É necessário separar peças para Desenvolvimento?</label><select id="developmentRequired" onchange="toggleDevelopmentSetup()"><option value="">Selecione</option><option value="0">Não</option><option value="1">Sim</option></select></div>
