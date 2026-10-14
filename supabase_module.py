@@ -967,6 +967,39 @@ def restore_card_state_for_quality(sqlite_con) -> dict[int, dict]:
     return snapshot
 
 
+def store_quality_files(files: list[dict]) -> list[str]:
+    """Persist all Quality evidence uploads atomically in Supabase."""
+    if not files:
+        return []
+    with pg_connect() as con:
+        with con.cursor() as cur:
+            for uploaded in files:
+                cur.execute(
+                    """INSERT INTO outlog_quality_files(
+                           id,original_name,content_type,content,uploaded_by,created_at
+                       ) VALUES(%s,%s,%s,%s,%s,%s)""",
+                    (
+                        uploaded["id"], uploaded["original_name"], uploaded["content_type"],
+                        uploaded["content"], int(uploaded["uploaded_by"]), uploaded["created_at"],
+                    ),
+                )
+        con.commit()
+    return ["/api/quality/files/{}".format(uploaded["id"]) for uploaded in files]
+
+
+def get_quality_file(file_id: str) -> dict | None:
+    """Read durable Quality evidence by its unguessable identifier."""
+    with pg_connect() as con:
+        with con.cursor() as cur:
+            cur.execute(
+                """SELECT original_name,content_type,content
+                   FROM outlog_quality_files WHERE id=%s""",
+                (file_id,),
+            )
+            row = cur.fetchone()
+    return dict(row) if row else None
+
+
 # Persistência da Qualidade: Supabase é a fonte de verdade; SQLite é apenas cache
 # de compatibilidade para as consultas e transações legadas do módulo.
 QUALITY_PERSISTENCE_TABLES = {
@@ -1099,6 +1132,14 @@ def init_quality_persistence() -> None:
         """CREATE TABLE IF NOT EXISTS outlog_quality_history (
             id BIGINT PRIMARY KEY, card_id BIGINT NOT NULL, user_id BIGINT,
             event_type TEXT NOT NULL, description TEXT NOT NULL, created_at TEXT NOT NULL
+        )""",
+        """CREATE TABLE IF NOT EXISTS outlog_quality_files (
+            id TEXT PRIMARY KEY,
+            original_name TEXT NOT NULL,
+            content_type TEXT NOT NULL,
+            content BYTEA NOT NULL,
+            uploaded_by BIGINT NOT NULL,
+            created_at TEXT NOT NULL
         )""",
         "CREATE INDEX IF NOT EXISTS idx_outlog_quality_inspections_card ON outlog_quality_inspections(card_id, id DESC)",
         "CREATE INDEX IF NOT EXISTS idx_outlog_quality_workers_inspection ON outlog_quality_workers(inspection_id)",
