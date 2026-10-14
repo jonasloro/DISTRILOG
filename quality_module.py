@@ -183,25 +183,23 @@ def require_completed_receiving_sample(con: sqlite3.Connection, card_id: int, re
         if remote_latest["physical_status"] != "CONCLUIDO":
             con.close()
             raise HTTPException(400, "Conclua e salve o recebimento físico no Supabase antes de iniciar a Inspeção da Qualidade.")
-        if not remote_latest["ten_percent_required"]:
-            con.close()
-            raise HTTPException(400, "O registro de Recebimento no Supabase não está configurado para exigir a separação dos 10%.")
-        if remote_latest["ten_percent_status"] != "CONCLUIDA":
-            con.close()
-            raise HTTPException(400, "Conclua e salve a tiragem dos 10% no Recebimento antes de iniciar a Inspeção da Qualidade.")
-        actual_sample = int(remote_latest["ten_percent_actual"] or 0)
-        minimum_sample = int(remote_latest["ten_percent_min"] or 0)
-        if actual_sample <= 0:
-            con.close()
-            raise HTTPException(400, "A quantidade efetivamente separada nos 10% não está salva no Supabase como um valor positivo.")
-        if actual_sample != minimum_sample:
-            con.close()
-            raise HTTPException(
-                400,
-                "A quantidade separada nos 10% deve corresponder ao total exigido de {} peças; o Recebimento está registrado com {}. Corrija e salve a tiragem antes de iniciar a Inspeção.".format(
-                    minimum_sample, actual_sample
-                ),
-            )
+        if receiving_type != "RETORNO":
+            if not remote_latest["ten_percent_required"]:
+                con.close()
+                raise HTTPException(400, "O recebimento inicial não está configurado para exigir a separação dos 10%.")
+            if remote_latest["ten_percent_status"] != "CONCLUIDA":
+                con.close()
+                raise HTTPException(400, "Conclua e salve a tiragem dos 10% no Recebimento antes de iniciar a Inspeção da Qualidade.")
+            actual_sample = int(remote_latest["ten_percent_actual"] or 0)
+            minimum_sample = int(remote_latest["ten_percent_min"] or 0)
+            if actual_sample <= 0 or actual_sample != minimum_sample:
+                con.close()
+                raise HTTPException(
+                    400,
+                    "A quantidade separada nos 10% deve corresponder ao total exigido de {} peças; o Recebimento está registrado com {}.".format(
+                        minimum_sample, actual_sample
+                    ),
+                )
         if not local_latest:
             con.close()
             raise HTTPException(503, "O Recebimento existe no Supabase, mas não pôde ser vinculado ao Card local. Tente novamente; a inspeção continua bloqueada até a restauração do vínculo.")
@@ -244,17 +242,21 @@ def require_completed_receiving_sample(con: sqlite3.Connection, card_id: int, re
         total = int(quantities["total"] or 0)
         item_count = int(quantities["n"] or 0)
         if total > 0:
-            minimum = max(
-                math.ceil(total * 0.10),
-                item_count if str(card["purchase_mode"] or "").upper() == "GRADE" else 0,
+            requires_sample = receiving_type != "RETORNO"
+            minimum = (
+                max(
+                    math.ceil(total * 0.10),
+                    item_count if str(card["purchase_mode"] or "").upper() == "GRADE" else 0,
+                )
+                if requires_sample else 0
             )
             now = iso_now()
             con.execute(
                 """INSERT INTO receivings(
                     card_id,receiving_type,physical_status,ten_percent_required,
                     ten_percent_min,ten_percent_status,created_at
-                ) VALUES(?,?,'PENDENTE',1,?,'NAO_INICIADA',?)""",
-                (card_id, receiving_type, minimum, now),
+                ) VALUES(?,?,'PENDENTE',?,?, 'NAO_INICIADA',?)""",
+                (card_id, receiving_type, 1 if requires_sample else 0, minimum, now),
             )
             next_status = "AGUARDANDO_RECEBIMENTO_RETORNO" if receiving_type == "RETORNO" else "AGUARDANDO_RECEBIMENTO"
             con.execute(
@@ -264,7 +266,9 @@ def require_completed_receiving_sample(con: sqlite3.Connection, card_id: int, re
             )
             add_history(
                 con, card_id, "RECEBIMENTO_RECUPERADO",
-                "O registro original do Recebimento não existia no Supabase. O controle foi reaberto como pendente; volumes e separação dos 10% precisam ser registrados novamente.",
+                ("O registro original do retorno da Costura não existia no Supabase. O controle físico foi reaberto como pendente; informe volumes e quantidade retornada antes de alocar todo o saldo."
+                 if receiving_type == "RETORNO" else
+                 "O registro original do Recebimento não existia no Supabase. O controle foi reaberto como pendente; volumes e separação dos 10% precisam ser registrados novamente."),
             )
             try:
                 sync_receiving_card_state_to_supabase(con, card_id)
@@ -277,7 +281,9 @@ def require_completed_receiving_sample(con: sqlite3.Connection, card_id: int, re
             con.close()
             raise HTTPException(
                 409,
-                "O registro original do Recebimento não existia no Supabase. O Card foi devolvido ao Recebimento com um controle pendente; informe novamente os volumes e registre a separação dos 10% antes de retomar a Qualidade.",
+                ("O registro original do retorno da Costura não existia no Supabase. O Card voltou ao Recebimento; informe volumes e quantidade retornada e aloque todo o saldo antes de encaminhar para a Inspeção 2."
+                 if receiving_type == "RETORNO" else
+                 "O registro original do Recebimento não existia no Supabase. O Card foi devolvido ao Recebimento com um controle pendente; informe novamente os volumes e registre a separação dos 10% antes de retomar a Qualidade."),
             )
 
     details = (
@@ -288,7 +294,9 @@ def require_completed_receiving_sample(con: sqlite3.Connection, card_id: int, re
     con.close()
     raise HTTPException(
         409,
-        "Não existe registro de Recebimento do tipo {} no Supabase para este Card.{} A inspeção permanece bloqueada para não inventar a quantidade dos 10%; verifique o histórico do Card ou solicite a recuperação ao Supervisor.".format(receiving_type, details),
+        ("Não existe registro de Recebimento do tipo {} no Supabase para este Card.{} A Inspeção 2 permanece bloqueada até restaurar a conferência física; verifique o histórico ou solicite a recuperação ao Supervisor."
+         if receiving_type == "RETORNO" else
+         "Não existe registro de Recebimento do tipo {} no Supabase para este Card.{} A inspeção permanece bloqueada por não haver quantidade válida dos 10%; verifique o histórico ou solicite a recuperação ao Supervisor.").format(receiving_type, details),
     )
 
 
@@ -1137,6 +1145,7 @@ async def create_inspection(card_id: int, request: Request):
         or str(card["status"] or "").upper() in {
             "AGUARDANDO_RECEBIMENTO_RETORNO",
             "RETORNO_CONCLUIDO",
+            "AGUARDANDO_INSPECAO",
         }
     )
     if not source_subset_requested and not card["source_snapshot_at"] and card["current_sector"] == "QUALIDADE":
@@ -1150,7 +1159,7 @@ async def create_inspection(card_id: int, request: Request):
                 409,
                 "O setor responsável pelo Card mudou enquanto o Recebimento era atualizado. Reabra o Card antes de iniciar a inspeção.",
             )
-        if receiving_sample["ten_percent_required"]:
+        if receiving_sample["ten_percent_required"] and not is_costura_return:
             total_volumes = int(receiving_sample["volumes"] or 0)
             if total_volumes <= 0:
                 con.close()
@@ -1223,6 +1232,7 @@ async def create_inspection(card_id: int, request: Request):
         or str(card["status"] or "").upper() in {
             "AGUARDANDO_RECEBIMENTO_RETORNO",
             "RETORNO_CONCLUIDO",
+            "AGUARDANDO_INSPECAO",
         }
     )
     expected_inspection_type = 2 if is_costura_return else 1
@@ -1235,8 +1245,9 @@ async def create_inspection(card_id: int, request: Request):
     # A amostra acompanha a etapa real do fluxo: o Recebimento inicial alimenta a
     # Inspeção 1; somente o retorno da Costura pode iniciar a Inspeção 2.
     source_receiving_id: Optional[int] = None
+    sample_item_ids: Optional[list[int]] = None
     if source_subset:
-        subset_total = sum(int(item["expected_qty"] or 0) for item in source_items)
+        subset_total = sum(max(0, int(item["expected_qty"] or 0)) for item in source_items)
         requested_target = max(
             math.ceil(subset_total * 0.10),
             len(source_items) if purchase_mode == "GRADE" else 1,
@@ -1249,9 +1260,46 @@ async def create_inspection(card_id: int, request: Request):
         sample_source = "RECEBIMENTO"
     else:
         receiving_sample = receiving_sample or require_completed_receiving_sample(con, card_id, "RETORNO")
-        requested_target = int(receiving_sample["ten_percent_actual"])
         source_receiving_id = int(receiving_sample["id"])
         sample_source = "RECEBIMENTO_RETORNO"
+        returned_item_ids = [
+            int(row["item_id"])
+            for row in con.execute(
+                """SELECT roi.item_id
+                   FROM receiving_operation_items roi
+                   JOIN items i ON i.id=roi.item_id
+                   WHERE roi.receiving_id=? AND i.card_id=? AND i.expected_qty>0
+                   ORDER BY i.product,i.reference,i.color,i.size,i.id""",
+                (source_receiving_id, card_id),
+            ).fetchall()
+        ]
+        if not returned_item_ids:
+            returned_item_ids = [
+                int(row["id"])
+                for row in con.execute(
+                    """SELECT id FROM items WHERE card_id=? AND expected_qty>0
+                       ORDER BY product,reference,color,size,id""",
+                    (card_id,),
+                ).fetchall()
+            ]
+        if not returned_item_ids:
+            con.close()
+            raise HTTPException(400, "O retorno não possui referências com quantidade disponível para compor a Inspeção 2.")
+        marks = ",".join("?" for _ in returned_item_ids)
+        return_items = con.execute(
+            f"""SELECT id,expected_qty FROM items
+                WHERE card_id=? AND id IN ({marks}) AND expected_qty>0 ORDER BY id""",
+            (card_id, *returned_item_ids),
+        ).fetchall()
+        subset_total = sum(max(0, int(item["expected_qty"] or 0)) for item in return_items)
+        if subset_total <= 0:
+            con.close()
+            raise HTTPException(400, "A quantidade retornada precisa ser maior que zero para preparar a Inspeção 2.")
+        sample_item_ids = [int(item["id"]) for item in return_items]
+        requested_target = max(
+            math.ceil(subset_total * 0.10),
+            len(return_items) if purchase_mode == "GRADE" else 1,
+        )
 
     cur = con.execute(
         """INSERT INTO quality_inspections(card_id,inspection_type,status,destination,sample_source,source_receiving_id,purchase_mode,
@@ -1290,7 +1338,7 @@ async def create_inspection(card_id: int, request: Request):
         )
     target = create_automatic_sample(
         con, inspection_id, card_id, purchase_mode, requested_target,
-        source_item_ids if source_subset else None,
+        source_item_ids if source_subset else sample_item_ids,
     )
     con.execute(
         "UPDATE quality_inspections SET sample_target_total=? WHERE id=?",
@@ -1987,10 +2035,10 @@ async def complete_inspection(inspection_id: int, request: Request):
     if inspection["status"] != "ABERTA":
         con.close()
         raise HTTPException(400, "A inspeção já foi concluída.")
-    # Protege inspeções abertas antes da regra obrigatória e confirma que a
-    # amostra permanece fisicamente na QA até a conclusão.
+    # A amostra física só precisa ser reunida ao saldo na Inspeção 1.
+    # Na Inspeção 2, a amostra é parte do trabalho da Qualidade, sem bag extra no Recebimento.
     should_merge_sample = False
-    if not inspection["source_subset"]:
+    if not inspection["source_subset"] and int(inspection["inspection_type"]) == 1:
         card = con.execute("SELECT * FROM cards WHERE id=?", (inspection["card_id"],)).fetchone()
         if card and not card["source_snapshot_at"] and card["current_sector"] == "QUALIDADE":
             should_merge_sample = True
