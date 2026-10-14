@@ -1890,6 +1890,22 @@ def repair_stored_reference_items(con: sqlite3.Connection, card_id: int) -> bool
 @app.get("/api/cards/{card_id}")
 def get_card(card_id: int):
     con = db_connect()
+    initial_card = con.execute("SELECT current_sector FROM cards WHERE id=?", (card_id,)).fetchone()
+    if not initial_card:
+        con.close()
+        raise HTTPException(404, "Card não encontrado.")
+    try:
+        restore_receiving_state_from_supabase(con, card_id=card_id)
+        con.commit()
+    except Exception as exc:
+        con.rollback()
+        con.close()
+        print("[aviso] falha ao atualizar estado persistido do Card {}: {}".format(card_id, exc))
+        if initial_card["current_sector"] in {"RECEBIMENTO", "QUALIDADE"}:
+            raise HTTPException(
+                503,
+                "Não foi possível carregar o estado mais recente do Recebimento no Supabase. Reabra o Card quando a conexão for restabelecida.",
+            ) from exc
     repaired = repair_stored_reference_items(con, card_id)
     if repaired:
         con.commit()
@@ -1944,10 +1960,7 @@ async def save_receiving(receiving_id: int, request: Request):
     user_id = int(data.get("user_id") or 0)
     con = db_connect()
     require_role(con, user_id, {"recebimento"})
-    rec = con.execute("SELECT * FROM receivings WHERE id=?", (receiving_id,)).fetchone()
-    if not rec:
-        con.close()
-        raise HTTPException(404, "Recebimento não encontrado.")
+    rec = refresh_receiving_operation(con, receiving_id)
     card = con.execute("SELECT * FROM cards WHERE id=?", (rec["card_id"],)).fetchone()
     if card["current_sector"] != "RECEBIMENTO":
         con.close()
@@ -2007,10 +2020,7 @@ async def complete_physical(receiving_id: int, request: Request):
     user_id = int(data.get("user_id") or 0)
     con = db_connect()
     user = require_role(con, user_id, {"recebimento"})
-    rec = con.execute("SELECT * FROM receivings WHERE id=?", (receiving_id,)).fetchone()
-    if not rec:
-        con.close()
-        raise HTTPException(404, "Recebimento não encontrado.")
+    rec = refresh_receiving_operation(con, receiving_id)
     card = con.execute("SELECT * FROM cards WHERE id=?", (rec["card_id"],)).fetchone()
     if card["current_sector"] != "RECEBIMENTO":
         con.close()
@@ -2057,10 +2067,7 @@ async def sample_timer(receiving_id: int, action: str, request: Request):
     user_id = int(data.get("user_id") or 0)
     con = db_connect()
     require_role(con, user_id, {"recebimento"})
-    rec = con.execute("SELECT * FROM receivings WHERE id=?", (receiving_id,)).fetchone()
-    if not rec:
-        con.close()
-        raise HTTPException(404, "Recebimento não encontrado.")
+    rec = refresh_receiving_operation(con, receiving_id)
     card = con.execute("SELECT * FROM cards WHERE id=?", (rec["card_id"],)).fetchone()
     if card["current_sector"] != "RECEBIMENTO":
         con.close()
