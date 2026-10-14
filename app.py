@@ -34,6 +34,7 @@ from supabase_module import (
     sync_card_items_to_supabase,
     sync_all_receiving_state_to_supabase,
     sync_receiving_card_state_to_supabase,
+    restore_receiving_state_from_supabase,
     delete_card_from_supabase,
 )
 
@@ -1210,11 +1211,20 @@ def startup() -> None:
     # para o Supabase para manter o espelho atualizado entre redeploys.
     try:
         con = db_connect()
+        # Re-run restoration after local users and all SQLite migrations are ready.
+        # This makes Supabase's Receiving rows/timer events authoritative on redeploy.
+        restore_receiving_state_from_supabase(con)
+        con.commit()
         sync_all_cards_to_supabase(con, include_items=True)
         sync_all_receiving_state_to_supabase(con)
         con.close()
     except Exception as e:
-        print(f"[aviso] não consegui sincronizar cards/itens no startup: {e}")
+        if "con" in locals():
+            try:
+                con.close()
+            except Exception:
+                pass
+        print(f"[aviso] não consegui restaurar/sincronizar cards e Recebimento no startup: {e}")
     init_quality_db()
     init_processing_db()
     ensure_worker_function_column()
