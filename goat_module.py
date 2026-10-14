@@ -10,7 +10,11 @@ from typing import Any
 from fastapi import APIRouter, FastAPI, File, HTTPException, UploadFile
 from openpyxl import load_workbook
 
-from supabase_module import pg_connect, sync_card_with_items_to_supabase
+from supabase_module import (
+    pg_connect,
+    sync_card_with_items_to_supabase,
+    sync_receiving_card_state_to_supabase,
+)
 
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = Path(os.getenv("OUTLOG_DATA_DIR", str(BASE_DIR / "data"))).resolve() / "controle_logistica.db"
@@ -497,6 +501,15 @@ def confirm_receiving(payload: dict[str, Any]) -> dict[str, Any]:
             "INSERT INTO history(card_id,user_id,event_type,description,created_at) VALUES(?,?,?,?,?)",
             (card_id, None, "CONFERENCIA", f"Conferência {status}: {pecas} peças, {vol} volumes, casulo {casulo}. {obs}".strip(), now),
         )
+        try:
+            sync_receiving_card_state_to_supabase(con, card_id)
+        except Exception as exc:
+            con.rollback()
+            print("[erro] falha ao persistir a conferência do Card {} no Supabase: {}".format(card_id, exc))
+            raise HTTPException(
+                503,
+                "A conferência não foi confirmada no Supabase. Nenhuma alteração foi considerada salva; tente novamente.",
+            ) from exc
         con.commit()
     finally:
         con.close()
