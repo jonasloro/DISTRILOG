@@ -1031,7 +1031,7 @@ function qualitySetupHtml(previousInspection=null, sourceSubset=false) {
   const routeField = sourceSubset
     ? `<div class="field" id="qualityDestinationField"><label>Destino da Inspeção 1</label><select id="qualityDestination"><option value="">Selecione</option><option value="CD01">CD01 — retorna ao nosso CD</option><option value="CD02">CD02 — sai do fluxo interno</option></select></div>`
     : defaultType === 1
-      ? `<div class="field full"><label>Vai para a Costura?</label><select id="qualitySendToCostura" required><option value="">Selecione obrigatoriamente</option><option value="1">Sim — segue para a Costura</option><option value="0">Não — segue direto para Processamento</option></select><small>Esta decisão é obrigatória. Ao concluir a inspeção, o volume da amostra dos 10% será movido automaticamente para o endereço do saldo.</small></div>`
+      ? `<div class="field full"><label>Vai para a Costura?</label><div class="actions compact-actions"><button type="button" class="secondary" id="qualityCosturaYes" aria-pressed="false" onclick="setQualityCosturaChoice('1')">Sim — segue para a Costura</button><button type="button" class="secondary" id="qualityCosturaNo" aria-pressed="false" onclick="setQualityCosturaChoice('0')">Não — segue direto para Processamento</button></div><input id="qualitySendToCostura" type="hidden" value=""><small>Selecione uma opção para liberar a criação da inspeção. Ao concluir, a amostra dos 10% será reunida automaticamente ao saldo.</small></div>`
       : `<div class="field"><label>Vai para a Costura?</label><input class="readonly" readonly value="Não — retorno da Costura segue para Processamento"></div>`;
   return `<div class="panel-body">
     ${sourceSubset ? `<div class="notice success-box"><b>Controle por referência</b><br>Selecione abaixo quais referências entrarão nesta inspeção. As referências não selecionadas não serão movimentadas.</div>${qualitySourceItemsHtml()}` : ""}
@@ -1049,6 +1049,26 @@ function qualitySetupHtml(previousInspection=null, sourceSubset=false) {
     </div>
     <div class="actions"><button class="primary" onclick="createQualityInspection()">Criar inspeção</button></div>
   </div>`;
+}
+
+function setQualityCosturaChoice(value) {
+  const choice = String(value);
+  if (choice !== "1" && choice !== "0") return;
+  const input = $("qualitySendToCostura");
+  if (!input) return;
+  input.value = choice;
+  const yes = $("qualityCosturaYes");
+  const no = $("qualityCosturaNo");
+  if (yes) {
+    yes.classList.toggle("primary", choice === "1");
+    yes.classList.toggle("secondary", choice !== "1");
+    yes.setAttribute("aria-pressed", choice === "1" ? "true" : "false");
+  }
+  if (no) {
+    no.classList.toggle("primary", choice === "0");
+    no.classList.toggle("secondary", choice !== "0");
+    no.setAttribute("aria-pressed", choice === "0" ? "true" : "false");
+  }
 }
 
 function toggleQualitySetupFields() {
