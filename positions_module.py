@@ -108,9 +108,18 @@ def init_positions_db() -> None:
                 cur.execute(
                     """UPDATE card_allocations AS a SET active=FALSE
                        WHERE a.active IS TRUE AND a.setor = ANY(%s)
-                         AND a.created_at < (
-                             SELECT MAX(r.created_at) FROM outlog_receivings r
-                             WHERE r.card_id=a.card_id AND r.receiving_type='RETORNO'
+                         AND (
+                             a.created_at < (
+                                 SELECT MAX(r.created_at) FROM outlog_receivings r
+                                 WHERE r.card_id=a.card_id AND r.receiving_type='RETORNO'
+                             )
+                             OR (
+                                 a.allocation_purpose='TEN_PERCENT_SAMPLE'
+                                 AND EXISTS (
+                                     SELECT 1 FROM outlog_receivings r
+                                     WHERE r.card_id=a.card_id AND r.receiving_type='RETORNO'
+                                 )
+                             )
                          )""",
                     (["RM", "QA", "PR"],),
                 )
@@ -746,9 +755,18 @@ def _init_local_positions_db() -> None:
             con.execute(
                 """UPDATE card_allocations SET active=0
                    WHERE active=1 AND setor IN ('RM','QA','PR')
-                     AND created_at < (
-                         SELECT MAX(r.created_at) FROM receivings r
-                         WHERE r.card_id=card_allocations.card_id AND r.receiving_type='RETORNO'
+                     AND (
+                         created_at < (
+                             SELECT MAX(r.created_at) FROM receivings r
+                             WHERE r.card_id=card_allocations.card_id AND r.receiving_type='RETORNO'
+                         )
+                         OR (
+                             allocation_purpose='TEN_PERCENT_SAMPLE'
+                             AND EXISTS (
+                                 SELECT 1 FROM receivings r
+                                 WHERE r.card_id=card_allocations.card_id AND r.receiving_type='RETORNO'
+                             )
+                         )
                      )"""
             )
         rows=[]
