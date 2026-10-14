@@ -433,6 +433,12 @@ function cardLocationBannerHtml(rows, failed=false, loading=false, currentSector
   const sectorLabels = {RM:"Recebimento / Matéria-prima",QA:"Qualidade",PR:"Processamento",ET:"Etiquetagem",EC:"Estocagem",QUALIDADE:"Qualidade"};
   const locations = new Map();
   (Array.isArray(rows) ? rows : []).forEach((row) => {
+    // A trilha inclui o histórico; este painel deve mostrar apenas alocações ainda ativas.
+    const activeValue = row.active;
+    const inactive = activeValue === false || activeValue === 0 ||
+      (typeof activeValue === "string" && ["false", "0", "f"].includes(activeValue.trim().toLowerCase()));
+    if (inactive) return;
+
     const sector = String(row.setor || "").trim().toUpperCase();
     const address = String(row.address || "").trim();
     const qty = Number(row.quantidade || 0);
