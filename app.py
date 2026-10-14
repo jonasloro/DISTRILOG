@@ -89,6 +89,7 @@ async def persist_card_state(request: Request, call_next):
         request.method in {"POST", "PUT", "PATCH", "DELETE"}
         and request.url.path.startswith("/api/")
     ):
+        con = None
         try:
             con = db_connect()
             sync_all_cards_to_supabase(
@@ -100,7 +101,6 @@ async def persist_card_state(request: Request, call_next):
                 # Keep this bootstrap/creation path persisted; normal Receiving writes use
                 # targeted write-through before the API reports success.
                 sync_all_receiving_state_to_supabase(con)
-            con.close()
         except Exception as e:
             print(f"[aviso] não consegui sincronizar cards com o Supabase: {e}")
             if request.url.path == "/api/import-excel":
@@ -108,6 +108,9 @@ async def persist_card_state(request: Request, call_next):
                     status_code=503,
                     content={"detail": "A importação localizou os Cards, mas não foi possível confirmar seus controles de Recebimento no Supabase. Consulte o histórico antes de repetir a importação."},
                 )
+        finally:
+            if con is not None:
+                con.close()
     return response
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
