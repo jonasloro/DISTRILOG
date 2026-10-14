@@ -1830,9 +1830,11 @@ async def complete_inspection(inspection_id: int, request: Request):
         )
         route_text = "Card liberado para despacho à Costura. A amostra dos 10% foi integrada ao endereço do saldo."
     else:
+        # Preserve receiving_type for Inspeção 2 after the Costura return;
+        # a normal first Inspection already carries NOVA at this point.
         con.execute(
             """UPDATE cards SET current_sector='PROCESSAMENTO',status='AGUARDANDO_PROCESSAMENTO',
-               quality_destination=NULL,receiving_type='NOVA',updated_at=? WHERE id=?""",
+               quality_destination=NULL,updated_at=? WHERE id=?""",
             (now, inspection["card_id"]),
         )
         route_text = "Card encaminhado diretamente ao Processamento, com a amostra dos 10% integrada ao endereço do saldo."
