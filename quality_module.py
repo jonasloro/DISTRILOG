@@ -915,21 +915,16 @@ async def create_inspection(card_id: int, request: Request):
     if existing:
         con.close()
         raise HTTPException(400, "Já existe uma inspeção aberta para este Card.")
-    if card["receiving_type"] == "RETORNO" and inspection_type != 2:
+    is_costura_return = str(card["receiving_type"] or "").upper() == "RETORNO"
+    expected_inspection_type = 2 if is_costura_return else 1
+    if inspection_type != expected_inspection_type:
         con.close()
-        raise HTTPException(400, "Após o retorno da Costura, a inspeção obrigatória é a Inspeção 2.")
+        if is_costura_return:
+            raise HTTPException(400, "Após o retorno da Costura, a inspeção obrigatória é a Inspeção 2.")
+        raise HTTPException(400, "Na primeira etapa após o Recebimento, a inspeção obrigatória é a Inspeção 1. A Inspeção 2 só pode ocorrer após o retorno da Costura.")
 
-    if card["receiving_type"] != "RETORNO" and inspection_type == 2:
-        con.close()
-        raise HTTPException(400, "A Inspeção 2 só existe para mercadoria que retornou da Costura.")
-
-    # A origem da amostra depende do momento do fluxo, não apenas do número da inspeção.
-    # - Mercadoria nova: tanto a Inspeção 1 quanto a Inspeção 2 usam os 10% já
-    #   separados pelo Recebimento. A Inspeção 2 pode ser escolhida diretamente
-    #   quando a mercadoria não precisa passar pela Costura.
-    # - Retorno da Costura: a Inspeção 2 é obrigatória e usa a nova amostra de
-    #   10% já separada pelo Recebimento sobre a quantidade efetivamente retornada.
-    is_costura_return = card["receiving_type"] == "RETORNO"
+    # A amostra acompanha a etapa real do fluxo: o Recebimento inicial alimenta a
+    # Inspeção 1; somente o retorno da Costura pode iniciar a Inspeção 2.
     source_receiving_id: Optional[int] = None
     if source_subset:
         subset_total = sum(int(item["expected_qty"] or 0) for item in source_items)
