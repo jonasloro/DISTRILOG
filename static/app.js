@@ -533,6 +533,8 @@ async function openCard(cardId, tab = "receiving") {
   currentCardId = cardId;
   const locationRequestId = Number(window.cardLocationRequestId || 0) + 1;
   window.cardLocationRequestId = locationRequestId;
+  window.cardLocationRows = null;
+  window.cardLocationFailed = false;
   window.qaSampleAllocationRequired = false;
   window.qaSampleAllocationComplete = true;
   cardData = await api(`/api/cards/${cardId}`);
@@ -600,6 +602,8 @@ async function openCard(cardId, tab = "receiving") {
   apiWithTimeout(`/api/positions/cards/${cardId}/trail`, 8000)
     .then((rows) => {
       if (window.cardLocationRequestId !== locationRequestId || Number(currentCardId) !== Number(cardId)) return;
+      window.cardLocationRows = rows;
+      window.cardLocationFailed = false;
       const slot = $("cardLocationSlot");
       if (slot) slot.innerHTML = cardLocationBannerHtml(rows, false, false, cardData?.current_sector || "");
       const sampleNotice = $("qualitySampleRelocationNotice");
@@ -607,6 +611,8 @@ async function openCard(cardId, tab = "receiving") {
     })
     .catch((error) => {
       if (window.cardLocationRequestId !== locationRequestId || Number(currentCardId) !== Number(cardId)) return;
+      window.cardLocationRows = null;
+      window.cardLocationFailed = true;
       const slot = $("cardLocationSlot");
       if (slot) slot.innerHTML = cardLocationBannerHtml(null, true);
       const sampleNotice = $("qualitySampleRelocationNotice");
@@ -893,10 +899,15 @@ function sampleHtml(r, sampleDone, operate, isReturn=false) {
 
 function dispatchHtml() {
   const operate = canOperateReceiving();
+  const initialSampleNotice = Array.isArray(window.cardLocationRows)
+    ? qualitySampleRelocationNoticeHtml(window.cardLocationRows)
+    : window.cardLocationFailed
+      ? qualitySampleRelocationNoticeHtml(null, true)
+      : '<div class="notice warn">Consultando o endereço da amostra dos 10% e o local do restante da mercadoria…</div>';
   return `<div class="panel-body">
     <div class="notice warn"><b>Inspeção 1 concluída.</b> A Qualidade definiu o destino <b>${esc(cardData.quality_destination)}</b>. O Recebimento é responsável pelo despacho.</div>
     ${String(cardData.quality_destination || "").toUpperCase() === "CD01" && String(cardData.receiving_type || "").toUpperCase() === "NOVA"
-      ? '<div id="qualitySampleRelocationNotice"><div class="notice warn">Consultando o endereço da amostra dos 10% e o local do restante da mercadoria…</div></div>'
+      ? '<div id="qualitySampleRelocationNotice">' + initialSampleNotice + '</div>'
       : ""}
     <div class="form-grid">
       <div class="field"><label>Destino definido pela Qualidade</label><input class="readonly" readonly value="${esc(cardData.quality_destination)}"></div>
