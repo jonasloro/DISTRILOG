@@ -436,6 +436,24 @@ async function openCard(cardId, tab = "receiving") {
     currentReceiving.receiving_type !== "COSTURA"
   );
   window.qaSampleAllocationComplete = !window.qaSampleAllocationRequired;
+  if (window.qaSampleAllocationRequired) {
+    // Do not assume the QA sample is unallocated whenever the Card is reopened.
+    // Re-read the physical allocation state; otherwise creating an inspection succeeds
+    // but the next render incorrectly forces the operator back to the Receiving tab.
+    try {
+      const allocationStatus = await apiWithTimeout(
+        `/api/positions/cards/${cardId}/status?setor=QA`
+      );
+      const totalVolumes = Number(currentReceiving.volumes ?? allocationStatus.volumes_total ?? 0);
+      const requiredSampleVolumes = totalVolumes > 0 ? 1 : 0;
+      const allocatedSampleVolumes = Number(allocationStatus.ten_percent_sample_allocated || 0);
+      window.qaSampleAllocationComplete =
+        requiredSampleVolumes > 0 && allocatedSampleVolumes >= requiredSampleVolumes;
+    } catch (error) {
+      window.qaSampleAllocationComplete = false;
+      console.warn("Não foi possível verificar a alocação dos 10% na Qualidade:", error);
+    }
+  }
   receivingPhotos = cardData.receiving?.photo_paths || [];
   dispatchPhotos = cardData.dispatch?.photo_paths || [];
   const cardReference = String(
