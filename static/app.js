@@ -648,8 +648,23 @@ function canOperateReceiving() {
 function qualityReadOnlyPreviewHtml() {
   const items = (cardData.items || []).slice(0, 8);
   const rows = items.map((item) => '<tr><td>' + esc(item.product || '—') + '</td><td>' + esc(item.reference || '—') + '</td><td>' + esc(item.color || '—') + '</td><td>' + esc(item.size || '—') + '</td><td>' + Number(item.expected_qty || 0).toLocaleString('pt-BR') + '</td></tr>').join('');
+  const qualityInspection = cardData.quality || {};
+  const showSampleRelocationNotice = currentUser?.role === "qualidade" &&
+    qualityInspection.status === "CONCLUIDA" &&
+    Number(qualityInspection.inspection_type) === 1 &&
+    String(qualityInspection.destination || cardData.quality_destination || "").toUpperCase() === "CD01" &&
+    String(cardData.status || "").toUpperCase() === "AGUARDANDO_DESPACHO_COSTURA";
+  const initialSampleNotice = Array.isArray(window.cardLocationRows)
+    ? qualitySampleRelocationNoticeHtml(window.cardLocationRows)
+    : window.cardLocationFailed
+      ? qualitySampleRelocationNoticeHtml(null, true)
+      : '<div class="notice warn">Consultando o endereço da amostra dos 10% e o local do restante da mercadoria…</div>';
+  const sampleRelocationNotice = showSampleRelocationNotice
+    ? '<h3 class="section-heading">Orientação para a Costura</h3><div id="qualitySampleRelocationNotice">' + initialSampleNotice + '</div>'
+    : '';
   return '<div class="panel-body">' +
     '<div class="notice warn"><b>Visualização somente leitura.</b><br>Setor responsável: <b>' + esc(cardData.current_sector || 'Não definido') + '</b>. Ações operacionais ficam disponíveis somente para o setor responsável.</div>' +
+    sampleRelocationNotice +
     '<div class="summary-grid">' +
       '<div class="summary-box"><span>Compra</span><strong>' + esc(cardData.purchase_id || '—') + '</strong></div>' +
       '<div class="summary-box"><span>Fornecedor</span><strong>' + esc(cardData.supplier || '—') + '</strong></div>' +
@@ -899,16 +914,9 @@ function sampleHtml(r, sampleDone, operate, isReturn=false) {
 
 function dispatchHtml() {
   const operate = canOperateReceiving();
-  const initialSampleNotice = Array.isArray(window.cardLocationRows)
-    ? qualitySampleRelocationNoticeHtml(window.cardLocationRows)
-    : window.cardLocationFailed
-      ? qualitySampleRelocationNoticeHtml(null, true)
-      : '<div class="notice warn">Consultando o endereço da amostra dos 10% e o local do restante da mercadoria…</div>';
   return `<div class="panel-body">
-    <div class="notice warn"><b>Inspeção 1 concluída.</b> A Qualidade definiu o destino <b>${esc(cardData.quality_destination)}</b>. O Recebimento é responsável pelo despacho.</div>
-    ${String(cardData.quality_destination || "").toUpperCase() === "CD01" && String(cardData.receiving_type || "").toUpperCase() === "NOVA"
-      ? '<div id="qualitySampleRelocationNotice">' + initialSampleNotice + '</div>'
-      : ""}
+    <div class="notice warn"><b>Inspeção 1 concluída.</b> A Qualidade definiu o destino <b>${esc(cardData.quality_destination)}</b>. O Recebimento é responsável pelo despacho.
+    </div>
     <div class="form-grid">
       <div class="field"><label>Destino definido pela Qualidade</label><input class="readonly" readonly value="${esc(cardData.quality_destination)}"></div>
       <div class="field"><label>Transportadora</label><input id="dispatchCarrier" ${operate?"":"readonly"}></div>
