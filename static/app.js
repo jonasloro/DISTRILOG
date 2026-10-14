@@ -1201,6 +1201,7 @@ function qualityAssignmentAreaHtml(q, isOpen, canOperate) {
       ${supervisorMode ? `<div class="field bulk-inspector"><label>Inspetor para todas as linhas</label><select id="qualityBatchInspector"><option value="">Selecione</option>${qualityInspectorOptions()}</select></div>` : `<div class="selected-inspector"><span>Inspetor</span><b>${esc(currentUser.name)}</b><input type="hidden" id="qualityBatchInspector" value="${currentUser.id}"></div>`}
       <div class="field bulk-search"><label>Pesquisar</label><input id="qualityAssignSearch" placeholder="Produto, SKU, cor ou tamanho" oninput="filterQualityAssignmentRows()"></div>
       <div class="actions compact-actions">
+        <button class="success" onclick="assignAllQualityAvailable()">Atribuir todos os disponíveis</button>
         <button class="secondary" onclick="selectAllQualityAvailable()">Selecionar disponíveis</button>
         <button class="secondary" onclick="fillQualityBalances()">Assumir saldos selecionados</button>
         <button class="ghost" onclick="clearQualityBatch()">Limpar</button>
@@ -1324,6 +1325,23 @@ async function saveQualityAssignmentsBatch() {
   } catch (error) { toast(error.message); }
 }
 
+async function assignAllQualityAvailable() {
+  try {
+    const inspectorId = Number($("qualityBatchInspector")?.value || 0);
+    if (!inspectorId) throw new Error("Selecione o inspetor.");
+    const assignments = (cardData.quality?.sample_items || [])
+      .filter((row) => Number(row.available_qty) > 0)
+      .map((row) => ({ sample_item_id: Number(row.id), assigned_qty: Number(row.available_qty) }));
+    if (!assignments.length) throw new Error("Não há quantidades disponíveis para atribuir.");
+    await api(`/api/quality/inspections/${cardData.quality.id}/assignments/batch`, {
+      method: "POST",
+      body: JSON.stringify({ user_id: currentUser.id, inspector_id: inspectorId, assignments }),
+    });
+    toast(`${assignments.length} itens atribuídos de uma vez ao inspetor selecionado.`);
+    await openCard(currentCardId, "quality");
+  } catch (error) { toast(error.message); }
+}
+
 async function quickClaimQuality(sampleId,qty){
   try{
     const inspectorId=currentUser.role==="qualidade"?currentUser.id:Number($("qualityBatchInspector")?.value||0);
@@ -1335,7 +1353,8 @@ async function quickClaimQuality(sampleId,qty){
 
 function qualityWorkersHtml(q, isOpen) {
   if (!q.workers.length) return '<h3 class="section-heading">Inspetores</h3><div class="notice">Nenhum item foi atribuído.</div>';
-  return `<h3 class="section-heading">Inspetores e resultados individuais</h3>${q.workers.map((worker)=>qualityWorkerHtml(worker,isOpen)).join("")}`;
+  return '<h3 class="section-heading">Inspeção em lote</h3><div class="notice">Cada inspetor tem <b>um único cronômetro</b>, mesmo quando inspeciona dezenas de SKUs. Informe divergências por linha e salve os resultados de todos os itens de uma só vez.</div>' +
+    q.workers.map((worker) => qualityWorkerHtml(worker, isOpen)).join("");
 }
 
 function qualityWorkerHtml(worker, isOpen) {
@@ -1344,43 +1363,84 @@ function qualityWorkerHtml(worker, isOpen) {
   const canEditResults = isOpen && (worker.inspector_id === currentUser.id || currentUser.role === "admin");
   const canManageAssignment = isOpen && (worker.inspector_id === currentUser.id || ["supervisor","admin"].includes(currentUser.role));
   return `<div class="quality-worker">
-    <div class="quality-worker-head"><div><b>${esc(worker.inspector_name)}</b><br><span class="status-note">${worker.assignments.length} atribuição(ões)</span></div><span class="badge ${timer.state==="CONCLUIDA"?"green":timer.state==="PAUSADA"?"orange":timer.state==="EM_ANDAMENTO"?"purple":"gray"}">${esc(timer.state)}</span></div>
+    <div class="quality-worker-head"><div><b>${esc(worker.inspector_name)}</b><br><span class="status-note">${worker.assignments.length} SKU/atribuição(ões)</span></div><span class="badge ${timer.state==="CONCLUIDA"?"green":timer.state==="PAUSADA"?"orange":timer.state==="EM_ANDAMENTO"?"purple":"gray"}">${esc(timer.state)}</span></div>
     <div class="timer-grid">
       <div class="timer-value"><span>Tempo útil</span><strong>${fmtSeconds(timer.business_seconds)}</strong></div>
       <div class="timer-value"><span>Tempo parado</span><strong>${fmtSeconds(timer.paused_seconds)}</strong></div>
       <div class="timer-value"><span>Permanência</span><strong>${fmtSeconds(timer.permanence_seconds)}</strong></div>
-      <div class="timer-value"><span>Produção</span><strong>${worker.assignments.reduce((a,b)=>a+Number(b.inspected_qty||0),0)}</strong></div>
+      <div class="timer-value"><span>Produção</span><strong>${worker.assignments.reduce((sum,item)=>sum+Number(item.inspected_qty||0),0)}</strong></div>
     </div>
     <div class="actions">
-      ${canControlTimer && timer.state==="NAO_INICIADA"?`<button class="primary" onclick="qualityTimerAction(${worker.id},'start')">Iniciar inspeção</button>`:""}
-      ${canControlTimer && timer.state==="EM_ANDAMENTO"?`<button class="warning" onclick="qualityTimerAction(${worker.id},'pause')">Pausar</button><button class="success" onclick="qualityTimerAction(${worker.id},'finish')">Finalizar minha inspeção</button>`:""}
-      ${canControlTimer && timer.state==="PAUSADA"?`<button class="primary" onclick="qualityTimerAction(${worker.id},'resume')">Retomar</button><button class="success" onclick="qualityTimerAction(${worker.id},'finish')">Finalizar minha inspeção</button>`:""}
+      ${canControlTimer && timer.state==="NAO_INICIADA"?`<button class="primary" onclick="qualityTimerAction(${worker.id},'start')">Iniciar cronômetro</button>`:""}
+      ${canControlTimer && timer.state==="EM_ANDAMENTO"?`<button class="warning" onclick="qualityTimerAction(${worker.id},'pause')">Pausar</button><button class="success" onclick="qualityTimerAction(${worker.id},'finish')">Finalizar inspeção</button>`:""}
+      ${canControlTimer && timer.state==="PAUSADA"?`<button class="primary" onclick="qualityTimerAction(${worker.id},'resume')">Retomar</button><button class="success" onclick="qualityTimerAction(${worker.id},'finish')">Finalizar inspeção</button>`:""}
+      ${canEditResults && worker.assignments.length?`<button class="success" onclick="qualityApproveAllWorker(${worker.id})">Marcar todos como aprovados</button><button class="primary" onclick="saveQualityResultsBatch(${worker.id})">Salvar resultados em lote</button>`:""}
     </div>
-    ${worker.assignments.map((a)=>qualityAssignmentResultHtml(a,worker,canEditResults,canManageAssignment)).join("")}
+    ${qualityAssignmentResultsTable(worker,canEditResults,canManageAssignment)}
   </div>`;
 }
 
-function qualityAssignmentResultHtml(a, worker, canEdit, canManage) {
-  const photos = a.photo_paths || [];
-  return `<div class="quality-assignment">
-    <div class="quality-assignment-title"><b>${esc(a.product||"—")} • ${esc(a.color||"—")} • ${esc(a.size||"—")}</b><span class="badge ${a.valid?"green":"orange"}">${a.assigned_qty} peças atribuídas</span></div>
-    <div class="form-grid">
-      <div class="field"><label>Quantidade inspecionada</label><input id="qaInspected_${a.id}" type="number" min="0" max="${a.assigned_qty}" value="${a.inspected_qty}" ${canEdit?"":"readonly"} oninput="recalcQualityAssignment(${a.id})"></div>
-      <div class="field"><label>Quantidade rejeitada</label><input id="qaRejected_${a.id}" type="number" min="0" value="${a.rejected_qty}" ${canEdit?"":"readonly"} oninput="recalcQualityAssignment(${a.id})"></div>
-      <div class="field"><label>Quantidade para retrabalho</label><input id="qaRework_${a.id}" type="number" min="0" value="${a.rework_qty}" ${canEdit?"":"readonly"} oninput="recalcQualityAssignment(${a.id})"></div>
-      <div class="field"><label>Quantidade aprovada</label><input id="qaApproved_${a.id}" class="readonly" readonly value="${a.approved_qty}"></div>
-      <div class="field"><label>Motivo da rejeição</label><input id="qaRejectReason_${a.id}" value="${esc(a.reject_reason||"")}" ${canEdit?"":"readonly"}></div>
-      <div class="field"><label>Motivo do retrabalho</label><input id="qaReworkReason_${a.id}" value="${esc(a.rework_reason||"")}" ${canEdit?"":"readonly"}></div>
-      <div class="field full"><label>Observação obrigatória quando houver rejeição ou retrabalho</label><textarea id="qaObservation_${a.id}" ${canEdit?"":"readonly"}>${esc(a.observation||"")}</textarea></div>
-    </div>
-    <div class="photos">${photos.map((p,i)=>`<a class="photo-link" target="_blank" href="${p}">Evidência ${i+1}</a>`).join("")}</div>
-    ${a.validation_errors?.length?`<div class="notice warn">${a.validation_errors.map(esc).join("<br>")}</div>`:""}
-    <div class="actions">
-      ${canEdit?`<button class="success" onclick="qualityAllApproved(${a.id},${a.assigned_qty})">Tudo aprovado</button><button class="secondary" onclick="saveQualityResult(${a.id})">Salvar resultado</button><label class="primary small-btn" style="cursor:pointer">Adicionar evidências<input id="qaFiles_${a.id}" type="file" multiple hidden onchange="uploadQualityAssignmentPhotos(${a.id})"></label>`:""}
-      ${canManage && worker.status==="NAO_INICIADA"?`<button class="danger small-btn" onclick="releaseQualityAssignment(${a.id})">Devolver atribuição</button>`:""}
-      ${canManage && Number(a.inspected_qty||0)===0?`<select id="qaTransferTo_${a.id}"><option value="">Transferir para...</option>${qualityInspectorOptions()}</select><input id="qaTransferReason_${a.id}" placeholder="Motivo da transferência"><button class="warning small-btn" onclick="transferQualityAssignment(${a.id})">Transferir</button>`:""}
-    </div>
-  </div>`;
+function qualityAssignmentResultsTable(worker, canEdit, canManage) {
+  const rows = worker.assignments || [];
+  if (!rows.length) return '<div class="notice">Nenhum SKU atribuído a este inspetor.</div>';
+  return `<div class="table-wrap quality-results-wrap"><table class="compact-table quality-results-table">
+    <thead><tr><th>Produto / SKU</th><th>Qtd. atribuída</th><th>Inspecionada</th><th>Rejeitada</th><th>Retrabalho</th><th>Aprovada</th><th>Motivo da rejeição</th><th>Motivo do retrabalho</th><th>Observação</th><th>Evidências / ações</th></tr></thead>
+    <tbody>${rows.map((a) => {
+      const photos = a.photo_paths || [];
+      const itemDetails = [a.reference||a.sku, a.color, a.size].filter(Boolean).join(" • ") || "—";
+      return `<tr class="quality-results-row" data-worker-id="${worker.id}" data-assignment-id="${a.id}" data-assigned-qty="${a.assigned_qty}">
+        <td><b>${esc(a.product||"—")}</b><br><small>${esc(itemDetails)}</small></td>
+        <td><b>${a.assigned_qty}</b></td>
+        <td><input class="table-input quality-result-qty" id="qaInspected_${a.id}" type="number" min="0" max="${a.assigned_qty}" value="${a.inspected_qty}" ${canEdit?"":"readonly"} oninput="recalcQualityAssignment(${a.id})"></td>
+        <td><input class="table-input quality-result-qty" id="qaRejected_${a.id}" type="number" min="0" max="${a.assigned_qty}" value="${a.rejected_qty}" ${canEdit?"":"readonly"} oninput="recalcQualityAssignment(${a.id})"></td>
+        <td><input class="table-input quality-result-qty" id="qaRework_${a.id}" type="number" min="0" max="${a.assigned_qty}" value="${a.rework_qty}" ${canEdit?"":"readonly"} oninput="recalcQualityAssignment(${a.id})"></td>
+        <td><input class="table-input quality-result-qty readonly" id="qaApproved_${a.id}" readonly value="${a.approved_qty}"></td>
+        <td><input class="table-input quality-result-text" id="qaRejectReason_${a.id}" value="${esc(a.reject_reason||"")}" ${canEdit?"":"readonly"} placeholder="Obrigatório se rejeitar"></td>
+        <td><input class="table-input quality-result-text" id="qaReworkReason_${a.id}" value="${esc(a.rework_reason||"")}" ${canEdit?"":"readonly"} placeholder="Obrigatório se retrabalhar"></td>
+        <td><textarea class="table-input quality-result-observation" id="qaObservation_${a.id}" ${canEdit?"":"readonly"} placeholder="Observação em caso de divergência">${esc(a.observation||"")}</textarea></td>
+        <td>
+          <div class="quality-result-actions">
+            ${photos.map((p,i)=>`<a class="photo-link" target="_blank" href="${p}">Evidência ${i+1}</a>`).join("")}
+            ${canEdit?`<label class="secondary small-btn quality-evidence-upload">+ Foto<input id="qaFiles_${a.id}" type="file" multiple hidden onchange="uploadQualityAssignmentPhotos(${a.id})"></label>`:""}
+            ${canManage && worker.status==="NAO_INICIADA"?`<button class="danger small-btn" onclick="releaseQualityAssignment(${a.id})">Devolver</button>`:""}
+            ${canManage && Number(a.inspected_qty||0)===0?`<details class="quality-manage-details"><summary>Transferir</summary><select id="qaTransferTo_${a.id}"><option value="">Inspetor...</option>${qualityInspectorOptions()}</select><input id="qaTransferReason_${a.id}" placeholder="Motivo"><button class="warning small-btn" onclick="transferQualityAssignment(${a.id})">Transferir</button></details>`:""}
+          </div>
+        </td>
+      </tr>`;
+    }).join("")}</tbody>
+  </table></div>`;
+}
+
+async function saveQualityResultsBatch(workerId) {
+  try {
+    const worker = cardData.quality?.workers?.find((item) => Number(item.id) === Number(workerId));
+    if (!worker || !worker.assignments.length) throw new Error("Este inspetor não tem atribuições para salvar.");
+    const results = worker.assignments.map((assignment) => {
+      const payload = qualityAssignmentPayload(assignment.id);
+      const {user_id, ...values} = payload;
+      return {assignment_id: assignment.id, ...values};
+    });
+    await api(`/api/quality/workers/${workerId}/results/batch`, {
+      method: "PATCH",
+      body: JSON.stringify({user_id: currentUser.id, results}),
+    });
+    toast(`${results.length} resultado(s) salvo(s) em uma única operação.`);
+    await openCard(currentCardId, "quality");
+  } catch (error) { toast(error.message); }
+}
+
+async function qualityApproveAllWorker(workerId) {
+  const worker = cardData.quality?.workers?.find((item) => Number(item.id) === Number(workerId));
+  if (!worker || !worker.assignments.length) { toast("Este inspetor não tem itens atribuídos."); return; }
+  if (!confirm(`Marcar os ${worker.assignments.length} itens deste inspetor como inspecionados e aprovados? Isso zera as quantidades de rejeição e retrabalho desta lista.`)) return;
+  worker.assignments.forEach((assignment) => {
+    const id = assignment.id;
+    if ($(`qaInspected_${id}`)) $(`qaInspected_${id}`).value = assignment.assigned_qty;
+    if ($(`qaRejected_${id}`)) $(`qaRejected_${id}`).value = 0;
+    if ($(`qaRework_${id}`)) $(`qaRework_${id}`).value = 0;
+    recalcQualityAssignment(id);
+  });
+  await saveQualityResultsBatch(workerId);
 }
 
 async function qualityAllApproved(id,qty){
