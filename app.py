@@ -86,6 +86,11 @@ async def persist_card_state(request: Request, call_next):
                 con.close()
 
     if request.method == "POST" and request.url.path == "/api/import-excel":
+        if not os.getenv("SUPABASE_DATABASE_URL"):
+            return JSONResponse(
+                status_code=503,
+                content={"detail": "O Supabase não está configurado. A importação não foi executada para evitar salvar os controles de Recebimento somente no banco local."},
+            )
         con = None
         try:
             con = db_connect()
