@@ -879,19 +879,14 @@ def init_db() -> None:
             FOREIGN KEY(item_id) REFERENCES items(id) ON DELETE CASCADE
         )"""
     )
-    con.execute("UPDATE receivings SET ten_percent_required=1 WHERE receiving_type='RETORNO' AND closed_at IS NULL")
-    open_returns = con.execute(
-        """SELECT r.id,r.received_qty,c.purchase_mode,c.id card_id
-           FROM receivings r JOIN cards c ON c.id=r.card_id
-           WHERE r.receiving_type='RETORNO' AND r.closed_at IS NULL"""
-    ).fetchall()
-    for receiving in open_returns:
-        base_qty = int(receiving["received_qty"] or 0)
-        item_count = con.execute(
-            "SELECT COUNT(*) n FROM items WHERE card_id=? AND expected_qty>0", (receiving["card_id"],)
-        ).fetchone()["n"]
-        minimum = max(math.ceil(base_qty * 0.10), item_count if receiving["purchase_mode"] == "GRADE" else 0)
-        con.execute("UPDATE receivings SET ten_percent_min=? WHERE id=?", (minimum, receiving["id"]))
+    # Retorno da Costura tem conferência física e Inspeção 2, sem tiragem no Recebimento.
+    # Dados históricos de registros fechados são preservados; retornos abertos são normalizados.
+    con.execute(
+        """UPDATE receivings SET ten_percent_required=0,ten_percent_min=0,
+           ten_percent_actual=CASE WHEN closed_at IS NULL THEN NULL ELSE ten_percent_actual END,
+           ten_percent_status=CASE WHEN closed_at IS NULL THEN 'NAO_INICIADA' ELSE ten_percent_status END
+           WHERE receiving_type='RETORNO'"""
+    )
     con.execute("""UPDATE cards SET purchase_mode=CASE
         WHEN lower(COALESCE(original_type,'')) LIKE '%private%label%' THEN 'GRADE'
         WHEN lower(COALESCE(original_type,'')) LIKE '%saldo%' THEN 'SALDO'
@@ -994,15 +989,22 @@ def ensure_receiving(
         item_count = con.execute(
             "SELECT COUNT(*) n FROM items WHERE card_id=? AND expected_qty>0", (card_id,)
         ).fetchone()["n"]
-    required = 1
+    requires_sample = receiving_type != "RETORNO"
+    required = 1 if requires_sample else 0
     mode = con.execute("SELECT purchase_mode FROM cards WHERE id=?", (card_id,)).fetchone()["purchase_mode"]
-    minimum = max(math.ceil(total * 0.10), item_count if mode == "GRADE" else 0)
+    minimum = max(math.ceil(total * 0.10), item_count if mode == "GRADE" else 0) if requires_sample else 0
     if row:
         receiving_id = int(row["id"])
+        if not requires_sample:
+            con.execute(
+                """UPDATE receivings SET ten_percent_required=0,ten_percent_min=0,
+                   ten_percent_actual=NULL,ten_percent_status='NAO_INICIADA' WHERE id=?""",
+                (receiving_id,),
+            )
         if normalized_ids:
             con.execute(
-                "UPDATE receivings SET source_subset=1,ten_percent_required=1,ten_percent_min=? WHERE id=?",
-                (minimum, receiving_id),
+                "UPDATE receivings SET source_subset=1,ten_percent_required=?,ten_percent_min=? WHERE id=?",
+                (required, minimum, receiving_id),
             )
             con.execute("DELETE FROM receiving_operation_items WHERE receiving_id=?", (receiving_id,))
             con.executemany(
@@ -1231,10 +1233,13 @@ def update_new_receiving_flow(con: sqlite3.Connection, receiving_id: int, user_i
         raise HTTPException(404, "Recebimento não encontrado.")
     physical_done = rec["physical_status"] == "CONCLUIDO"
     sample_done = rec["ten_percent_status"] == "CONCLUIDA"
+    is_return = rec["receiving_type"] == "RETORNO"
     if rec["receiving_type"] == "COSTURA":
         return con.execute("SELECT status FROM cards WHERE id=?", (rec["card_id"],)).fetchone()["status"]
-    if physical_done and sample_done:
-        is_return = rec["receiving_type"] == "RETORNO"
+
+    # Only the initial receipt requires the 10% separation. A physical sewing return
+    # moves directly to Quality after the full returned stock has been allocated.
+    if physical_done and (sample_done or is_return):
         if rec["source_subset"]:
             mapped_ids = [row["item_id"] for row in con.execute(
                 "SELECT item_id FROM receiving_operation_items WHERE receiving_id=?", (receiving_id,)
@@ -1247,25 +1252,30 @@ def update_new_receiving_flow(con: sqlite3.Connection, receiving_id: int, user_i
                     mapped_ids,
                 )
             if is_return:
-                status = "AGUARDANDO_INSPECAO"
-                next_sector = "QUALIDADE"
+                status, next_sector = "AGUARDANDO_INSPECAO", "QUALIDADE"
             else:
-                status = "ORIGEM_MISTO"
-                next_sector = "RECEBIMENTO"
+                status, next_sector = "ORIGEM_MISTO", "RECEBIMENTO"
             con.execute(
                 "UPDATE cards SET current_sector=?,status=?,updated_at=? WHERE id=?",
                 (next_sector, status, iso_now(), rec["card_id"]),
             )
             con.execute("UPDATE receivings SET closed_at=? WHERE id=?", (iso_now(), receiving_id))
-            if rec["receiving_type"] == "RETORNO":
+            if is_return:
                 event_type = "RECEBIMENTO_RETORNO_CONCLUIDO"
-                description = "Itens retornados da Costura recebidos e nova amostra de 10% separada. Somente esses itens foram encaminhados à Inspeção 2."
+                description = "Retorno da Costura conferido fisicamente e encaminhado à Qualidade para a Inspeção 2. Não há separação dos 10% no Recebimento."
             else:
                 event_type = "RECEBIMENTO_PARCIAL_CONCLUIDO"
                 description = "Itens em trânsito recebidos e com amostra de 10% separada. Somente esses itens foram encaminhados à Qualidade."
             add_history(con, rec["card_id"], event_type, description, user_id)
             return status
+
         status = "AGUARDANDO_INSPECAO" if is_return else "AGUARDANDO_QUALIDADE"
+        if is_return:
+            con.execute(
+                """UPDATE items SET source_stage='QUALIDADE',source_status_quality='Pendente'
+                   WHERE card_id=? AND expected_qty>0""",
+                (rec["card_id"],),
+            )
         con.execute(
             "UPDATE cards SET current_sector='QUALIDADE',status=?,updated_at=? WHERE id=?",
             (status, iso_now(), rec["card_id"]),
@@ -1274,22 +1284,20 @@ def update_new_receiving_flow(con: sqlite3.Connection, receiving_id: int, user_i
         add_history(
             con,
             rec["card_id"],
-            "RECEBIMENTO_CONCLUIDO",
-            ("Retorno CD01 recebido e nova amostra de 10% separada. Card encaminhado à Inspeção 2."
+            "RECEBIMENTO_RETORNO_CONCLUIDO" if is_return else "RECEBIMENTO_CONCLUIDO",
+            ("Retorno da Costura conferido fisicamente e encaminhado à Qualidade para a Inspeção 2. Não há separação dos 10% no Recebimento."
              if is_return else
              "Recebimento físico e separação dos 10% concluídos. Card encaminhado automaticamente à Qualidade."),
             user_id,
         )
     elif physical_done:
-        status = ("RETORNO_FISICO_CONCLUIDO_10_PENDENTE" if rec["receiving_type"] == "RETORNO"
-                  else "RECEBIMENTO_FISICO_CONCLUIDO_10_PENDENTE")
+        status = "RETORNO_FISICO_CONCLUIDO_10_PENDENTE" if is_return else "RECEBIMENTO_FISICO_CONCLUIDO_10_PENDENTE"
         con.execute(
             "UPDATE cards SET current_sector='RECEBIMENTO',status=?,updated_at=? WHERE id=?",
             (status, iso_now(), rec["card_id"]),
         )
     elif sample_done:
-        status = ("SEPARACAO_RETORNO_10_CONCLUIDA_FISICO_PENDENTE" if rec["receiving_type"] == "RETORNO"
-                  else "SEPARACAO_10_CONCLUIDA_RECEBIMENTO_PENDENTE")
+        status = "SEPARACAO_RETORNO_10_CONCLUIDA_FISICO_PENDENTE" if is_return else "SEPARACAO_10_CONCLUIDA_RECEBIMENTO_PENDENTE"
         con.execute(
             "UPDATE cards SET current_sector='RECEBIMENTO',status=?,updated_at=? WHERE id=?",
             (status, iso_now(), rec["card_id"]),
@@ -1310,8 +1318,15 @@ def reconcile_completed_subset_returns(con: sqlite3.Connection) -> int:
              AND r.receiving_type='RETORNO'
              AND r.source_subset=1
              AND r.physical_status='CONCLUIDO'
-             AND r.ten_percent_status='CONCLUIDA'
              AND r.closed_at IS NOT NULL
+             AND COALESCE(r.volumes,0)>0
+             AND COALESCE((
+                 SELECT SUM(a.quantidade)
+                 FROM card_allocations a
+                 WHERE a.card_id=c.id AND a.active=1 AND a.setor IN ('RM','QA','PR')
+                   AND COALESCE(a.allocation_purpose,'STOCK')<>'TEN_PERCENT_SAMPLE'
+                   AND NOT (a.setor='QA' AND a.item_id IS NULL)
+             ),0)>=r.volumes
              AND r.id=(
                  SELECT MAX(latest.id)
                  FROM receivings latest
@@ -2146,7 +2161,13 @@ async def save_receiving(receiving_id: int, request: Request):
         values,
     )
     received_qty = incoming("received_qty", rec["received_qty"])
-    if received_qty is not None:
+    if rec["receiving_type"] == "RETORNO":
+        con.execute(
+            """UPDATE receivings SET ten_percent_required=0,ten_percent_min=0,
+               ten_percent_actual=NULL,ten_percent_status='NAO_INICIADA' WHERE id=?""",
+            (receiving_id,),
+        )
+    elif received_qty is not None:
         if rec["source_subset"]:
             item_count = con.execute(
                 """SELECT COUNT(*) n FROM receiving_operation_items roi
@@ -2158,14 +2179,17 @@ async def save_receiving(receiving_id: int, request: Request):
                 "SELECT COUNT(*) n FROM items WHERE card_id=? AND expected_qty>0", (rec["card_id"],)
             ).fetchone()["n"]
         minimum = max(math.ceil(int(received_qty) * 0.10), item_count if card["purchase_mode"] == "GRADE" else 0)
-        con.execute("UPDATE receivings SET ten_percent_min=? WHERE id=?", (minimum, receiving_id))
+        con.execute(
+            "UPDATE receivings SET ten_percent_required=1,ten_percent_min=? WHERE id=?",
+            (minimum, receiving_id),
+        )
     add_history(con, rec["card_id"], "RECEBIMENTO_SALVO", "Dados do Recebimento atualizados.", user_id)
     return_cycle_start = str(rec["created_at"]) if rec["receiving_type"] == "RETORNO" else None
     if return_cycle_start is not None:
         con.execute(
             """UPDATE card_allocations SET active=0
                WHERE card_id=? AND active=1 AND setor IN ('RM','QA','PR')
-                 AND created_at < ?""",
+                 AND (created_at < ? OR allocation_purpose='TEN_PERCENT_SAMPLE')""",
             (int(rec["card_id"]), return_cycle_start),
         )
     persist_receiving_then_commit(
@@ -2191,12 +2215,20 @@ async def complete_physical(receiving_id: int, request: Request):
     if awaiting_arrival(con, rec["card_id"]):
         con.close()
         raise HTTPException(400, "A mercadoria ainda está em trânsito. Marque como recebida quando ela chegar.")
-    if rec["physical_status"] == "CONCLUIDO":
+    is_return = rec["receiving_type"] == "RETORNO"
+    already_physical_done = rec["physical_status"] == "CONCLUIDO"
+    if already_physical_done and not is_return:
         con.close()
         raise HTTPException(400, "O recebimento físico já foi concluído.")
+    if already_physical_done and card["current_sector"] != "RECEBIMENTO":
+        con.close()
+        raise HTTPException(400, "O retorno já saiu do Recebimento.")
     if rec["volumes"] is None or rec["received_qty"] is None:
         con.close()
         raise HTTPException(400, "Informe a quantidade de volumes e a quantidade recebida.")
+    if int(rec["volumes"] or 0) <= 0:
+        con.close()
+        raise HTTPException(400, "A quantidade de volumes deve ser maior que zero para endereçar o retorno completo.")
     if rec["has_damage"] is None:
         con.close()
         raise HTTPException(400, "Informe se existem danos ou avarias.")
@@ -2210,12 +2242,13 @@ async def complete_physical(receiving_id: int, request: Request):
             400,
             f"Aloque o endereço físico (casulo) antes de concluir — {alocado}/{rec['volumes']} volumes alocados (RM + Qualidade + Processamento).",
         )
-    con.execute(
-        """UPDATE receivings SET physical_status='CONCLUIDO',physical_completed_by=?,physical_completed_at=?
-           WHERE id=?""",
-        (user_id, iso_now(), receiving_id),
-    )
-    add_history(con, rec["card_id"], "RECEBIMENTO_FISICO_CONCLUIDO", f"{user['name']} concluiu o recebimento físico.", user_id)
+    if not already_physical_done:
+        con.execute(
+            """UPDATE receivings SET physical_status='CONCLUIDO',physical_completed_by=?,physical_completed_at=?
+               WHERE id=?""",
+            (user_id, iso_now(), receiving_id),
+        )
+        add_history(con, rec["card_id"], "RECEBIMENTO_FISICO_CONCLUIDO", f"{user['name']} concluiu o recebimento físico.", user_id)
     next_status = update_new_receiving_flow(con, receiving_id, user_id)
     persist_receiving_then_commit(
         con, int(rec["card_id"]),
@@ -2333,15 +2366,25 @@ async def set_purchase_mode(card_id: int, request: Request):
         con.close()
         raise HTTPException(400, "O tipo da compra já foi definido e não pode ser alterado.")
     con.execute("UPDATE cards SET purchase_mode=?,updated_at=? WHERE id=?", (mode, iso_now(), card_id))
-    for rec in con.execute("SELECT id,received_qty,source_subset FROM receivings WHERE card_id=? AND closed_at IS NULL", (card_id,)).fetchall():
+    for rec in con.execute("SELECT id,received_qty,source_subset,receiving_type FROM receivings WHERE card_id=? AND closed_at IS NULL", (card_id,)).fetchall():
         if rec["source_subset"]:
             base = con.execute("""SELECT COALESCE(SUM(i.expected_qty),0) t,COUNT(*) n FROM receiving_operation_items roi
                 JOIN items i ON i.id=roi.item_id WHERE roi.receiving_id=? AND i.expected_qty>0""", (rec["id"],)).fetchone()
         else:
             base = con.execute("SELECT COALESCE(SUM(expected_qty),0) t,COUNT(*) n FROM items WHERE card_id=? AND expected_qty>0", (card_id,)).fetchone()
         qty = int(rec["received_qty"]) if rec["received_qty"] is not None else int(base["t"] or 0)
-        minimum = max(math.ceil(qty * 0.10), int(base["n"] or 0) if mode == "GRADE" else 0)
-        con.execute("UPDATE receivings SET ten_percent_min=? WHERE id=?", (minimum, rec["id"]))
+        if rec["receiving_type"] == "RETORNO":
+            con.execute(
+                """UPDATE receivings SET ten_percent_required=0,ten_percent_min=0,
+                   ten_percent_actual=NULL,ten_percent_status='NAO_INICIADA' WHERE id=?""",
+                (rec["id"],),
+            )
+        else:
+            minimum = max(math.ceil(qty * 0.10), int(base["n"] or 0) if mode == "GRADE" else 0)
+            con.execute(
+                "UPDATE receivings SET ten_percent_required=1,ten_percent_min=? WHERE id=?",
+                (minimum, rec["id"]),
+            )
     add_history(con, card_id, "TIPO_COMPRA_MANUAL",
                 f"{user['name']} informou manualmente o tipo da compra: {'Grade' if mode == 'GRADE' else 'Saldo'}.", user_id)
     persist_receiving_then_commit(

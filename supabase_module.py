@@ -413,7 +413,7 @@ def sync_receiving_card_state_to_supabase(
                     """UPDATE card_allocations
                        SET active=FALSE
                        WHERE card_id=%s AND active IS TRUE AND setor IN ('RM','QA','PR')
-                         AND created_at < %s""",
+                         AND (created_at < %s OR allocation_purpose='TEN_PERCENT_SAMPLE')""",
                     (int(card_id), release_stock_allocations_before),
                 )
         con.commit()
@@ -760,7 +760,15 @@ def restore_receiving_state_from_supabase(
             values,
         )
 
+    sqlite_con.execute(
+        """UPDATE receivings SET ten_percent_required=0,ten_percent_min=0,
+           ten_percent_actual=CASE WHEN closed_at IS NULL THEN NULL ELSE ten_percent_actual END,
+           ten_percent_status=CASE WHEN closed_at IS NULL THEN 'NAO_INICIADA' ELSE ten_percent_status END
+           WHERE receiving_type='RETORNO'"""
+    )
     return restored_count
+
+
 def sync_card_to_supabase(sqlite_con, card_id: int) -> None:
     row = sqlite_con.execute("SELECT * FROM cards WHERE id=?", (card_id,)).fetchone()
     if not row:
