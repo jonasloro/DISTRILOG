@@ -52,12 +52,14 @@ class QualitySQLiteConnection(sqlite3.Connection):
                     getattr(self, "_quality_remote_card_snapshot", None),
                 )
             except Exception as exc:
-                print("[qualidade] falha ao persistir a operação no Supabase: {}".format(exc))
+                print("[qualidade] falha ao persistir a operação no Supabase: {!r}".format(exc))
                 self.rollback()
-                raise HTTPException(
-                    503,
-                    "Não foi possível salvar a operação da Qualidade no Supabase. A alteração local foi revertida; atualize e tente novamente.",
-                ) from exc
+                message = "Não foi possível salvar a operação da Qualidade no Supabase. A alteração local foi revertida; atualize e tente novamente."
+                # RuntimeError é usado neste módulo para motivos de negócio já escritos para o usuário
+                # (conflito de edição, Card sem estado remoto etc.); erros de banco continuam ocultos.
+                if isinstance(exc, RuntimeError) and str(exc).strip():
+                    message = "{} Motivo: {}".format(message, str(exc).strip())
+                raise HTTPException(503, message) from exc
             self._quality_remote_snapshot = snapshot
         super().commit()
 
