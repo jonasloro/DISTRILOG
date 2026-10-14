@@ -97,6 +97,69 @@ def require_completed_receiving_sample(con: sqlite3.Connection, card_id: int, re
                 (card_id,),
             ).fetchall()
         ]
+        has_any_receiving = con.execute(
+            "SELECT 1 FROM receivings WHERE card_id=? LIMIT 1", (card_id,)
+        ).fetchone()
+        card = con.execute(
+            "SELECT current_sector,status,purchase_mode FROM cards WHERE id=?", (card_id,)
+        ).fetchone()
+
+        # If both stores genuinely lack the operation, return the Card to Receiving
+        # with a fresh pending control. Never infer volumes or mark the sample complete.
+        expected_status = "RETORNO_CONCLUIDO" if receiving_type == "RETORNO" else "AGUARDANDO_QUALIDADE"
+        can_reopen = (
+            not existing_types
+            and not has_any_receiving
+            not restore_error
+            bool(os.getenv("SUPABASE_DATABASE_URL"))
+            and card is not None
+            and card["current_sector"] == "QUALIDADE"
+            and card["status"] == expected_status
+        )
+        if can_reopen:
+            quantities = con.execute(
+                """SELECT COALESCE(SUM(expected_qty),0) total,
+                          COUNT(*) n FROM items
+                   WHERE card_id=? AND expected_qty>0""",
+                (card_id,),
+            ).fetchone()
+            total = int(quantities["total"] or 0)
+            item_count = int(quantities["n"] or 0)
+            if total > 0:
+                minimum = max(
+                    math.ceil(total * 0.10),
+                    item_count if str(card["purchase_mode"] or "").upper() == "GRADE" else 0,
+                )
+                now = iso_now()
+                con.execute(
+                    """INSERT INTO receivings(
+                        card_id,receiving_type,physical_status,ten_percent_required,
+                        ten_percent_min,ten_percent_status,created_at
+                    ) VALUES(?,?,'PENDENTE',1,?,'NAO_INICIADA',?)""",
+                    (card_id, receiving_type, minimum, now),
+                )
+                next_status = (
+                    "AGUARDANDO_RECEBIMENTO_RETORNO"
+                    if receiving_type == "RETORNO"
+                    else "AGUARDANDO_RECEBIMENTO"
+                )
+                con.execute(
+                    """UPDATE cards SET current_sector='RECEBIMENTO',status=?,
+                       receiving_type=?,updated_at=? WHERE id=?""",
+                    (next_status, receiving_type, now, card_id),
+                )
+                add_history(
+                    con, card_id, "RECEBIMENTO_RECUPERADO",
+                    "O registro original do Recebimento não foi localizado no SQLite nem no Supabase. "
+                    "O controle foi reaberto como pendente; volumes e separação dos 10% precisam ser registrados novamente.",
+                )
+                con.commit()
+                con.close()
+                raise HTTPException(
+                    409,
+                    "O registro original do Recebimento não existia nos bancos e não pôde ser restaurado. O Card foi devolvido ao Recebimento com um controle pendente; informe novamente os volumes e registre a separação dos 10% antes de retomar a Qualidade.",
+                )
+
         details = (
             " Foram encontrados registros de outro tipo: {}.".format(", ".join(existing_types))
             if existing_types
@@ -107,7 +170,7 @@ def require_completed_receiving_sample(con: sqlite3.Connection, card_id: int, re
         con.close()
         raise HTTPException(
             409,
-            "Não existe registro de Recebimento do tipo {} para este Card. O sistema tentou restaurar os dados persistidos, mas não localizou um registro correspondente.{} A inspeção continua bloqueada para não inventar a quantidade dos 10%; restaure o recebimento original ou reabra o controle no setor Recebimento.".format(
+            "Não existe registro de Recebimento do tipo {} para este Card. O sistema tentou restaurar os dados persistidos, mas não localizou um registro correspondente.{} A inspeção continua bloqueada para não inventar a quantidade dos 10%; verifique o histórico do Card ou solicite a recuperação ao Supervisor.".format(
                 receiving_type, details
             ),
         )
