@@ -8,7 +8,8 @@ from datetime import datetime, time, timedelta
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import APIRouter, FastAPI, HTTPException, Request
+from fastapi import APIRouter, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import Response
 
 from positions_module import move_ten_percent_sample_into_balance, total_ten_percent_sample_in_balance, total_volume_only_allocated
 
@@ -908,6 +909,76 @@ def quality_users():
     ).fetchall()
     con.close()
     return [dict(row) for row in rows]
+
+
+@router.post("/quality/uploads")
+async def upload_quality_files(
+    files: list[UploadFile] = File(...),
+    user_id: int = Form(...),
+):
+    if not files or len(files) > 10:
+        raise HTTPException(400, "Envie entre 1 e 10 fotos por operação.")
+
+    con = db_connect()
+    try:
+        actor = require_role(con, user_id, QUALITY_ROLES)
+        uploader_id = int(actor["id"])
+    finally:
+        con.close()
+
+    allowed_types = {"image/jpeg", "image/png", "image/webp", "image/gif", "image/bmp"}
+    max_file_size = 10 * 1024 * 1024
+    prepared = []
+    for uploaded in files:
+        content_type = str(uploaded.content_type or "").lower().split(";", 1)[0].strip()
+        if content_type not in allowed_types:
+            raise HTTPException(415, "As evidências da Qualidade devem ser imagens JPG, PNG, WebP, GIF ou BMP.")
+        content = await uploaded.read(max_file_size + 1)
+        if not content:
+            raise HTTPException(400, "Uma das imagens está vazia.")
+        if len(content) > max_file_size:
+            raise HTTPException(413, "Cada foto de evidência deve ter até 10 MB.")
+        prepared.append({
+            "id": uuid.uuid4().hex,
+            "original_name": Path(uploaded.filename or "evidencia").name[:255],
+            "content_type": content_type,
+            "content": content,
+            "uploaded_by": uploader_id,
+            "created_at": iso_now(),
+        })
+
+    try:
+        from supabase_module import store_quality_files
+
+        paths = store_quality_files(prepared)
+    except Exception as exc:
+        print("[qualidade] falha ao salvar evidências no Supabase: {}".format(exc))
+        raise HTTPException(503, "As fotos não foram salvas no Supabase. Tente novamente.") from exc
+    return {"paths": paths}
+
+
+@router.get("/quality/files/{file_id}")
+def get_quality_evidence(file_id: str):
+    if not file_id or len(file_id) != 32 or any(ch not in "0123456789abcdef" for ch in file_id.lower()):
+        raise HTTPException(404, "Evidência não encontrada.")
+    try:
+        from supabase_module import get_quality_file
+
+        file_record = get_quality_file(file_id.lower())
+    except Exception as exc:
+        print("[qualidade] falha ao consultar evidência no Supabase: {}".format(exc))
+        raise HTTPException(503, "Não foi possível carregar a evidência no Supabase.") from exc
+    if not file_record:
+        raise HTTPException(404, "Evidência não encontrada.")
+    return Response(
+        content=bytes(file_record["content"]),
+        media_type=file_record["content_type"],
+        headers={
+            "Content-Disposition": "inline",
+            "Cache-Control": "private, max-age=3600",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 @router.post("/cards/{card_id}/quality/inspections")
