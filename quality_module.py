@@ -1007,6 +1007,8 @@ async def upload_quality_files(
 
     allowed_types = {"image/jpeg", "image/png", "image/webp", "image/gif", "image/bmp"}
     max_file_size = 10 * 1024 * 1024
+    max_total_size = 25 * 1024 * 1024
+    total_size = 0
     prepared = []
     for uploaded in files:
         content_type = str(uploaded.content_type or "").lower().split(";", 1)[0].strip()
@@ -1017,6 +1019,9 @@ async def upload_quality_files(
             raise HTTPException(400, "Uma das imagens está vazia.")
         if len(content) > max_file_size:
             raise HTTPException(413, "Cada foto de evidência deve ter até 10 MB.")
+        total_size += len(content)
+        if total_size > max_total_size:
+            raise HTTPException(413, "Envie no máximo 25 MB de fotos por operação.")
         prepared.append({
             "id": uuid.uuid4().hex,
             "original_name": Path(uploaded.filename or "evidencia").name[:255],
