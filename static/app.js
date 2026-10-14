@@ -1171,12 +1171,17 @@ async function renderQualityTab() {
     $("cardTab").innerHTML = qualityReadOnlyPreviewHtml();
     return;
   }
-  if (guardSampleAllocationNavigation()) return;
   const q = cardData.quality;
-  const isReturnAwaitingInspection2 = (
-    cardData.receiving_type === "RETORNO" ||
-    cardData.receiving?.receiving_type === "RETORNO"
-  ) && ["RETORNO_CONCLUIDO", "AGUARDANDO_INSPECAO"].includes(cardData.status);
+  const returnStatusAwaitingInspection2 = ["RETORNO_CONCLUIDO", "AGUARDANDO_INSPECAO"].includes(cardData.status);
+  const isReturnAwaitingInspection2 = cardData.current_sector === "QUALIDADE" &&
+    !cardData.source_snapshot_at &&
+    returnStatusAwaitingInspection2 &&
+    (
+      cardData.receiving_type === "RETORNO" ||
+      cardData.receiving?.receiving_type === "RETORNO" ||
+      cardData.status === "RETORNO_CONCLUIDO" ||
+      cardData.status === "AGUARDANDO_INSPECAO"
+    );
   if (isReturnAwaitingInspection2 && !q) {
     window.qualitySourceSubset = false;
     $("cardTab").innerHTML = `<div class="panel-body">
@@ -1185,6 +1190,7 @@ async function renderQualityTab() {
     </div>`;
     return;
   }
+  if (guardSampleAllocationNavigation()) return;
   try {
     if (!qualityUsers.length) qualityUsers = await api("/api/quality/users");
   } catch (error) {
