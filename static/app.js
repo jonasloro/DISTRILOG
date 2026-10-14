@@ -1027,17 +1027,18 @@ async function renderQualityTab() {
 }
 
 function qualitySetupHtml(previousInspection=null, sourceSubset=false) {
-  const defaultType = cardData.receiving_type === "RETORNO" ? 2 : 1;
+  const isCosturaReturn = cardData.receiving_type === "RETORNO";
+  const defaultType = isCosturaReturn ? 2 : 1;
   const defaultMode = cardData.purchase_mode || previousInspection?.purchase_mode || "";
   return `<div class="panel-body">
     ${sourceSubset ? `<div class="notice success-box"><b>Controle por referência</b><br>Selecione abaixo quais referências entrarão nesta inspeção. As referências não selecionadas não serão movimentadas.</div>${qualitySourceItemsHtml()}` : ""}
     ${previousInspection ? `<div class="notice success-box">A Inspeção ${previousInspection.inspection_type} anterior foi concluída em ${fmtDateTime(previousInspection.completed_at)}. O Card retornou à Qualidade para uma nova rodada.</div>` : ""}
     <div class="notice"><b>Configuração da inspeção</b><br>O tipo da compra vem automaticamente da coluna <b>Tipo</b> do Excel: Private Label = Grade e Saldo = Saldo.</div>
-    ${cardData.receiving_type === "RETORNO"
+    ${isCosturaReturn
       ? '<div class="notice warn"><b>Retorno da Costura:</b> a Inspeção 2 é obrigatória e usará a nova amostra de 10% separada pelo Recebimento.</div>'
-      : '<div class="notice success-box"><b>Mercadoria nova:</b> escolha Inspeção 1 somente quando a mercadoria precisar ir para Costura. Escolha Inspeção 2 quando ela já puder seguir diretamente para Processamento. Nos dois casos será usada a amostra dos 10% separada pelo Recebimento.</div>'}
+      : '<div class="notice success-box"><b>Primeira etapa após o Recebimento:</b> a Inspeção 1 é obrigatória. A Inspeção 2 será feita somente quando a mercadoria retornar da Costura.</div>'}
     <div class="form-grid">
-      <div class="field"><label>Tipo de inspeção</label><select id="qualityType" onchange="toggleQualitySetupFields()" ${cardData.receiving_type === "RETORNO" ? "disabled" : ""}><option value="1" ${defaultType===1?"selected":""}>Inspeção 1</option><option value="2" ${defaultType===2?"selected":""}>Inspeção 2</option></select></div>
+      <div class="field"><label>Tipo de inspeção</label><select id="qualityType" onchange="toggleQualitySetupFields()" disabled><option value="1" ${defaultType===1?"selected":""}>Inspeção 1</option><option value="2" ${defaultType===2?"selected":""}>Inspeção 2</option></select></div>
       ${["GRADE", "SALDO"].includes(defaultMode)     ? `<div class="field"><label>Tipo da compra</label><input id="qualityPurchaseMode" class="readonly" readonly value="${defaultMode === "GRADE" ? "Grade — controle por item" : "Saldo — quantidade geral"}"></div>`     : `<div class="field"><label>Tipo da compra (não reconhecido — informe)</label><select id="qualityPurchaseMode"><option value="">Selecione</option><option value="GRADE">Grade — controle por item</option><option value="SALDO">Saldo — quantidade geral</option></select></div>`}
       <div class="field" id="qualityDestinationField"><label>Destino da Inspeção 1</label><select id="qualityDestination"><option value="">Selecione</option><option value="CD01">CD01 — retorna ao nosso CD</option><option value="CD02">CD02 — sai do fluxo interno</option></select></div>
       <div class="field"><label>É necessário separar peças para Desenvolvimento?</label><select id="developmentRequired" onchange="toggleDevelopmentSetup()"><option value="">Selecione</option><option value="0">Não</option><option value="1">Sim</option></select></div>
