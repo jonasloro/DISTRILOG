@@ -223,13 +223,17 @@ def require_completed_receiving_sample(con: sqlite3.Connection, card_id: int, re
 
     # Both stores have no operation for this Card. Reopen only this known post-receiving
     # state with a pending record; never invent volumes or mark the 10% as completed.
-    expected_status = "RETORNO_CONCLUIDO" if receiving_type == "RETORNO" else "AGUARDANDO_QUALIDADE"
+    expected_statuses = (
+        {"RETORNO_CONCLUIDO", "AGUARDANDO_INSPECAO"}
+        if receiving_type == "RETORNO"
+        else {"AGUARDANDO_QUALIDADE"}
+    )
     can_reopen = (
         not existing_types
         and not has_any_receiving
         and card is not None
         and card["current_sector"] == "QUALIDADE"
-        and card["status"] == expected_status
+        and card["status"] in expected_statuses
     )
     if can_reopen:
         quantities = con.execute(

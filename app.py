@@ -1265,7 +1265,7 @@ def update_new_receiving_flow(con: sqlite3.Connection, receiving_id: int, user_i
                 description = "Itens em trânsito recebidos e com amostra de 10% separada. Somente esses itens foram encaminhados à Qualidade."
             add_history(con, rec["card_id"], event_type, description, user_id)
             return status
-        status = "RETORNO_CONCLUIDO" if is_return else "AGUARDANDO_QUALIDADE"
+        status = "AGUARDANDO_INSPECAO" if is_return else "AGUARDANDO_QUALIDADE"
         con.execute(
             "UPDATE cards SET current_sector='QUALIDADE',status=?,updated_at=? WHERE id=?",
             (status, iso_now(), rec["card_id"]),
