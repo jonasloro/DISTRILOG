@@ -1173,11 +1173,27 @@ def bootstrap_quality_state(sqlite_con) -> dict[str, list[dict]]:
     """Migrate legacy local rows once when Supabase has no Quality data, then restore it."""
     init_quality_persistence()
     snapshot = _read_quality_snapshot()
+    legacy = _local_quality_snapshot(sqlite_con)
     if _quality_snapshot_empty(snapshot):
-        legacy = _local_quality_snapshot(sqlite_con)
         if any(legacy.get(table) for table in QUALITY_PERSISTENCE_TABLES):
             sync_quality_state_to_supabase(sqlite_con, snapshot)
             snapshot = _read_quality_snapshot()
+    elif not snapshot.get("quality_audit_events") and legacy.get("quality_audit_events"):
+        # Older deployments may already have inspections in Supabase but only local history.
+        spec = QUALITY_PERSISTENCE_TABLES["quality_audit_events"]
+        columns = spec["columns"]
+        marks = ",".join(["%s"] * len(columns))
+        with pg_connect() as con:
+            with con.cursor() as cur:
+                for event in legacy["quality_audit_events"]:
+                    cur.execute(
+                        "INSERT INTO {} ({}) VALUES ({}) ON CONFLICT (id) DO NOTHING".format(
+                            spec["remote"], ",".join(columns), marks
+                        ),
+                        tuple(event.get(column) for column in columns),
+                    )
+            con.commit()
+        snapshot = _read_quality_snapshot()
     return restore_quality_state_from_supabase(sqlite_con)
 
 
