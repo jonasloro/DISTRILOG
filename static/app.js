@@ -1172,12 +1172,6 @@ async function renderQualityTab() {
     return;
   }
   if (guardSampleAllocationNavigation()) return;
-  try {
-    if (!qualityUsers.length) qualityUsers = await api("/api/quality/users");
-  } catch (error) {
-    $("cardTab").innerHTML = `<div class="notice error">${esc(error.message)}</div>`;
-    return;
-  }
   const q = cardData.quality;
   const isReturnAwaitingInspection2 = (
     cardData.receiving_type === "RETORNO" ||
@@ -1189,6 +1183,12 @@ async function renderQualityTab() {
       <div class="notice warn"><b>Inspeção 2 ainda não iniciada</b><br>Este retorno pode ser encaminhado diretamente ao Processamento. Nenhuma inspeção precisa ser criada e a Qualidade não executará atividades neste Card.</div>
       <div class="actions"><button class="primary" onclick="transferInspection2ToProcessing(${cardData.id})">Passar a segunda inspeção para o Processamento</button></div>
     </div>`;
+    return;
+  }
+  try {
+    if (!qualityUsers.length) qualityUsers = await api("/api/quality/users");
+  } catch (error) {
+    $("cardTab").innerHTML = `<div class="notice error">${esc(error.message)}</div>`;
     return;
   }
   const importedQualityItems = (cardData.items||[]).filter((item)=>["QUALIDADE","QUALIDADE_RETRABALHO","QUALIDADE_REJEITADO"].includes(item.source_stage));
