@@ -1179,6 +1179,18 @@ async function renderQualityTab() {
     return;
   }
   const q = cardData.quality;
+  const isReturnAwaitingInspection2 = (
+    cardData.receiving_type === "RETORNO" ||
+    cardData.receiving?.receiving_type === "RETORNO"
+  ) && ["RETORNO_CONCLUIDO", "AGUARDANDO_INSPECAO"].includes(cardData.status);
+  if (isReturnAwaitingInspection2 && !q) {
+    window.qualitySourceSubset = false;
+    $("cardTab").innerHTML = `<div class="panel-body">
+      <div class="notice warn"><b>Inspeção 2 ainda não iniciada</b><br>Este retorno pode ser encaminhado diretamente ao Processamento. Nenhuma inspeção precisa ser criada e a Qualidade não executará atividades neste Card.</div>
+      <div class="actions"><button class="primary" onclick="transferInspection2ToProcessing(${cardData.id})">Passar a segunda inspeção para o Processamento</button></div>
+    </div>`;
+    return;
+  }
   const importedQualityItems = (cardData.items||[]).filter((item)=>["QUALIDADE","QUALIDADE_RETRABALHO","QUALIDADE_REJEITADO"].includes(item.source_stage));
   if (cardData.source_snapshot_at && (!q || q.status === "CONCLUIDA")) {
     if (importedQualityItems.length) {
@@ -1209,6 +1221,21 @@ async function renderQualityTab() {
     return;
   }
   $("cardTab").innerHTML = qualityInspectionHtml(q);
+}
+
+async function transferInspection2ToProcessing(cardId) {
+  if (!confirm("Transferir a responsabilidade da Inspeção 2 diretamente para Processamento? A Qualidade não iniciará nenhuma atividade neste Card.")) return;
+  try {
+    const result = await api(`/api/cards/${cardId}/quality/transfer-inspection-2`, {
+      method: "POST",
+      body: JSON.stringify({ user_id: currentUser.id }),
+    });
+    toast(result.message || "Card transferido para Processamento.");
+    await renderCards("quality");
+    await openCard(cardId, "processing");
+  } catch (error) {
+    toast(error.message || "Não foi possível transferir o Card para Processamento.");
+  }
 }
 
 function qualitySetupHtml(previousInspection=null, sourceSubset=false) {
@@ -1830,6 +1857,14 @@ async function completeQualityInspection() {
 }
 
 
+function processingInspectionHandoffNotice() {
+  const transferred = (cardData.history || []).some(
+    (event) => event.event_type === "INSPECAO_2_TRANSFERIDA_PROCESSAMENTO"
+  );
+  if (!transferred) return "";
+  return '<div class="notice success-box"><b>Responsabilidade pela Inspeção 2</b><br>Este Card foi encaminhado diretamente ao Processamento antes de qualquer atividade na Qualidade. A responsabilidade operacional agora é deste setor.</div>';
+}
+
 async function renderProcessingTab() {
   if (guardSampleAllocationNavigation()) return;
   activateTab("tabProcessingBtn");
@@ -1840,6 +1875,7 @@ async function renderProcessingTab() {
     return;
   }
   const p = cardData.processing;
+  const handoffNotice = cardData.current_sector === "PROCESSAMENTO" ? processingInspectionHandoffNotice() : "";
   const importedProcessingItems = (cardData.items||[]).filter((item)=>["AGUARDANDO_PROCESSAMENTO","PROCESSAMENTO"].includes(item.source_stage));
   if (cardData.source_snapshot_at && !p && cardData.current_sector !== "PROCESSAMENTO") {
     if (importedProcessingItems.length && canOperateProcessing()) {
@@ -1855,10 +1891,10 @@ async function renderProcessingTab() {
   }
   if (cardData.current_sector === "PROCESSAMENTO" && !p) {
     if (!canOperateProcessing()) {
-      $("cardTab").innerHTML = '<div class="panel-body"><div class="notice warn">Aguardando um operador do Processamento configurar o Card.</div></div>';
+      $("cardTab").innerHTML = handoffNotice + '<div class="panel-body"><div class="notice warn">Aguardando um operador do Processamento configurar o Card.</div></div>';
       return;
     }
-    $("cardTab").innerHTML = processingSetupHtml();
+    $("cardTab").innerHTML = handoffNotice + processingSetupHtml();
     toggleProcessingLabelField();
     return;
   }
@@ -1866,7 +1902,7 @@ async function renderProcessingTab() {
     $("cardTab").innerHTML = '<div class="panel-body"><div class="notice">Este Card ainda não possui dados do Processamento.</div></div>';
     return;
   }
-  $("cardTab").innerHTML = processingDetailHtml(p);
+  $("cardTab").innerHTML = handoffNotice + processingDetailHtml(p);
   toggleProcessingLabelField();
   if (canOperateProcessing()) {
     $("cardTab").insertAdjacentHTML("beforeend", '<div class="panel-body"><h3 class="section-heading">Endereçamento no Processamento (PR)</h3><div id="posAllocBox" class="notice">Carregando posições…</div></div>');
