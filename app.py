@@ -1926,12 +1926,11 @@ def get_card(card_id: int):
     except Exception as exc:
         con.rollback()
         con.close()
-        print("[aviso] falha ao atualizar estado persistido do Card {}: {}".format(card_id, exc))
-        if initial_card["current_sector"] in {"RECEBIMENTO", "QUALIDADE"}:
-            raise HTTPException(
-                503,
-                "Não foi possível carregar o estado mais recente do Recebimento no Supabase. Reabra o Card quando a conexão for restabelecida.",
-            ) from exc
+        print("[erro] falha ao atualizar estado persistido do Card {}: {}".format(card_id, exc))
+        raise HTTPException(
+            503,
+            "Não foi possível carregar o estado mais recente do Card no Supabase. Nenhuma operação será executada com dados desatualizados; tente novamente quando a conexão for restabelecida.",
+        ) from exc
     repaired = repair_stored_reference_items(con, card_id)
     if repaired:
         con.commit()
