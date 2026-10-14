@@ -2346,6 +2346,19 @@ async def complete_dispatch(card_id: int, request: Request):
     ).fetchall()
     operation_ids = {int(row["id"]) for row in operation_items}
     item_ids = requested_item_ids or sorted(operation_ids)
+    if not item_ids:
+        # Fallback: Card sem controle da Costura aberto (ex.: fluxo sem subconjunto de itens).
+        # Usa as referências aguardando costura; se não houver marcação, todas com quantidade.
+        fallback = con.execute(
+            """SELECT id FROM items WHERE card_id=? AND expected_qty>0
+               AND source_stage='AGUARDANDO_COSTURA' ORDER BY id""", (card_id,)
+        ).fetchall()
+        if not fallback:
+            fallback = con.execute(
+                """SELECT id FROM items WHERE card_id=? AND expected_qty>0
+                   AND COALESCE(source_stage,'') NOT IN ('CONCLUIDO','EM_COSTURA') ORDER BY id""", (card_id,)
+            ).fetchall()
+        item_ids = [int(r["id"]) for r in fallback]
     if operation_ids and not set(item_ids).issubset(operation_ids):
         con.close()
         raise HTTPException(400, "Há referências selecionadas para despacho que não pertencem ao controle da Costura.")
