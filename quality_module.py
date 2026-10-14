@@ -765,7 +765,7 @@ def quality_card_data(con: sqlite3.Connection, card_id: int) -> Optional[dict[st
     previous_rows = con.execute(
         """
         SELECT qi.id,qi.inspection_type,qi.status,qi.destination,qi.send_to_costura,qi.purchase_mode,qi.sample_target_total,
-               qi.development_pending,qi.created_at,qi.completed_at,u.name completed_by_name,
+               qi.source_subset,qi.development_pending,qi.created_at,qi.completed_at,u.name completed_by_name,
                COALESCE((SELECT SUM(a.approved_qty) FROM quality_assignments a
                          JOIN quality_workers qw ON qw.id=a.worker_id WHERE qw.inspection_id=qi.id),0) approved_total,
                COALESCE((SELECT SUM(a.rejected_qty) FROM quality_assignments a
