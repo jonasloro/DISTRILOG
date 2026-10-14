@@ -663,7 +663,8 @@ async function openCard(cardId, tab = "receiving") {
     cardData.current_sector === "QUALIDADE" &&
     currentReceiving.ten_percent_required &&
     currentReceiving.ten_percent_status === "CONCLUIDA" &&
-    currentReceiving.receiving_type !== "COSTURA"
+    currentReceiving.receiving_type !== "COSTURA" &&
+    currentReceiving.receiving_type !== "RETORNO"
   );
   window.qaSampleAllocationComplete = !window.qaSampleAllocationRequired;
   if (window.qaSampleAllocationRequired) {
@@ -844,7 +845,8 @@ function renderReceivingTab() {
   }
   const canShowSampleAllocation = cardData.receiving?.ten_percent_status === "CONCLUIDA"
     && cardData.receiving?.ten_percent_required
-    && cardData.receiving?.receiving_type !== "COSTURA";
+    && cardData.receiving?.receiving_type !== "COSTURA"
+    && cardData.receiving?.receiving_type !== "RETORNO";
   if (cardData.source_snapshot_at && cardData.current_sector !== "RECEBIMENTO" && !canShowSampleAllocation) {
     window.sourceAllowedStages=null;
     $("cardTab").innerHTML = `<div class="notice"><b>Andamento local preservado:</b> ${esc(cardData.current_sector)} — ${esc(cardData.status_label)}.</div>${sourceLocationHtml()}`;
@@ -861,7 +863,8 @@ function renderReceivingTab() {
   if (cardData.status === "AGUARDANDO_RECEBIMENTO_RETORNO") {
     $("cardTab").innerHTML = receivingFormHtml(true);
     window.setTimeout(refreshTimerDisplay, 500);
-    if (cardData.receiving?.ten_percent_required && cardData.receiving?.ten_percent_status === "CONCLUIDA" && cardData.receiving?.receiving_type !== "COSTURA") loadReceivingAllocationStep(cardData.id);
+    if (cardData.receiving?.receiving_type === "RETORNO") loadReturnAllocationStep(cardData.id);
+    else if (cardData.receiving?.ten_percent_required && cardData.receiving?.ten_percent_status === "CONCLUIDA" && cardData.receiving?.receiving_type !== "COSTURA") loadReceivingAllocationStep(cardData.id);
     return;
   }
   if (cardData.status === "EM_COSTURA_CD01" || cardData.receiving?.receiving_type === "COSTURA") {
@@ -871,7 +874,8 @@ function renderReceivingTab() {
   const isReturn = cardData.receiving?.receiving_type === "RETORNO" || cardData.receiving_type === "RETORNO";
   $("cardTab").innerHTML = receivingFormHtml(isReturn);
   window.setTimeout(refreshTimerDisplay, 500);
-  if (cardData.receiving?.ten_percent_required && cardData.receiving?.ten_percent_status === "CONCLUIDA" && cardData.receiving?.receiving_type !== "COSTURA") loadReceivingAllocationStep(cardData.id);
+  if (isReturn) loadReturnAllocationStep(cardData.id);
+  else if (cardData.receiving?.ten_percent_required && cardData.receiving?.ten_percent_status === "CONCLUIDA" && cardData.receiving?.receiving_type !== "COSTURA") loadReceivingAllocationStep(cardData.id);
 }
 
 function sourceLocationHtml() {
@@ -925,7 +929,7 @@ function inCosturaHtml() {
       <div class="field full"><label>Observações do despacho</label><textarea class="readonly" readonly>${esc(d?.notes || "")}</textarea></div>
     </div>
     ${r ? costuraProductionHtml(r, productionDone, operate) : '<div class="notice warn">O controle de produção da Costura será criado automaticamente na próxima atualização do relatório.</div>'}
-    <div class="notice warn">Aguardando o retorno da Costura. Quando a mercadoria retornar, será aberto um novo controle de recebimento e uma nova tiragem de 10%, sem perder este acompanhamento.</div>
+    <div class="notice warn">Aguardando o retorno da Costura. Quando a mercadoria retornar, o Recebimento fará a conferência física e o endereçamento integral do saldo; depois o Card seguirá para a Inspeção 2 na Qualidade.</div>
     ${currentUser.role === "admin" ? `<div class="actions"><button class="success" onclick="simulateReturn(${cardData.id})">Registrar retorno CD01 — teste</button></div>` : ""}
   </div>`;
 }
@@ -947,7 +951,7 @@ function costuraProductionHtml(r, productionDone, operate) {
       <div class="form-grid"><div class="field"><label>Quantidade prevista na Costura</label><input class="readonly" readonly value="${(r.operation_items||[]).reduce((sum,item)=>sum+Number(item.expected_qty||0),0)||cardData.expected_total}"></div><div class="field"><label>Quantidade produzida</label><input id="sampleActual" type="number" min="0" ${operate&&!productionDone?"":"readonly"} value="${r.ten_percent_actual??""}"></div></div>
       <div class="timer-grid" style="margin-top:11px"><div class="timer-value"><span>Status</span><strong>${esc(timer.state)}</strong></div><div class="timer-value"><span>Tempo útil</span><strong>${fmtSeconds(timer.business_seconds)}</strong></div><div class="timer-value"><span>Tempo parado</span><strong>${fmtSeconds(timer.paused_seconds)}</strong></div><div class="timer-value"><span>Permanência</span><strong>${fmtSeconds(timer.permanence_seconds)}</strong></div></div>
       <div class="actions">${operate&&!productionDone&&timer.state==="NAO_INICIADA"?'<button class="primary" onclick="sampleAction(\'start\')">Iniciar produção</button>':""}${operate&&!productionDone&&timer.state==="EM_ANDAMENTO"?'<button class="warning" onclick="sampleAction(\'pause\')">Pausar</button><button class="success" onclick="sampleAction(\'finish\')">Concluir produção</button>':""}${operate&&!productionDone&&timer.state==="PAUSADA"?'<button class="primary" onclick="sampleAction(\'resume\')">Retomar</button><button class="success" onclick="sampleAction(\'finish\')">Concluir produção</button>':""}${productionDone?'<span class="badge green">Produção concluída</span>':'<span class="badge orange">Produção em acompanhamento</span>'}</div>
-    </div>${samplePlanTable(r,"Previsão da tiragem de 10% no retorno")}`;
+    </div>${samplePlanTable(r,"Acompanhamento da produção na Costura")}`;
 }
 
 function receivingFormHtml(isReturn) {
@@ -974,11 +978,11 @@ function receivingFormHtml(isReturn) {
       </div>
       <div class="actions">
         ${operate && !physicalDone ? `<button class="secondary" onclick="saveReceiving()">Salvar dados</button><button class="success" onclick="completePhysical()">Concluir recebimento físico</button><label class="primary small-btn" style="cursor:pointer">Adicionar fotos<input id="receivingFiles" type="file" multiple hidden onchange="uploadReceivingPhotos()"></label>` : ""}
-        ${physicalDone ? '<span class="badge green">Recebimento físico concluído</span>' : '<span class="badge gray">Recebimento físico pendente</span>'}
+        ${isReturn && physicalDone && operate && cardData.current_sector === "RECEBIMENTO" ? '<button class="success" onclick="completePhysical()">Concluir retorno e encaminhar à Qualidade</button>' : (physicalDone ? '<span class="badge green">Recebimento físico concluído</span>' : '<span class="badge gray">Recebimento físico pendente</span>')}
       </div>
-      ${samplePlanTable(r,isReturn?"Plano exato da nova tiragem de 10%":"Plano exato da tiragem de 10%")}
-      ${sampleHtml(r, sampleDone, operate, isReturn)}
-      ${sampleDone ? `<h3 class="section-heading">Endereçamento obrigatório da amostra na Qualidade</h3><div id="posAllocBox" class="notice">Carregando etapa obrigatória de alocação…</div>` : `<h3 class="section-heading">Endereçamento da amostra</h3><div class="notice warn">Conclua a tiragem dos 10% para liberar primeiro a alocação obrigatória na Qualidade.</div>`}
+      ${isReturn
+        ? `<h3 class="section-heading">Endereçamento do retorno</h3><div id="posAllocBox" class="notice">${Number(r.volumes||0)>0 ? "Carregando mapa para alocar todo o saldo retornado…" : "Informe e salve os volumes retornados para liberar o endereçamento completo."}</div>`
+        : `${samplePlanTable(r,"Plano exato da tiragem de 10%")}${sampleHtml(r, sampleDone, operate, false)}${sampleDone ? `<h3 class="section-heading">Endereçamento obrigatório da amostra na Qualidade</h3><div id="posAllocBox" class="notice">Carregando etapa obrigatória de alocação…</div>` : `<h3 class="section-heading">Endereçamento da amostra</h3><div class="notice warn">Conclua a tiragem dos 10% para liberar primeiro a alocação obrigatória na Qualidade.</div>`}`}
       <div class="photos">${receivingPhotos.map((p,i)=>`<a class="photo-link" target="_blank" href="${p}">Arquivo ${i+1}</a>`).join("")}</div>
     </div>`;
 }
@@ -1209,7 +1213,9 @@ async function renderQualityTab() {
 }
 
 function qualitySetupHtml(previousInspection=null, sourceSubset=false) {
-  const isCosturaReturn = cardData.receiving_type === "RETORNO";
+  const isCosturaReturn = cardData.receiving_type === "RETORNO" ||
+    cardData.receiving?.receiving_type === "RETORNO" ||
+    ["AGUARDANDO_RECEBIMENTO_RETORNO", "RETORNO_CONCLUIDO", "AGUARDANDO_INSPECAO"].includes(cardData.status);
   const defaultType = isCosturaReturn ? 2 : 1;
   const defaultMode = cardData.purchase_mode || previousInspection?.purchase_mode || "";
   const destinationField = defaultType === 1
@@ -2994,6 +3000,20 @@ function filterPositionMap(){
   renderPositionMap();
 }
 
+async function loadReturnAllocationStep(cardId) {
+  window.qaSampleAllocationRequired = false;
+  window.qaSampleAllocationComplete = true;
+  const box = $("posAllocBox");
+  if (!box) return;
+  const receiving = cardData?.receiving || {};
+  const volumes = Number(receiving.volumes || 0);
+  if (!Number.isFinite(volumes) || volumes <= 0) {
+    box.innerHTML = '<div class="notice warn">Informe e salve uma quantidade de volumes maior que zero para liberar o endereçamento completo do retorno.</div>';
+    return;
+  }
+  await loadPositionAllocator(cardId, "RM");
+}
+
 async function loadReceivingAllocationStep(cardId) {
   window.qaSampleAllocationRequired = true;
   window.qaSampleAllocationComplete = false;
@@ -3045,6 +3065,7 @@ async function loadPositionAllocator(cardId,setor,tenPercentSample=false,tenPerc
   const isPieceSector=["ET","EC"].includes(setor);
   const isVolumeOnlyRM=setor==="RM";
   const isTenPercentSample=Boolean(tenPercentSample)&&setor==="QA";
+  const isReturnVolumeAllocation=rcv.receiving_type==="RETORNO"&&!isTenPercentSample;
   const isVolumeOnly=isVolumeOnlyRM||isTenPercentSample;
   if(isTenPercentSample)tenPercentTarget=Number(tenPercentTarget)||(Number(rcv.volumes||0)>0?1:0);
 
@@ -3077,7 +3098,7 @@ async function loadPositionAllocator(cardId,setor,tenPercentSample=false,tenPerc
           (isTenPercentSample ? '<div class="position-dest"><b>Destino fixo: Qualidade (QA)</b><small>Os 10% são endereçados primeiro; o saldo global restante continua compartilhado entre RM, QA e PR.</small></div>' :
           '<div class="position-dest"><label for="positionDestSetor">Destino</label>' +
             '<select id="positionDestSetor" onchange="changeAllocDestination(this.value)">'+
-              [["RM","Recebimento (RM)"],["QA","Qualidade (QA)"],["PR","Processamento (PR)"],["ET","Etiquetagem (ET)"],["EC","Estocagem (EC)"]].map(function(o){
+              (isReturnVolumeAllocation ? [["RM","Recebimento (RM)"],["QA","Qualidade (QA)"],["PR","Processamento (PR)"]] : [["RM","Recebimento (RM)"],["QA","Qualidade (QA)"],["PR","Processamento (PR)"],["ET","Etiquetagem (ET)"],["EC","Estocagem (EC)"]]).map(function(o){
                 return '<option value="'+o[0]+'"'+(o[0]===setor?' selected':'')+'>'+o[1]+'</option>';
               }).join("")+
             '</select><small>'+(isPieceSector?"Saldo em peças nesta área.":"Saldo em volumes compartilhado entre RM, QA e PR.")+'</small></div>') +
