@@ -1165,17 +1165,15 @@ async def create_assignments_batch(inspection_id: int, request: Request):
         con.close()
         raise HTTPException(403, "O inspetor pode assumir somente itens para si próprio.")
 
-    sample_ids = [sample_item_id for sample_item_id, _ in normalized]
-    marks = ",".join("?" for _ in sample_ids)
     sample_rows = con.execute(
-        f"""SELECT qs.*,i.product,i.color,i.size,
+        """SELECT qs.*,i.product,i.color,i.size,
                    COALESCE(SUM(a.assigned_qty),0) AS assigned_total
             FROM quality_sample_items qs
             JOIN items i ON i.id=qs.item_id
             LEFT JOIN quality_assignments a ON a.sample_item_id=qs.id
-            WHERE qs.inspection_id=? AND qs.id IN ({marks})
+            WHERE qs.inspection_id=?
             GROUP BY qs.id""",
-        (inspection_id, *sample_ids),
+        (inspection_id,),
     ).fetchall()
     samples: dict[int, sqlite3.Row] = {int(row["id"]): row for row in sample_rows}
     errors: list[str] = []
@@ -1507,15 +1505,13 @@ async def save_worker_results_batch(worker_id: int, request: Request):
             seen.add(assignment_id)
             parsed.append((entry, assignment_id, inspected, rejected, rework))
 
-        assignment_ids = [row[1] for row in parsed]
-        marks = ",".join("?" for _ in assignment_ids)
         assignment_rows = con.execute(
-            f"""SELECT a.*,i.product,i.reference,i.sku,i.color,i.size
-                FROM quality_assignments a
-                JOIN quality_sample_items qs ON qs.id=a.sample_item_id
-                JOIN items i ON i.id=qs.item_id
-                WHERE a.worker_id=? AND a.id IN ({marks})""",
-            (worker_id, *assignment_ids),
+            """SELECT a.*,i.product,i.reference,i.sku,i.color,i.size
+               FROM quality_assignments a
+               JOIN quality_sample_items qs ON qs.id=a.sample_item_id
+               JOIN items i ON i.id=qs.item_id
+               WHERE a.worker_id=?""",
+            (worker_id,),
         ).fetchall()
         assignments_by_id = {int(row["id"]): row for row in assignment_rows}
         normalized = []
