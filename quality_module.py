@@ -102,15 +102,23 @@ def require_completed_receiving_sample(con: sqlite3.Connection, card_id: int, re
         ) from exc
 
     if remote_latest:
+        if remote_latest["physical_status"] != "CONCLUIDO":
+            con.close()
+            raise HTTPException(400, "Conclua e salve o recebimento físico no Supabase antes de iniciar a Inspeção da Qualidade.")
         if not remote_latest["ten_percent_required"]:
             con.close()
             raise HTTPException(400, "O registro de Recebimento no Supabase não está configurado para exigir a separação dos 10%.")
         if remote_latest["ten_percent_status"] != "CONCLUIDA":
             con.close()
             raise HTTPException(400, "Conclua e salve a tiragem dos 10% no Recebimento antes de iniciar a Inspeção da Qualidade.")
-        if int(remote_latest["ten_percent_actual"] or 0) <= 0:
+        actual_sample = int(remote_latest["ten_percent_actual"] or 0)
+        minimum_sample = int(remote_latest["ten_percent_min"] or 0)
+        if actual_sample <= 0:
             con.close()
             raise HTTPException(400, "A quantidade efetivamente separada nos 10% não está salva no Supabase como um valor positivo.")
+        if actual_sample < minimum_sample:
+            con.close()
+            raise HTTPException(400, "A quantidade de 10% salva no Supabase está abaixo do mínimo exigido. Revise o Recebimento antes de iniciar a Inspeção.")
         if not local_latest:
             con.close()
             raise HTTPException(503, "O Recebimento existe no Supabase, mas não pôde ser vinculado ao Card local. Tente novamente; a inspeção continua bloqueada até a restauração do vínculo.")
