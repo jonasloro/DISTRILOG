@@ -371,6 +371,14 @@ def sync_all_receiving_state_to_supabase(sqlite_con) -> None:
     """Persiste os controles de Recebimento e os eventos dos cronômetros."""
     receivings = sqlite_con.execute("SELECT * FROM receivings ORDER BY id").fetchall()
     timer_events = sqlite_con.execute("SELECT * FROM timer_events ORDER BY id").fetchall()
+    receiving_ids = [int(row["id"]) for row in receivings]
+    operation_items = []
+    if receiving_ids:
+        marks = ",".join("?" for _ in receiving_ids)
+        operation_items = sqlite_con.execute(
+            "SELECT receiving_id,item_id FROM receiving_operation_items WHERE receiving_id IN ({}) ORDER BY receiving_id,item_id".format(marks),
+            receiving_ids,
+        ).fetchall()
 
     receiving_columns_sql = ",".join(RECEIVING_COLUMNS)
     timer_columns_sql = ",".join(TIMER_EVENT_COLUMNS)
@@ -402,6 +410,17 @@ def sync_all_receiving_state_to_supabase(sqlite_con) -> None:
         with con.cursor() as cur:
             if receivings:
                 cur.executemany(receiving_sql, [_receiving_tuple(row) for row in receivings])
+                for receiving_id in receiving_ids:
+                    cur.execute(
+                        "DELETE FROM outlog_receiving_operation_items WHERE receiving_id=%s",
+                        (receiving_id,),
+                    )
+            if operation_items:
+                cur.executemany(
+                    """INSERT INTO outlog_receiving_operation_items(receiving_id,item_id)
+                       VALUES(%s,%s) ON CONFLICT(receiving_id,item_id) DO NOTHING""",
+                    [(int(row["receiving_id"]), int(row["item_id"])) for row in operation_items],
+                )
             if timer_events:
                 cur.executemany(timer_sql, [_timer_event_tuple(row) for row in timer_events])
         con.commit()
@@ -441,6 +460,16 @@ def restore_receiving_state_from_supabase(
                     remote_events = cur.fetchall()
                 else:
                     remote_events = []
+            remote_receiving_ids_for_links = [int(row["id"]) for row in remote_receivings]
+            if remote_receiving_ids_for_links:
+                cur.execute(
+                    """SELECT receiving_id,item_id FROM outlog_receiving_operation_items
+                       WHERE receiving_id = ANY(%s) ORDER BY receiving_id,item_id""",
+                    (remote_receiving_ids_for_links,),
+                )
+                remote_operation_items = cur.fetchall()
+            else:
+                remote_operation_items = []
 
     local_card_ids = {
         int(row["id"]) for row in sqlite_con.execute("SELECT id FROM cards").fetchall()
@@ -582,8 +611,41 @@ def restore_receiving_state_from_supabase(
                 local_id = remote_id
                 restored_count += 1
 
-        restored_count += merge_completed_sample(local_id, row)
+        # Supabase is the source of truth: refresh the local operational copy from the
+        # persisted row so a stale SQLite state cannot roll a completed step backwards.
+        local_before = sqlite_con.execute(
+            "SELECT * FROM receivings WHERE id=?", (local_id,)
+        ).fetchone()
+        update_columns = [column for column in RECEIVING_COLUMNS if column != "id"]
+        if local_before and any(local_before[column] != row[column] for column in RECEIVING_COLUMNS):
+            sqlite_con.execute(
+                "UPDATE receivings SET {} WHERE id=?".format(
+                    ",".join("{}=?".format(column) for column in update_columns)
+                ),
+                tuple(row[column] for column in update_columns) + (local_id,),
+            )
+            restored_count += 1
         remote_to_local_receiving_id[remote_id] = local_id
+
+    if has_receiving_items and remote_operation_items:
+        links_by_receiving: dict[int, list[int]] = {}
+        for link in remote_operation_items:
+            links_by_receiving.setdefault(int(link["receiving_id"]), []).append(int(link["item_id"]))
+        # Replace the local links only for operations whose authoritative remote link set exists.
+        for remote_id, item_ids in links_by_receiving.items():
+            local_id = remote_to_local_receiving_id.get(remote_id)
+            if local_id is None:
+                continue
+            sqlite_con.execute("DELETE FROM receiving_operation_items WHERE receiving_id=?", (local_id,))
+            for item_id in item_ids:
+                local_item = sqlite_con.execute(
+                    "SELECT 1 FROM items WHERE id=?", (item_id,)
+                ).fetchone()
+                if local_item:
+                    sqlite_con.execute(
+                        "INSERT OR IGNORE INTO receiving_operation_items(receiving_id,item_id) VALUES(?,?)",
+                        (local_id, item_id),
+                    )
 
     for row in remote_events:
         remote_receiving_id = int(row["receiving_id"])
