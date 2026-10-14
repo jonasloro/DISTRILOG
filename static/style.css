@@ -893,3 +893,32 @@ input:disabled,select:disabled,textarea:disabled{
 .quality-manage-details summary{cursor:pointer;color:var(--blue);font-weight:700;padding:5px 0}
 .quality-manage-details select,.quality-manage-details input{display:block;width:145px;max-width:100%;margin:5px 0;padding:7px;border:1px solid var(--border);border-radius:6px}
 @media(max-width:760px){.quality-results-wrap{max-height:none}.quality-results-table{min-width:1300px}}
+
+
+/* Endereçamento atual do Card: faixa própria, sem interferir no grid de indicadores */
+.card-location-banner{width:100%;box-sizing:border-box;margin:0 0 14px;padding:15px 17px;border:1px solid #2d4965;border-radius:12px;background:linear-gradient(115deg,#0d2948 0%,#112034 56%,#182431 100%);color:#eaf3fc;overflow:hidden}
+.card-location-heading{display:flex;align-items:center;gap:12px;min-width:0}
+.card-location-icon{flex:0 0 42px;width:42px;height:42px;display:grid;place-items:center;border-radius:10px;border:1px solid #35618e;background:#102e4c;color:#8cc7ff;font-size:28px;line-height:1}
+.card-location-heading>div{min-width:0;display:flex;flex-direction:column;gap:3px}
+.card-location-eyebrow{font-size:10px;font-weight:900;letter-spacing:.09em;color:#91abc5}
+.card-location-heading strong{font-size:20px;line-height:1.25;color:#fff}
+.card-location-heading small{font-size:11px;line-height:1.4;color:#9fb2c7}
+.card-location-list{display:flex;flex-wrap:wrap;gap:8px;margin:13px 0 0;padding-top:12px;border-top:1px solid #29435c}
+.card-location-chip{display:grid;grid-template-columns:auto 1fr;align-items:center;column-gap:10px;row-gap:3px;min-width:152px;max-width:100%;padding:9px 12px;border:1px solid #31475b;border-radius:9px;background:#0b1e30}
+.card-location-sector{grid-column:1/-1;font-size:9px;font-weight:900;letter-spacing:.04em;text-transform:uppercase;color:#8ca6bf}
+.card-location-chip strong{font-size:19px;line-height:1.1;font-weight:900;color:#fff;overflow-wrap:anywhere}
+.card-location-quantity{justify-self:end;font-size:11px;font-weight:800;color:#a9c9e9;white-space:nowrap}
+.card-location-chip.sample-location{border-color:#765a28;background:#2a2418}
+.card-location-chip.sample-location .card-location-sector{color:#e6bc73}
+.card-location-chip.sample-location strong{color:#ffe1a8}
+.card-location-kind{grid-column:1/-1;font-size:10px;font-weight:800;color:#f2c66f}
+.card-sewing-guidance{display:flex;align-items:flex-start;gap:11px;margin-top:13px;padding:12px 13px;border:1px solid #806127;border-radius:9px;background:#302711}
+.card-sewing-guidance-icon{flex:0 0 28px;width:28px;height:28px;display:grid;place-items:center;border-radius:7px;background:#59451b;color:#ffda84;font-size:20px;font-weight:900}
+.card-sewing-guidance-content{min-width:0}
+.card-sewing-guidance-content>strong{display:block;color:#ffdc8e;font-size:12px;font-weight:900}
+.card-sewing-guidance-content p{margin:5px 0 0;color:#f0e4c8;font-size:12px;line-height:1.5}
+.sewing-target-addresses{display:flex;flex-wrap:wrap;gap:7px;margin-top:9px}
+.sewing-target-address{display:inline-flex;align-items:center;gap:8px;padding:6px 9px;border-radius:7px;background:#171f27;border:1px solid #66552f}
+.sewing-target-address b{font-size:14px;color:#fff1ca}
+.sewing-target-address small{font-size:10px;color:#d7c498}
+@media(max-width:650px){.card-location-banner{padding:12px}.card-location-heading strong{font-size:17px}.card-location-list{gap:6px}.card-location-chip{min-width:calc(50% - 6px);flex:1;padding:8px}.card-sewing-guidance{padding:10px}}
