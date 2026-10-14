@@ -1165,28 +1165,32 @@ async def create_assignments_batch(inspection_id: int, request: Request):
         con.close()
         raise HTTPException(403, "O inspetor pode assumir somente itens para si próprio.")
 
-    samples: dict[int, sqlite3.Row] = {}
+    sample_ids = [sample_item_id for sample_item_id, _ in normalized]
+    marks = ",".join("?" for _ in sample_ids)
+    sample_rows = con.execute(
+        f"""SELECT qs.*,i.product,i.color,i.size,
+                   COALESCE(SUM(a.assigned_qty),0) AS assigned_total
+            FROM quality_sample_items qs
+            JOIN items i ON i.id=qs.item_id
+            LEFT JOIN quality_assignments a ON a.sample_item_id=qs.id
+            WHERE qs.inspection_id=? AND qs.id IN ({marks})
+            GROUP BY qs.id""",
+        (inspection_id, *sample_ids),
+    ).fetchall()
+    samples: dict[int, sqlite3.Row] = {int(row["id"]): row for row in sample_rows}
     errors: list[str] = []
     for sample_item_id, qty in normalized:
-        sample = con.execute(
-            """SELECT qs.*,i.product,i.color,i.size FROM quality_sample_items qs
-               JOIN items i ON i.id=qs.item_id WHERE qs.id=? AND qs.inspection_id=?""",
-            (sample_item_id, inspection_id),
-        ).fetchone()
+        sample = samples.get(sample_item_id)
         if not sample:
             errors.append(f"Item da amostra {sample_item_id} não encontrado.")
             continue
-        assigned = con.execute(
-            "SELECT COALESCE(SUM(assigned_qty),0) total FROM quality_assignments WHERE sample_item_id=?",
-            (sample_item_id,),
-        ).fetchone()["total"]
-        available = int(sample["sample_qty"]) - int(assigned)
+        available = int(sample["sample_qty"]) - int(sample["assigned_total"])
         if qty > available:
             label = "Quantidade geral — Saldo" if sample["sample_scope"] == "GERAL" else " / ".join(
                 str(v) for v in [sample["product"], sample["color"], sample["size"]] if v
             )
             errors.append(f"{label}: solicitado {qty}, disponível {available}.")
-        samples[sample_item_id] = sample
+
     if errors:
         con.close()
         raise HTTPException(400, "Não foi possível salvar o lote: " + " | ".join(errors))
@@ -1454,6 +1458,135 @@ async def save_assignment_result(assignment_id: int, request: Request):
     detail = quality_card_data(con, row["card_id"])
     con.close()
     return detail
+
+
+@router.patch("/quality/workers/{worker_id}/results/batch")
+async def save_worker_results_batch(worker_id: int, request: Request):
+    payload = await request.json()
+    user_id = int(payload.get("user_id") or 0)
+    entries = payload.get("results") or []
+    if not isinstance(entries, list) or not entries:
+        raise HTTPException(400, "Informe pelo menos um resultado para salvar.")
+
+    con = db_connect()
+    try:
+        actor = require_role(con, user_id, QUALITY_ROLES)
+        worker = con.execute(
+            """SELECT qw.*,qi.card_id,qi.status inspection_status
+               FROM quality_workers qw
+               JOIN quality_inspections qi ON qi.id=qw.inspection_id
+               WHERE qw.id=?""",
+            (worker_id,),
+        ).fetchone()
+        if not worker:
+            raise HTTPException(404, "Participação do inspetor não encontrada.")
+        inspection = con.execute(
+            "SELECT * FROM quality_inspections WHERE id=?",
+            (worker["inspection_id"],),
+        ).fetchone()
+        ensure_quality_sector_owner(con, inspection, actor["role"])
+        if worker["inspection_status"] != "ABERTA":
+            raise HTTPException(400, "A inspeção já foi concluída.")
+        if worker["status"] == "CONCLUIDA":
+            raise HTTPException(400, "O inspetor já finalizou esta inspeção.")
+        if actor["role"] == "qualidade" and int(worker["inspector_id"]) != user_id:
+            raise HTTPException(403, "Você só pode apontar resultados das suas próprias atribuições.")
+
+        parsed = []
+        seen = set()
+        for entry in entries:
+            try:
+                assignment_id = int(entry.get("assignment_id") or 0)
+                inspected = int(entry.get("inspected_qty") or 0)
+                rejected = int(entry.get("rejected_qty") or 0)
+                rework = int(entry.get("rework_qty") or 0)
+            except (TypeError, ValueError):
+                raise HTTPException(400, "As quantidades e identificadores devem ser numéricos.")
+            if assignment_id <= 0 or assignment_id in seen:
+                raise HTTPException(400, "Há uma atribuição inválida ou repetida no lote.")
+            seen.add(assignment_id)
+            parsed.append((entry, assignment_id, inspected, rejected, rework))
+
+        assignment_ids = [row[1] for row in parsed]
+        marks = ",".join("?" for _ in assignment_ids)
+        assignment_rows = con.execute(
+            f"""SELECT a.*,i.product,i.reference,i.sku,i.color,i.size
+                FROM quality_assignments a
+                JOIN quality_sample_items qs ON qs.id=a.sample_item_id
+                JOIN items i ON i.id=qs.item_id
+                WHERE a.worker_id=? AND a.id IN ({marks})""",
+            (worker_id, *assignment_ids),
+        ).fetchall()
+        assignments_by_id = {int(row["id"]): row for row in assignment_rows}
+        normalized = []
+        for entry, assignment_id, inspected, rejected, rework in parsed:
+            row = assignments_by_id.get(assignment_id)
+            if not row:
+                raise HTTPException(400, "Uma das atribuições não pertence a este inspetor.")
+            if inspected < 0 or rejected < 0 or rework < 0:
+                raise HTTPException(400, "As quantidades não podem ser negativas.")
+            label = " / ".join(str(value) for value in [row["product"], row["color"], row["size"]] if value)
+            if inspected > int(row["assigned_qty"]):
+                raise HTTPException(400, f"{label or 'Um dos itens'}: a quantidade inspecionada ultrapassa a atribuída.")
+            if rejected + rework > inspected:
+                raise HTTPException(400, f"{label or 'Um dos itens'}: rejeição e retrabalho ultrapassam a quantidade inspecionada.")
+            photos = entry.get("photo_paths", from_json(row["photo_paths"], []))
+            if not isinstance(photos, list):
+                raise HTTPException(400, "A lista de evidências de um dos itens é inválida.")
+            reject_reason = str(entry.get("reject_reason") or "").strip()
+            rework_reason = str(entry.get("rework_reason") or "").strip()
+            observation = str(entry.get("observation") or "").strip()
+            approved = inspected - rejected - rework
+            candidate = dict(row)
+            candidate.update({
+                "inspected_qty": inspected, "approved_qty": approved,
+                "rejected_qty": rejected, "rework_qty": rework,
+                "reject_reason": reject_reason, "rework_reason": rework_reason,
+                "observation": observation, "photo_paths": to_json(photos),
+            })
+            valid, _ = assignment_is_valid(candidate)
+            normalized.append({
+                "id": assignment_id, "inspected_qty": inspected, "approved_qty": approved,
+                "rejected_qty": rejected, "rework_qty": rework,
+                "reject_reason": reject_reason, "rework_reason": rework_reason,
+                "observation": observation, "photo_paths": to_json(photos),
+                "result_status": "VALIDO" if valid else "PENDENTE",
+            })
+
+        for result in normalized:
+            con.execute(
+                """UPDATE quality_assignments
+                   SET inspected_qty=?,approved_qty=?,rejected_qty=?,rework_qty=?,
+                       reject_reason=?,rework_reason=?,observation=?,photo_paths=?,result_status=?
+                   WHERE id=? AND worker_id=?""",
+                (
+                    result["inspected_qty"], result["approved_qty"], result["rejected_qty"], result["rework_qty"],
+                    result["reject_reason"], result["rework_reason"], result["observation"], result["photo_paths"],
+                    result["result_status"], result["id"], worker_id,
+                ),
+            )
+        totals = {
+            "inspected": sum(item["inspected_qty"] for item in normalized),
+            "approved": sum(item["approved_qty"] for item in normalized),
+            "rejected": sum(item["rejected_qty"] for item in normalized),
+            "rework": sum(item["rework_qty"] for item in normalized),
+        }
+        add_history(
+            con,
+            worker["card_id"],
+            "RESULTADO_QUALIDADE_LOTE",
+            f"{actor['name']} salvou em lote {len(normalized)} resultado(s): {totals['inspected']} inspecionadas, "
+            f"{totals['approved']} aprovadas, {totals['rejected']} rejeitadas e {totals['rework']} para retrabalho.",
+            user_id,
+        )
+        refresh_quality_card_status(con, worker["inspection_id"])
+        con.commit()
+        return quality_card_data(con, worker["card_id"])
+    except Exception:
+        con.rollback()
+        raise
+    finally:
+        con.close()
 
 
 @router.post("/quality/workers/{worker_id}/timer/{action}")
