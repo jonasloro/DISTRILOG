@@ -926,6 +926,47 @@ def bootstrap_card_persistence(sqlite_con) -> dict:
     return {"mode": "restored", "cards": len(cards), "items": len(items), "receivings": receiving_count}
 
 
+
+def restore_card_state_for_quality(sqlite_con) -> dict[int, dict]:
+    """Refresh local Card routing fields from Supabase before a Quality operation."""
+    if not os.getenv("SUPABASE_DATABASE_URL"):
+        raise RuntimeError("SUPABASE_DATABASE_URL não está configurada.")
+
+    with pg_connect() as con:
+        with con.cursor() as cur:
+            cur.execute(
+                """SELECT id,purchase_id,current_sector,status,receiving_type,purchase_mode,
+                          quality_destination,updated_at
+                   FROM outlog_cards ORDER BY id"""
+            )
+            remote_rows = cur.fetchall()
+
+    local_ids = {
+        int(row["id"]): str(row["purchase_id"])
+        for row in sqlite_con.execute("SELECT id,purchase_id FROM cards").fetchall()
+    }
+    snapshot: dict[int, dict] = {}
+    for row in remote_rows:
+        card_id = int(row["id"])
+        if local_ids.get(card_id) != str(row["purchase_id"]):
+            continue
+        state = {key: row[key] for key in (
+            "id","purchase_id","current_sector","status","receiving_type",
+            "purchase_mode","quality_destination","updated_at"
+        )}
+        sqlite_con.execute(
+            """UPDATE cards SET current_sector=?,status=?,receiving_type=?,purchase_mode=?,
+               quality_destination=?,updated_at=? WHERE id=? AND purchase_id=?""",
+            (
+                state["current_sector"], state["status"], state["receiving_type"],
+                state["purchase_mode"], state["quality_destination"], state["updated_at"],
+                card_id, state["purchase_id"],
+            ),
+        )
+        snapshot[card_id] = state
+    return snapshot
+
+
 # Persistência da Qualidade: Supabase é a fonte de verdade; SQLite é apenas cache
 # de compatibilidade para as consultas e transações legadas do módulo.
 QUALITY_PERSISTENCE_TABLES = {
