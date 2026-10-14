@@ -44,7 +44,9 @@ class QualitySQLiteConnection(sqlite3.Connection):
 
             try:
                 snapshot = sync_quality_state_to_supabase(
-                    self, getattr(self, "_quality_remote_snapshot", {})
+                    self,
+                    getattr(self, "_quality_remote_snapshot", {}),
+                    getattr(self, "_quality_remote_card_snapshot", None),
                 )
             except Exception as exc:
                 raise HTTPException(
@@ -69,8 +71,12 @@ def db_connect(persist: bool = True) -> sqlite3.Connection:
     con._quality_persistence_enabled = False
     if persist:
         try:
-            from supabase_module import restore_quality_state_from_supabase
+            from supabase_module import (
+                restore_card_state_for_quality,
+                restore_quality_state_from_supabase,
+            )
 
+            con._quality_remote_card_snapshot = restore_card_state_for_quality(con)
             con._quality_remote_snapshot = restore_quality_state_from_supabase(con)
             con.commit()
             con._quality_persistence_enabled = True
