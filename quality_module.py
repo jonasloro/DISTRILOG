@@ -2175,7 +2175,11 @@ async def complete_inspection(inspection_id: int, request: Request):
                quality_destination=NULL,updated_at=? WHERE id=?""",
             (now, inspection["card_id"]),
         )
-        route_text = "Card encaminhado diretamente ao Processamento, com a amostra dos 10% integrada ao endereço do saldo."
+        route_text = (
+            "Retorno da Costura inspecionado na Inspeção 2 e encaminhado ao Processamento; não houve separação de amostra no Recebimento."
+            if int(inspection["inspection_type"]) == 2 else
+            "Card encaminhado diretamente ao Processamento, com a amostra dos 10% integrada ao endereço do saldo."
+        )
     sample_move_text = (
         f" Amostra dos 10% reunida automaticamente no endereço {merged_sample_location['address']} ({merged_sample_location['sector']})."
         if merged_sample_location

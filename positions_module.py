@@ -251,11 +251,35 @@ def allocate(card_id: int, payload: dict[str, Any]) -> dict[str, Any]:
         with pg_connect() as con:
             with con.cursor() as cur:
                 _card_or_404(cur, card_id, lock=True)
+                receiving_id = int(payload.get("receiving_id") or 0)
+                if receiving_id:
+                    cur.execute(
+                        "SELECT receiving_type FROM outlog_receivings WHERE id=%s AND card_id=%s",
+                        (receiving_id, card_id),
+                    )
+                else:
+                    cur.execute(
+                        """SELECT r.receiving_type FROM outlog_receivings r
+                           LEFT JOIN outlog_cards c ON c.id=r.card_id
+                           WHERE r.card_id=%s
+                           ORDER BY (r.closed_at IS NULL) DESC,
+                                    (r.receiving_type=c.receiving_type) DESC, r.id DESC
+                           LIMIT 1""",
+                        (card_id,),
+                    )
+                allocation_receiving = cur.fetchone()
+                if receiving_id and not allocation_receiving:
+                    raise HTTPException(400, "O recebimento informado não pertence a este Card.")
+                if (
+                    allocation_receiving
+                    and allocation_receiving["receiving_type"] == "RETORNO"
+                    and setor not in GLOBAL_ALLOCATION_SECTORS
+                ):
+                    raise HTTPException(400, "O retorno da Costura só pode ser alocado no saldo compartilhado entre RM, QA e PR.")
                 is_ten_percent_sample = (
                     setor == "QA"
                     and str(payload.get("allocation_purpose") or "").upper() == "TEN_PERCENT_SAMPLE"
                 )
-                receiving_id = int(payload.get("receiving_id") or 0)
                 if setor == "RM" or is_ten_percent_sample:
                     if receiving_id:
                         cur.execute(
@@ -793,10 +817,27 @@ def _allocate_local(card_id: int, payload: dict[str, Any]) -> dict[str, Any]:
         con.execute("BEGIN IMMEDIATE")
         if not con.execute("SELECT id FROM cards WHERE id=?",(card_id,)).fetchone():
             raise HTTPException(404,"Card não encontrado.")
+        receiving_id=int(payload.get("receiving_id") or 0)
+        if receiving_id:
+            allocation_receiving = con.execute(
+                "SELECT receiving_type FROM receivings WHERE id=? AND card_id=?",
+                (receiving_id,card_id),
+            ).fetchone()
+        else:
+            allocation_receiving = con.execute(
+                """SELECT r.receiving_type FROM receivings r
+                   JOIN cards c ON c.id=r.card_id WHERE r.card_id=?
+                   ORDER BY (r.closed_at IS NULL) DESC,
+                            (r.receiving_type=c.receiving_type) DESC, r.id DESC LIMIT 1""",
+                (card_id,),
+            ).fetchone()
+        if receiving_id and not allocation_receiving:
+            raise HTTPException(400,"O recebimento informado não pertence a este Card.")
+        if allocation_receiving and allocation_receiving["receiving_type"]=="RETORNO" and setor not in GLOBAL_ALLOCATION_SECTORS:
+            raise HTTPException(400,"O retorno da Costura só pode ser alocado no saldo compartilhado entre RM, QA e PR.")
         is_ten_percent_sample = (
             setor=="QA" and str(payload.get("allocation_purpose") or "").upper()=="TEN_PERCENT_SAMPLE"
         )
-        receiving_id=int(payload.get("receiving_id") or 0)
         if setor=="RM" or is_ten_percent_sample:
             if receiving_id:
                 receiving=con.execute("SELECT ten_percent_status,volumes,ten_percent_required,receiving_type FROM receivings WHERE id=? AND card_id=?",(receiving_id,card_id)).fetchone()
