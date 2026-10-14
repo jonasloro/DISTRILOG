@@ -2361,8 +2361,10 @@ async def simulate_costura_return(card_id: int, request: Request):
         "Ferramenta de teste: retorno CD01 registrado. Card enviado ao Recebimento para conferência e nova tiragem de 10%.",
         user_id,
     )
-    con.commit()
-    con.close()
+    persist_receiving_then_commit(
+        con, card_id,
+        "O retorno da Costura não foi confirmado no Supabase. Tente novamente."
+    )
     return {"ok": True}
 
 
