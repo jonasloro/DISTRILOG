@@ -49,9 +49,10 @@ class QualitySQLiteConnection(sqlite3.Connection):
                     getattr(self, "_quality_remote_card_snapshot", None),
                 )
             except Exception as exc:
+                self.rollback()
                 raise HTTPException(
                     503,
-                    "Não foi possível salvar a operação da Qualidade no Supabase. Nada foi confirmado; atualize e tente novamente.",
+                    "Não foi possível salvar a operação da Qualidade no Supabase. A alteração local foi revertida; atualize e tente novamente.",
                 ) from exc
             self._quality_remote_snapshot = snapshot
         super().commit()
