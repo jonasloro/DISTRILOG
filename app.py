@@ -203,12 +203,14 @@ def persist_receiving_then_commit(
 def refresh_receiving_operation(con: sqlite3.Connection, receiving_id: int) -> sqlite3.Row:
     """Refresh one Receiving operation from Supabase before reading or mutating it."""
     rec = con.execute(
-        "SELECT card_id FROM receivings WHERE id=?", (int(receiving_id),)
+        "SELECT card_id,receiving_type,created_at FROM receivings WHERE id=?", (int(receiving_id),)
     ).fetchone()
     if not rec:
         con.close()
         raise HTTPException(404, "Recebimento não encontrado. Reabra o Card para carregar o registro persistido.")
     card_id = int(rec["card_id"])
+    receiving_type = str(rec["receiving_type"])
+    created_at = str(rec["created_at"])
     try:
         restore_receiving_state_from_supabase(con, card_id=card_id)
         con.commit()
@@ -223,6 +225,14 @@ def refresh_receiving_operation(con: sqlite3.Connection, receiving_id: int) -> s
     refreshed = con.execute(
         "SELECT * FROM receivings WHERE id=? AND card_id=?", (int(receiving_id), card_id)
     ).fetchone()
+    if not refreshed:
+        # The restore may have moved a legacy local ID to Supabase's canonical ID.
+        refreshed = con.execute(
+            """SELECT * FROM receivings
+               WHERE card_id=? AND receiving_type=? AND created_at=?
+               ORDER BY id DESC LIMIT 1""",
+            (card_id, receiving_type, created_at),
+        ).fetchone()
     if not refreshed:
         con.close()
         raise HTTPException(404, "Este registro de Recebimento não existe mais. Reabra o Card para carregar o registro atualizado.")
@@ -1961,6 +1971,7 @@ async def save_receiving(receiving_id: int, request: Request):
     con = db_connect()
     require_role(con, user_id, {"recebimento"})
     rec = refresh_receiving_operation(con, receiving_id)
+    receiving_id = int(rec["id"])
     card = con.execute("SELECT * FROM cards WHERE id=?", (rec["card_id"],)).fetchone()
     if card["current_sector"] != "RECEBIMENTO":
         con.close()
@@ -2021,6 +2032,7 @@ async def complete_physical(receiving_id: int, request: Request):
     con = db_connect()
     user = require_role(con, user_id, {"recebimento"})
     rec = refresh_receiving_operation(con, receiving_id)
+    receiving_id = int(rec["id"])
     card = con.execute("SELECT * FROM cards WHERE id=?", (rec["card_id"],)).fetchone()
     if card["current_sector"] != "RECEBIMENTO":
         con.close()
@@ -2068,6 +2080,7 @@ async def sample_timer(receiving_id: int, action: str, request: Request):
     con = db_connect()
     require_role(con, user_id, {"recebimento"})
     rec = refresh_receiving_operation(con, receiving_id)
+    receiving_id = int(rec["id"])
     card = con.execute("SELECT * FROM cards WHERE id=?", (rec["card_id"],)).fetchone()
     if card["current_sector"] != "RECEBIMENTO":
         con.close()
