@@ -247,8 +247,9 @@ def sync_receiving_card_state_to_supabase(
     sync_item_ids: list[int] | None = None,
     receiving_type: str | None = None,
     release_stock_allocations: bool = False,
+    release_stock_allocations_before: str | None = None,
 ) -> dict[str, int]:
-    """Persist Receiving state and optionally release the Card's outbound stock in one transaction."""
+    """Persist Receiving state and optionally release old stock allocations in one transaction."""
     if not os.getenv("SUPABASE_DATABASE_URL"):
         raise RuntimeError("SUPABASE_DATABASE_URL não está configurada; o Recebimento não pode ser confirmado.")
 
@@ -406,6 +407,14 @@ def sync_receiving_card_state_to_supabase(
                        SET active=FALSE
                        WHERE card_id=%s AND active IS TRUE AND setor IN ('RM','QA','PR')""",
                     (int(card_id),),
+                )
+            elif release_stock_allocations_before is not None:
+                cur.execute(
+                    """UPDATE card_allocations
+                       SET active=FALSE
+                       WHERE card_id=%s AND active IS TRUE AND setor IN ('RM','QA','PR')
+                         AND created_at < %s""",
+                    (int(card_id), release_stock_allocations_before),
                 )
         con.commit()
 

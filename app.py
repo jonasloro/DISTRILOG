@@ -218,12 +218,14 @@ def persist_receiving_then_commit(
     con: sqlite3.Connection, card_id: int, failure_message: str,
     sync_item_ids: list[int] | None = None,
     release_stock_allocations: bool = False,
+    release_stock_allocations_before: str | None = None,
 ) -> None:
     """Persist Receiving to Supabase first; only then commit the local working copy."""
     try:
         sync_receiving_card_state_to_supabase(
             con, card_id, sync_item_ids=sync_item_ids,
             release_stock_allocations=release_stock_allocations,
+            release_stock_allocations_before=release_stock_allocations_before,
         )
     except Exception as exc:
         con.rollback()
@@ -2066,9 +2068,18 @@ async def save_receiving(receiving_id: int, request: Request):
         minimum = max(math.ceil(int(received_qty) * 0.10), item_count if card["purchase_mode"] == "GRADE" else 0)
         con.execute("UPDATE receivings SET ten_percent_min=? WHERE id=?", (minimum, receiving_id))
     add_history(con, rec["card_id"], "RECEBIMENTO_SALVO", "Dados do Recebimento atualizados.", user_id)
+    return_cycle_start = str(rec["created_at"]) if rec["receiving_type"] == "RETORNO" else None
+    if return_cycle_start is not None:
+        con.execute(
+            """UPDATE card_allocations SET active=0
+               WHERE card_id=? AND active=1 AND setor IN ('RM','QA','PR')
+                 AND created_at < ?""",
+            (int(rec["card_id"]), return_cycle_start),
+        )
     persist_receiving_then_commit(
         con, int(rec["card_id"]),
-        "Os dados do Recebimento não foram confirmados no Supabase. Nada foi considerado salvo; tente novamente."
+        "Os dados do Recebimento não foram confirmados no Supabase. Nada foi considerado salvo; tente novamente.",
+        release_stock_allocations_before=return_cycle_start,
     )
     return {"ok": True}
 

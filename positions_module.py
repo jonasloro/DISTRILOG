@@ -96,6 +96,24 @@ def init_positions_db() -> None:
                 if cur.rowcount == 1:
                     cur.execute("DELETE FROM card_allocations")
                     print("[migracao] Alocações de peças zeradas; tabela card_allocations preservada.")
+                cur.execute(
+                    """UPDATE card_allocations AS a SET active=FALSE
+                       WHERE a.active IS TRUE AND a.setor = ANY(%s)
+                         AND EXISTS (
+                             SELECT 1 FROM outlog_cards c
+                             WHERE c.id=a.card_id AND c.status IN ('EM_COSTURA_CD01','DESPACHO_CD02')
+                         )""",
+                    (["RM", "QA", "PR"],),
+                )
+                cur.execute(
+                    """UPDATE card_allocations AS a SET active=FALSE
+                       WHERE a.active IS TRUE AND a.setor = ANY(%s)
+                         AND a.created_at < (
+                             SELECT MAX(r.created_at) FROM outlog_receivings r
+                             WHERE r.card_id=a.card_id AND r.receiving_type='RETORNO'
+                         )""",
+                    (["RM", "QA", "PR"],),
+                )
                 cur.execute("SELECT COUNT(*) c FROM sector_positions")
                 if cur.fetchone()["c"] == 0:
                     rows = []
@@ -685,6 +703,27 @@ def _init_local_positions_db() -> None:
             """UPDATE card_allocations SET allocation_purpose='TEN_PERCENT_SAMPLE'
                WHERE setor='QA' AND item_id IS NULL AND allocation_purpose='STOCK'"""
         )
+        local_tables = {
+            row["name"] for row in con.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        if {"cards", "receivings"}.issubset(local_tables):
+            con.execute(
+                """UPDATE card_allocations SET active=0
+                   WHERE active=1 AND setor IN ('RM','QA','PR')
+                     AND card_id IN (
+                         SELECT id FROM cards WHERE status IN ('EM_COSTURA_CD01','DESPACHO_CD02')
+                     )"""
+            )
+            con.execute(
+                """UPDATE card_allocations SET active=0
+                   WHERE active=1 AND setor IN ('RM','QA','PR')
+                     AND created_at < (
+                         SELECT MAX(r.created_at) FROM receivings r
+                         WHERE r.card_id=card_allocations.card_id AND r.receiving_type='RETORNO'
+                     )"""
+            )
         rows=[]
         for setor,zonas in SECTOR_ZONES.items():
             for zona in zonas:
