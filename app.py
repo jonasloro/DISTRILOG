@@ -2160,9 +2160,13 @@ async def sample_timer(receiving_id: int, action: str, request: Request):
             message = ("Informe a quantidade produzida." if rec["receiving_type"] == "COSTURA"
                        else "Informe a quantidade efetivamente separada.")
             raise HTTPException(400, message)
-        if rec["receiving_type"] != "COSTURA" and rec["ten_percent_actual"] < rec["ten_percent_min"]:
+        if rec["receiving_type"] != "COSTURA" and int(rec["ten_percent_actual"]) != int(rec["ten_percent_min"]):
             con.close()
-            raise HTTPException(400, f"A quantidade separada deve ser no mínimo {rec['ten_percent_min']} peças.")
+            raise HTTPException(
+                400,
+                f"A tiragem dos 10% deve ser exatamente {rec['ten_percent_min']} peças. "
+                "Corrija a quantidade informada e salve novamente antes de concluir.",
+            )
     summary = timer_action(con, receiving_id, action, user_id)
     status_map = {"start": "EM_ANDAMENTO", "pause": "PAUSADA", "resume": "EM_ANDAMENTO", "finish": "CONCLUIDA"}
     con.execute("UPDATE receivings SET ten_percent_status=? WHERE id=?",
