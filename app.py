@@ -181,6 +181,21 @@ def iso_now() -> str:
     return datetime.now().replace(microsecond=0).isoformat()
 
 
+def persist_receiving_then_commit(
+    con: sqlite3.Connection, card_id: int, failure_message: str
+) -> None:
+    """Persist Receiving to Supabase first; only then commit the local working copy."""
+    try:
+        sync_receiving_card_state_to_supabase(con, card_id)
+    except Exception as exc:
+        con.rollback()
+        con.close()
+        print("[erro] falha ao persistir Recebimento do Card {} no Supabase: {}".format(card_id, exc))
+        raise HTTPException(503, failure_message) from exc
+    con.commit()
+    con.close()
+
+
 def normalize_text(value: Any) -> str:
     text = "" if value is None else str(value).strip()
     return "".join(
