@@ -76,7 +76,6 @@ def require_completed_receiving_sample(con: sqlite3.Connection, card_id: int, re
         sync_receiving_card_state_to_supabase,
     )
 
-    restore_error = None
     try:
         # Supabase is authoritative for this gate. If an older deployment missed a write,
         # seed the remote row from the existing local operation once, then query Supabase again.
@@ -203,6 +202,7 @@ def require_completed_receiving_sample(con: sqlite3.Connection, card_id: int, re
         409,
         "Não existe registro de Recebimento do tipo {} no Supabase para este Card.{} A inspeção permanece bloqueada para não inventar a quantidade dos 10%; verifique o histórico do Card ou solicite a recuperação ao Supervisor.".format(receiving_type, details),
     )
+
 
 def ensure_quality_sector_owner(con: sqlite3.Connection, inspection: sqlite3.Row, actor_role: str) -> None:
     """Allow mutations only while the Card or the selected Quality items belong to Quality."""
