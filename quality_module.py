@@ -1796,9 +1796,9 @@ async def complete_inspection(inspection_id: int, request: Request):
         )
         route_text = f"Card devolvido ao Recebimento para despacho com destino {inspection['destination']}."
     else:
-        # A Inspeção 2 pode ocorrer logo após o primeiro Recebimento ou após o
-        # retorno da Costura. Preserve a origem atual do Card e encaminhe para
-        # Processamento sem marcar indevidamente toda Inspeção 2 como retorno.
+        # A Inspeção 2 é aberta somente para Cards que retornaram da Costura.
+        # A criação da inspeção valida essa origem; após a conclusão, o Card
+        # segue para Processamento.
         con.execute(
             """UPDATE cards SET current_sector='PROCESSAMENTO',status='AGUARDANDO_PROCESSAMENTO',
                updated_at=? WHERE id=?""",
