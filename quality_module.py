@@ -4,6 +4,8 @@ import json
 import math
 import os
 import sqlite3
+import uuid
+import mimetypes
 from datetime import datetime, time, timedelta
 from pathlib import Path
 from typing import Any, Optional
@@ -500,6 +502,81 @@ def init_quality_db() -> None:
             print("[qualidade] não foi possível inicializar a persistência no Supabase: {}".format(exc))
         finally:
             cache_con.close()
+        migrate_legacy_quality_evidence()
+
+def migrate_legacy_quality_evidence() -> None:
+    """Move locally stored legacy Quality photos to Supabase without duplicating uploads."""
+    if not os.getenv("SUPABASE_DATABASE_URL"):
+        return
+    con = None
+    try:
+        from app import UPLOAD_DIR
+        from supabase_module import store_quality_files
+
+        con = db_connect()
+        assignments = con.execute(
+            """SELECT id,photo_paths FROM quality_assignments
+               WHERE photo_paths LIKE '%/uploads/%'"""
+        ).fetchall()
+        pending_files: dict[str, dict] = {}
+        updated_paths: dict[int, list[str]] = {}
+        allowed_types = {"image/jpeg", "image/png", "image/webp", "image/gif", "image/bmp"}
+        max_file_size = 10 * 1024 * 1024
+        for assignment in assignments:
+            paths = from_json(assignment["photo_paths"], [])
+            if not isinstance(paths, list):
+                continue
+            revised = list(paths)
+            changed = False
+            for index, value in enumerate(paths):
+                if not isinstance(value, str) or not value.startswith("/uploads/"):
+                    continue
+                filename = Path(value).name
+                source_path = Path(UPLOAD_DIR) / filename
+                if not filename or not source_path.is_file():
+                    continue
+                content_type = mimetypes.guess_type(filename)[0]
+                if content_type not in allowed_types:
+                    continue
+                content = source_path.read_bytes()
+                if not content or len(content) > max_file_size:
+                    continue
+                file_id = uuid.uuid5(
+                    uuid.NAMESPACE_URL, "distrilog-quality-legacy:" + filename
+                ).hex
+                pending_files.setdefault(file_id, {
+                    "id": file_id,
+                    "original_name": filename[:255],
+                    "content_type": content_type,
+                    "content": content,
+                    "uploaded_by": 1,
+                    "created_at": iso_now(),
+                })
+                revised[index] = "/api/quality/files/{}".format(file_id)
+                changed = True
+            if changed:
+                updated_paths[int(assignment["id"])] = revised
+
+        if pending_files:
+            store_quality_files(list(pending_files.values()))
+        for assignment_id, paths in updated_paths.items():
+            con.execute(
+                "UPDATE quality_assignments SET photo_paths=? WHERE id=?",
+                (to_json(paths), assignment_id),
+            )
+        if updated_paths:
+            con.commit()
+    except Exception as exc:
+        print("[qualidade] não foi possível migrar todas as evidências locais para o Supabase: {}".format(exc))
+        if con is not None:
+            try:
+                con.rollback()
+            except Exception:
+                pass
+    finally:
+        if con is not None:
+            con.close()
+
 
 def normalize_purchase_mode(value: Any) -> str:
     mode = str(value or "").strip().upper()
