@@ -13,7 +13,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import Response
 
-from positions_module import move_ten_percent_sample_into_balance, total_ten_percent_sample_in_balance, total_volume_only_allocated
+from positions_module import move_ten_percent_sample_into_balance, total_allocated, total_ten_percent_sample_in_balance, total_volume_only_allocated
 
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = Path(os.getenv("OUTLOG_DATA_DIR", str(BASE_DIR / "data"))).resolve() / "controle_logistica.db"
@@ -35,6 +35,7 @@ QUALITY_HISTORY_EVENT_TYPES = (
     "TEMPO_QUALIDADE",
     "QUALIDADE_CONFIGURADA",
     "INSPECAO_CONCLUIDA",
+    "INSPECAO_2_TRANSFERIDA_PROCESSAMENTO",
 )
 
 
@@ -1083,6 +1084,109 @@ def get_quality_evidence(file_id: str):
             "X-Content-Type-Options": "nosniff",
         },
     )
+
+
+@router.post("/cards/{card_id}/quality/transfer-inspection-2")
+async def transfer_inspection_2_to_processing(card_id: int, request: Request):
+    payload = await request.json()
+    user_id = int(payload.get("user_id") or 0)
+    con = db_connect()
+    try:
+        actor = require_role(con, user_id, QUALITY_ROLES)
+        card = con.execute(
+            """SELECT id,current_sector,status,receiving_type,source_snapshot_at
+               FROM cards WHERE id=?""",
+            (card_id,),
+        ).fetchone()
+        if not card:
+            raise HTTPException(404, "Card não encontrado.")
+
+        if card["current_sector"] != "QUALIDADE" or card["status"] not in {
+            "RETORNO_CONCLUIDO", "AGUARDANDO_INSPECAO"
+        }:
+            raise HTTPException(
+                409,
+                "A transferência direta está disponível somente para um retorno da Costura que ainda aguarda a Inspeção 2.",
+            )
+        if card["source_snapshot_at"]:
+            raise HTTPException(
+                409,
+                "A transferência integral não está disponível para um Card de referência parcial.",
+            )
+
+        receiving = con.execute(
+            """SELECT id,physical_status,volumes FROM receivings
+               WHERE card_id=? AND receiving_type='RETORNO'
+               ORDER BY id DESC LIMIT 1""",
+            (card_id,),
+        ).fetchone()
+        if not receiving or receiving["physical_status"] != "CONCLUIDO":
+            raise HTTPException(
+                409,
+                "O recebimento físico do retorno precisa estar concluído antes de transferir a responsabilidade.",
+            )
+        volumes = int(receiving["volumes"] or 0)
+        if volumes <= 0:
+            raise HTTPException(409, "O retorno precisa ter os volumes registrados no Recebimento.")
+        allocated_volumes = total_allocated("RM", card_id)
+        if allocated_volumes < volumes:
+            raise HTTPException(
+                409,
+                "Enderece todos os volumes retornados entre RM, QA e PR antes de transferir o Card ao Processamento.",
+            )
+
+        existing_inspection = con.execute(
+            "SELECT id FROM quality_inspections WHERE card_id=? LIMIT 1",
+            (card_id,),
+        ).fetchone()
+        if existing_inspection:
+            raise HTTPException(
+                409,
+                "Já existe uma inspeção registrada para este Card. A transferência direta só pode ocorrer antes de iniciar a Qualidade.",
+            )
+
+        now = iso_now()
+        cursor = con.execute(
+            """UPDATE cards
+               SET current_sector='PROCESSAMENTO',status='AGUARDANDO_PROCESSAMENTO',
+                   receiving_type='RETORNO',updated_at=?
+               WHERE id=? AND current_sector='QUALIDADE'
+                 AND status IN ('RETORNO_CONCLUIDO','AGUARDANDO_INSPECAO')""",
+            (now, card_id),
+        )
+        if cursor.rowcount != 1:
+            raise HTTPException(
+                409,
+                "O Card mudou de setor ou status durante a operação. Atualize e tente novamente.",
+            )
+
+        add_history(
+            con,
+            card_id,
+            "INSPECAO_2_TRANSFERIDA_PROCESSAMENTO",
+            "{} transferiu a responsabilidade da Inspeção 2 diretamente para Processamento antes do início de qualquer atividade na Qualidade.".format(actor["name"]),
+            user_id,
+        )
+        con.commit()
+        return {
+            "success": True,
+            "card_id": card_id,
+            "current_sector": "PROCESSAMENTO",
+            "status": "AGUARDANDO_PROCESSAMENTO",
+            "message": "Responsabilidade transferida para Processamento. Nenhuma inspeção foi iniciada na Qualidade.",
+        }
+    except HTTPException:
+        con.rollback()
+        raise
+    except Exception as exc:
+        con.rollback()
+        print("[qualidade] falha ao transferir Inspeção 2 do Card {} para Processamento: {}".format(card_id, exc))
+        raise HTTPException(
+            503,
+            "Não foi possível persistir a transferência no Supabase. O Card permanece sem alteração; tente novamente.",
+        ) from exc
+    finally:
+        con.close()
 
 
 @router.post("/cards/{card_id}/quality/inspections")
