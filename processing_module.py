@@ -762,14 +762,17 @@ async def processing_timer_action(worker_id: int, action: str, request: Request)
     verbs = {"start": "iniciou", "pause": "pausou", "resume": "retomou", "finish": "finalizou"}
     if action == "start":
         try:
-            from positions_module import release_card_allocations
-            rec10 = con.execute(
-                "SELECT ten_percent_actual,ten_percent_min FROM receivings WHERE card_id=? ORDER BY id DESC LIMIT 1",
-                (worker["card_id"],),
-            ).fetchone()
+            from positions_module import release_card_allocations, total_ten_percent_sample_in_balance
+            # Quando a Qualidade já integrou o bag ao saldo, não recrie um pseudo-endereço
+            # na QA. Preserve o comportamento anterior para fluxos legados sem essa migração.
             keep10 = 0
-            if rec10:
-                keep10 = int(rec10["ten_percent_actual"] if rec10["ten_percent_actual"] is not None else rec10["ten_percent_min"] or 0)
+            if total_ten_percent_sample_in_balance(worker["card_id"]) <= 0:
+                rec10 = con.execute(
+                    "SELECT ten_percent_actual,ten_percent_min FROM receivings WHERE card_id=? ORDER BY id DESC LIMIT 1",
+                    (worker["card_id"],),
+                ).fetchone()
+                if rec10:
+                    keep10 = int(rec10["ten_percent_actual"] if rec10["ten_percent_actual"] is not None else rec10["ten_percent_min"] or 0)
             if release_card_allocations(worker["card_id"], keep10) >= 0:
                 con.execute("UPDATE cards SET casulo_current=NULL WHERE id=?", (worker["card_id"],))
         except Exception as exc:

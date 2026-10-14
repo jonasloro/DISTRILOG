@@ -10,7 +10,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, FastAPI, HTTPException, Request
 
-from positions_module import total_volume_only_allocated
+from positions_module import move_ten_percent_sample_into_balance, total_ten_percent_sample_in_balance, total_volume_only_allocated
 
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = Path(os.getenv("OUTLOG_DATA_DIR", str(BASE_DIR / "data"))).resolve() / "controle_logistica.db"
@@ -294,6 +294,7 @@ def init_quality_db() -> None:
             development_separated INTEGER,
             development_pending INTEGER NOT NULL DEFAULT 0,
             source_subset INTEGER NOT NULL DEFAULT 0,
+            send_to_costura INTEGER,
             created_by INTEGER NOT NULL,
             completed_by INTEGER,
             created_at TEXT NOT NULL,
@@ -382,6 +383,8 @@ def init_quality_db() -> None:
         con.execute("ALTER TABLE quality_inspections ADD COLUMN source_subset INTEGER NOT NULL DEFAULT 0")
     if "source_receiving_id" not in inspection_columns:
         con.execute("ALTER TABLE quality_inspections ADD COLUMN source_receiving_id INTEGER REFERENCES receivings(id) ON DELETE SET NULL")
+    if "send_to_costura" not in inspection_columns:
+        con.execute("ALTER TABLE quality_inspections ADD COLUMN send_to_costura INTEGER")
     sample_columns = {row["name"] for row in con.execute("PRAGMA table_info(quality_sample_items)").fetchall()}
     if "sample_scope" not in sample_columns:
         con.execute("ALTER TABLE quality_sample_items ADD COLUMN sample_scope TEXT NOT NULL DEFAULT 'ITEM'")
@@ -762,8 +765,8 @@ def quality_card_data(con: sqlite3.Connection, card_id: int) -> Optional[dict[st
     validation_errors = inspection_validation(con, inspection["id"])
     previous_rows = con.execute(
         """
-        SELECT qi.id,qi.inspection_type,qi.status,qi.destination,qi.purchase_mode,qi.sample_target_total,
-               qi.development_pending,qi.created_at,qi.completed_at,u.name completed_by_name,
+        SELECT qi.id,qi.inspection_type,qi.status,qi.destination,qi.send_to_costura,qi.purchase_mode,qi.sample_target_total,
+               qi.source_subset,qi.development_pending,qi.created_at,qi.completed_at,u.name completed_by_name,
                COALESCE((SELECT SUM(a.approved_qty) FROM quality_assignments a
                          JOIN quality_workers qw ON qw.id=a.worker_id WHERE qw.inspection_id=qi.id),0) approved_total,
                COALESCE((SELECT SUM(a.rejected_qty) FROM quality_assignments a
@@ -810,6 +813,7 @@ async def create_inspection(card_id: int, request: Request):
     development_required_raw = payload.get("development_required")
     development_separated_raw = payload.get("development_separated")
     source_subset_requested = bool(payload.get("source_subset"))
+    send_to_costura_raw = payload.get("send_to_costura")
     requested_item_ids = sorted({int(value) for value in (payload.get("item_ids") or []) if str(value).isdigit() and int(value) > 0})
     if inspection_type not in (1, 2):
         raise HTTPException(400, "Selecione Inspeção 1 ou Inspeção 2.")
@@ -822,10 +826,26 @@ async def create_inspection(card_id: int, request: Request):
         development_separated = 1 if bool(development_separated_raw) else 0
     else:
         development_separated = None
-    if inspection_type == 1 and destination not in ("CD01", "CD02"):
-        raise HTTPException(400, "Na Inspeção 1, selecione o destino CD01 ou CD02.")
-    if inspection_type == 2:
+    send_to_costura: Optional[int] = None
+    if inspection_type == 1 and source_subset_requested:
+        if destination not in ("CD01", "CD02"):
+            raise HTTPException(400, "Defina o destino da Inspeção 1 por referência.")
+    elif inspection_type == 1:
+        if send_to_costura_raw is None or str(send_to_costura_raw).strip() == "":
+            raise HTTPException(400, "Responda obrigatoriamente: Vai para a Costura?")
+        normalized_costura = str(send_to_costura_raw).strip().lower()
+        if isinstance(send_to_costura_raw, bool):
+            send_to_costura = 1 if send_to_costura_raw else 0
+        elif normalized_costura in {"1", "true", "sim", "s"}:
+            send_to_costura = 1
+        elif normalized_costura in {"0", "false", "não", "nao", "n"}:
+            send_to_costura = 0
+        else:
+            raise HTTPException(400, "Selecione Sim ou Não em Vai para a Costura?")
+        destination = "CD01" if send_to_costura else None
+    else:
         destination = None
+        send_to_costura = 0
 
     con = db_connect()
     user = require_role(con, user_id, QUALITY_ROLES)
@@ -946,8 +966,8 @@ async def create_inspection(card_id: int, request: Request):
 
     cur = con.execute(
         """INSERT INTO quality_inspections(card_id,inspection_type,status,destination,sample_source,source_receiving_id,purchase_mode,
-           sample_target_total,development_required,development_separated,development_pending,source_subset,created_by,created_at)
-           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+           sample_target_total,development_required,development_separated,development_pending,source_subset,send_to_costura,created_by,created_at)
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (
             card_id,
             inspection_type,
@@ -961,6 +981,7 @@ async def create_inspection(card_id: int, request: Request):
             development_separated,
             1 if development_required and not development_separated else 0,
             1 if source_subset else 0,
+            send_to_costura,
             user_id,
             iso_now(),
         ),
@@ -1002,8 +1023,12 @@ async def create_inspection(card_id: int, request: Request):
         if purchase_mode == "GRADE"
         else f"amostra por quantidade geral para compra Saldo, total {target}"
     )
-    if inspection_type == 1:
-        inspection_context = f" com destino {destination}"
+    if inspection_type == 1 and source_subset:
+        inspection_context = " com destino definido por referência"
+    elif inspection_type == 1 and send_to_costura:
+        inspection_context = " com envio para Costura"
+    elif inspection_type == 1:
+        inspection_context = " com fluxo direto para Processamento"
     elif sample_source == "RECEBIMENTO":
         inspection_context = " como inspeção final, sem envio para Costura"
     else:
@@ -1673,10 +1698,13 @@ async def complete_inspection(inspection_id: int, request: Request):
     if inspection["status"] != "ABERTA":
         con.close()
         raise HTTPException(400, "A inspeção já foi concluída.")
-    # Também protege inspeções que já estavam abertas antes da regra obrigatória.
+    # Protege inspeções abertas antes da regra obrigatória e confirma que a
+    # amostra permanece fisicamente na QA até a conclusão.
+    should_merge_sample = False
     if not inspection["source_subset"]:
         card = con.execute("SELECT * FROM cards WHERE id=?", (inspection["card_id"],)).fetchone()
         if card and not card["source_snapshot_at"] and card["current_sector"] == "QUALIDADE":
+            should_merge_sample = True
             expected_receiving_type = "RETORNO" if inspection["sample_source"] == "RECEBIMENTO_RETORNO" else "NOVA"
             if inspection["source_receiving_id"]:
                 receiving = con.execute(
@@ -1701,7 +1729,8 @@ async def complete_inspection(inspection_id: int, request: Request):
                     raise HTTPException(400, "Informe os volumes recebidos para validar a amostra de 10%.")
                 sample_target = 1 if total_volumes > 0 else 0
                 sample_allocated = total_volume_only_allocated("QA", int(inspection["card_id"]))
-                if sample_allocated < sample_target:
+                sample_already_moved = total_ten_percent_sample_in_balance(int(inspection["card_id"]))
+                if sample_allocated < sample_target and sample_already_moved < sample_target:
                     con.close()
                     raise HTTPException(
                         400,
@@ -1720,6 +1749,14 @@ async def complete_inspection(inspection_id: int, request: Request):
             409,
             "Existem peças pendentes de separação para o setor Desenvolvimento. Confirme a conclusão com pendência.",
         )
+    merged_sample_location = None
+    if should_merge_sample:
+        try:
+            merged_sample_location = move_ten_percent_sample_into_balance(int(inspection["card_id"]))
+        except Exception:
+            con.close()
+            raise
+
     now = iso_now()
     con.execute(
         """UPDATE quality_inspections SET status='CONCLUIDA',completed_by=?,completed_at=?,development_pending=?
@@ -1783,29 +1820,36 @@ async def complete_inspection(inspection_id: int, request: Request):
                 (now, inspection["card_id"]),
             )
             route_text = f"{len(processing_ids)} referência(s) encaminhada(s) ao Processamento."
-    elif inspection["inspection_type"] == 1:
+    elif inspection["inspection_type"] == 1 and (
+        int(inspection["send_to_costura"] or 0) == 1
+        or (inspection["send_to_costura"] is None and inspection["destination"] == "CD01")
+    ):
         con.execute(
             """UPDATE cards SET current_sector='RECEBIMENTO',status='AGUARDANDO_DESPACHO_COSTURA',
-               quality_destination=?,receiving_type='NOVA',updated_at=? WHERE id=?""",
-            (inspection["destination"], now, inspection["card_id"]),
-        )
-        route_text = f"Card devolvido ao Recebimento para despacho com destino {inspection['destination']}."
-    else:
-        # A Inspeção 2 pode ocorrer logo após o primeiro Recebimento ou após o
-        # retorno da Costura. Preserve a origem atual do Card e encaminhe para
-        # Processamento sem marcar indevidamente toda Inspeção 2 como retorno.
-        con.execute(
-            """UPDATE cards SET current_sector='PROCESSAMENTO',status='AGUARDANDO_PROCESSAMENTO',
-               updated_at=? WHERE id=?""",
+               quality_destination='CD01',receiving_type='NOVA',updated_at=? WHERE id=?""",
             (now, inspection["card_id"]),
         )
-        route_text = "Card encaminhado ao Processamento sem necessidade de despacho para Costura."
+        route_text = "Card liberado para despacho à Costura. A amostra dos 10% foi integrada ao endereço do saldo."
+    else:
+        # Preserve receiving_type for Inspeção 2 after the Costura return;
+        # a normal first Inspection already carries NOVA at this point.
+        con.execute(
+            """UPDATE cards SET current_sector='PROCESSAMENTO',status='AGUARDANDO_PROCESSAMENTO',
+               quality_destination=NULL,updated_at=? WHERE id=?""",
+            (now, inspection["card_id"]),
+        )
+        route_text = "Card encaminhado diretamente ao Processamento, com a amostra dos 10% integrada ao endereço do saldo."
+    sample_move_text = (
+        f" Amostra dos 10% reunida automaticamente no endereço {merged_sample_location['address']} ({merged_sample_location['sector']})."
+        if merged_sample_location
+        else ""
+    )
     pending_text = " Inspeção concluída com pendência de separação para Desenvolvimento." if pending else ""
     add_history(
         con,
         inspection["card_id"],
         "INSPECAO_CONCLUIDA",
-        f"{actor['name']} concluiu a Inspeção {inspection['inspection_type']}. {route_text}{pending_text}",
+        f"{actor['name']} concluiu a Inspeção {inspection['inspection_type']}. {route_text}{sample_move_text}{pending_text}",
         user_id,
     )
     con.commit()
