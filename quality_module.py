@@ -144,9 +144,9 @@ def require_completed_receiving_sample(con: sqlite3.Connection, card_id: int, re
     can_reopen = (
         not existing_types
         and not has_any_receiving
-        card is not None
-        card["current_sector"] == "QUALIDADE"
-        card["status"] == expected_status
+        and card is not None
+        and card["current_sector"] == "QUALIDADE"
+        and card["status"] == expected_status
     )
     if can_reopen:
         quantities = con.execute(
