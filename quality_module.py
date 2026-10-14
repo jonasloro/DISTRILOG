@@ -52,6 +52,7 @@ class QualitySQLiteConnection(sqlite3.Connection):
                     getattr(self, "_quality_remote_card_snapshot", None),
                 )
             except Exception as exc:
+                print("[qualidade] falha ao persistir a operação no Supabase: {}".format(exc))
                 self.rollback()
                 raise HTTPException(
                     503,
