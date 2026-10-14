@@ -763,14 +763,10 @@ async def processing_timer_action(worker_id: int, action: str, request: Request)
     if action == "start":
         try:
             from positions_module import release_card_allocations
-            rec10 = con.execute(
-                "SELECT ten_percent_actual,ten_percent_min FROM receivings WHERE card_id=? ORDER BY id DESC LIMIT 1",
-                (worker["card_id"],),
-            ).fetchone()
-            keep10 = 0
-            if rec10:
-                keep10 = int(rec10["ten_percent_actual"] if rec10["ten_percent_actual"] is not None else rec10["ten_percent_min"] or 0)
-            if release_card_allocations(worker["card_id"], keep10) >= 0:
+            # A amostra dos 10% já foi integrada ao saldo pela conclusão da Qualidade.
+            # Ao iniciar o Processamento, libere o endereço do saldo inteiro sem recriar
+            # uma alocação separada na Qualidade.
+            if release_card_allocations(worker["card_id"], 0) >= 0:
                 con.execute("UPDATE cards SET casulo_current=NULL WHERE id=?", (worker["card_id"],))
         except Exception as exc:
             print(f"[aviso] não liberou endereço do card {worker['card_id']}: {exc}")
