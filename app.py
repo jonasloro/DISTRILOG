@@ -2138,8 +2138,10 @@ async def set_purchase_mode(card_id: int, request: Request):
         con.execute("UPDATE receivings SET ten_percent_min=? WHERE id=?", (minimum, rec["id"]))
     add_history(con, card_id, "TIPO_COMPRA_MANUAL",
                 f"{user['name']} informou manualmente o tipo da compra: {'Grade' if mode == 'GRADE' else 'Saldo'}.", user_id)
-    con.commit()
-    con.close()
+    persist_receiving_then_commit(
+        con, card_id,
+        "O tipo da compra e o mínimo dos 10% não foram confirmados no Supabase. Tente novamente."
+    )
     return {"ok": True, "purchase_mode": mode}
 
 @app.post("/api/cards/{card_id}/mark-arrived")
