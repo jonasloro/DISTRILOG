@@ -452,7 +452,14 @@ def sync_all_receiving_state_to_supabase(sqlite_con) -> None:
     with pg_connect() as con:
         with con.cursor() as cur:
             if receivings:
-                cur.executemany(receiving_sql, [_receiving_tuple(row) for row in receivings])
+                for receiving in receivings:
+                    cur.execute(receiving_sql, _receiving_tuple(receiving))
+                    if cur.rowcount != 1:
+                        raise RuntimeError(
+                            "Conflito de identidade ao sincronizar o registro de Recebimento {} do Card {}.".format(
+                                receiving["id"], receiving["card_id"]
+                            )
+                        )
                 for receiving_id in receiving_ids:
                     cur.execute(
                         "DELETE FROM outlog_receiving_operation_items WHERE receiving_id=%s",
@@ -465,7 +472,14 @@ def sync_all_receiving_state_to_supabase(sqlite_con) -> None:
                     [(int(row["receiving_id"]), int(row["item_id"])) for row in operation_items],
                 )
             if timer_events:
-                cur.executemany(timer_sql, [_timer_event_tuple(row) for row in timer_events])
+                for event in timer_events:
+                    cur.execute(timer_sql, _timer_event_tuple(event))
+                    if cur.rowcount != 1:
+                        raise RuntimeError(
+                            "Conflito de identidade no evento de cronômetro {} do Recebimento {}.".format(
+                                event["id"], event["receiving_id"]
+                            )
+                        )
         con.commit()
 
 
