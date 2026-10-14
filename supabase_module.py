@@ -471,9 +471,31 @@ def restore_receiving_state_from_supabase(
             else:
                 remote_operation_items = []
 
+            card_state_sql = """SELECT id,current_sector,status,receiving_type,purchase_mode,
+                                       quality_destination,updated_at FROM outlog_cards"""
+            card_state_params = None
+            if card_id is not None:
+                card_state_sql += " WHERE id=%s"
+                card_state_params = (int(card_id),)
+            cur.execute(card_state_sql, card_state_params)
+            remote_card_states = cur.fetchall()
+
     local_card_ids = {
         int(row["id"]) for row in sqlite_con.execute("SELECT id FROM cards").fetchall()
     }
+    for remote_card in remote_card_states:
+        local_card_id = int(remote_card["id"])
+        if local_card_id not in local_card_ids:
+            continue
+        sqlite_con.execute(
+            """UPDATE cards SET current_sector=?,status=?,receiving_type=?,purchase_mode=?,
+               quality_destination=?,updated_at=? WHERE id=?""",
+            (
+                remote_card["current_sector"], remote_card["status"], remote_card["receiving_type"],
+                remote_card["purchase_mode"], remote_card["quality_destination"],
+                remote_card["updated_at"], local_card_id,
+            ),
+        )
     tables = {
         row["name"]
         for row in sqlite_con.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
