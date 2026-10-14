@@ -294,6 +294,7 @@ def init_quality_db() -> None:
             development_separated INTEGER,
             development_pending INTEGER NOT NULL DEFAULT 0,
             source_subset INTEGER NOT NULL DEFAULT 0,
+            send_to_costura INTEGER,
             created_by INTEGER NOT NULL,
             completed_by INTEGER,
             created_at TEXT NOT NULL,
