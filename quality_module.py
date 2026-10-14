@@ -1130,7 +1130,10 @@ async def create_inspection(card_id: int, request: Request):
     # The exact 10% receiving record used below must also pass the QA allocation gate.
     is_costura_return = (
         str(card["receiving_type"] or "").upper() == "RETORNO"
-        or str(card["status"] or "").upper() == "AGUARDANDO_RECEBIMENTO_RETORNO"
+        or str(card["status"] or "").upper() in {
+            "AGUARDANDO_RECEBIMENTO_RETORNO",
+            "RETORNO_CONCLUIDO",
+        }
     )
     if not source_subset_requested and not card["source_snapshot_at"] and card["current_sector"] == "QUALIDADE":
         receiving_type_for_sample = "RETORNO" if is_costura_return else "NOVA"
@@ -1213,7 +1216,10 @@ async def create_inspection(card_id: int, request: Request):
         raise HTTPException(400, "Já existe uma inspeção aberta para este Card.")
     is_costura_return = (
         str(card["receiving_type"] or "").upper() == "RETORNO"
-        or str(card["status"] or "").upper() == "AGUARDANDO_RECEBIMENTO_RETORNO"
+        or str(card["status"] or "").upper() in {
+            "AGUARDANDO_RECEBIMENTO_RETORNO",
+            "RETORNO_CONCLUIDO",
+        }
     )
     expected_inspection_type = 2 if is_costura_return else 1
     if inspection_type != expected_inspection_type:
