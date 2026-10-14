@@ -1418,159 +1418,159 @@ def sync_quality_state_to_supabase(
                             raise RuntimeError(
                                 "A Qualidade foi alterada por outra sessão. Atualize a tela e tente novamente."
                             )
-        # Descobre os Cards afetados pelos registros de Qualidade alterados nesta transação.
-        touched_inspection_ids = set()
-        touched_card_ids = set()
-        changed_worker_ids = set()
-        completed_subset_ids = set()
-        for local_table in QUALITY_INSERT_ORDER:
-            spec = QUALITY_PERSISTENCE_TABLES[local_table]
-            columns = spec["columns"]
-            all_keys = set(old_by_table[local_table]) | set(current_by_table[local_table])
-            for row_key in all_keys:
-                old_row = old_by_table[local_table].get(row_key)
-                new_row = current_by_table[local_table].get(row_key)
-                if _quality_row_equal(old_row, new_row, columns):
-                    continue
-                row = new_row or old_row
-                if local_table == "quality_inspections":
-                    inspection_id = int(row["id"])
+            # Descobre os Cards afetados pelos registros de Qualidade alterados nesta transação.
+            touched_inspection_ids = set()
+            touched_card_ids = set()
+            changed_worker_ids = set()
+            completed_subset_ids = set()
+            for local_table in QUALITY_INSERT_ORDER:
+                spec = QUALITY_PERSISTENCE_TABLES[local_table]
+                columns = spec["columns"]
+                all_keys = set(old_by_table[local_table]) | set(current_by_table[local_table])
+                for row_key in all_keys:
+                    old_row = old_by_table[local_table].get(row_key)
+                    new_row = current_by_table[local_table].get(row_key)
+                    if _quality_row_equal(old_row, new_row, columns):
+                        continue
+                    row = new_row or old_row
+                    if local_table == "quality_inspections":
+                        inspection_id = int(row["id"])
+                        touched_inspection_ids.add(inspection_id)
+                        if row.get("card_id") is not None:
+                            touched_card_ids.add(int(row["card_id"]))
+                        if (
+                            new_row is not None and new_row.get("status") == "CONCLUIDA"
+                            and (old_row is None or old_row.get("status") != "CONCLUIDA")
+                        ):
+                            completed_subset_ids.add(inspection_id)
+                    elif local_table == "quality_audit_events":
+                        if row.get("card_id") is not None:
+                            touched_card_ids.add(int(row["card_id"]))
+                    elif local_table in {
+                        "quality_sample_items", "quality_inspection_items",
+                        "quality_item_routes", "quality_workers",
+                    }:
+                        touched_inspection_ids.add(int(row["inspection_id"]))
+                    elif local_table in {"quality_worker_timer_events", "quality_assignments"}:
+                        changed_worker_ids.add(int(row["worker_id"]))
+
+            worker_to_inspection = {}
+            for worker_row in (
+                list(old_by_table["quality_workers"].values())
+                + list(current_by_table["quality_workers"].values())
+            ):
+                worker_to_inspection[int(worker_row["id"])] = int(worker_row["inspection_id"])
+            for worker_id in changed_worker_ids:
+                inspection_id = worker_to_inspection.get(worker_id)
+                if inspection_id is not None:
                     touched_inspection_ids.add(inspection_id)
-                    if row.get("card_id") is not None:
-                        touched_card_ids.add(int(row["card_id"]))
-                    if (
-                        new_row is not None and new_row.get("status") == "CONCLUIDA"
-                        and (old_row is None or old_row.get("status") != "CONCLUIDA")
-                    ):
-                        completed_subset_ids.add(inspection_id)
-                elif local_table == "quality_audit_events":
-                    if row.get("card_id") is not None:
-                        touched_card_ids.add(int(row["card_id"]))
-                elif local_table in {
-                    "quality_sample_items", "quality_inspection_items",
-                    "quality_item_routes", "quality_workers",
-                }:
-                    touched_inspection_ids.add(int(row["inspection_id"]))
-                elif local_table in {"quality_worker_timer_events", "quality_assignments"}:
-                    changed_worker_ids.add(int(row["worker_id"]))
 
-        worker_to_inspection = {}
-        for worker_row in (
-            list(old_by_table["quality_workers"].values())
-            + list(current_by_table["quality_workers"].values())
-        ):
-            worker_to_inspection[int(worker_row["id"])] = int(worker_row["inspection_id"])
-        for worker_id in changed_worker_ids:
-            inspection_id = worker_to_inspection.get(worker_id)
-            if inspection_id is not None:
-                touched_inspection_ids.add(inspection_id)
+            for inspection_id in touched_inspection_ids:
+                inspection_key = (inspection_id,)
+                row = (
+                    current_by_table["quality_inspections"].get(inspection_key)
+                    or old_by_table["quality_inspections"].get(inspection_key)
+                )
+                if row and row.get("card_id") is not None:
+                    touched_card_ids.add(int(row["card_id"]))
 
-        for inspection_id in touched_inspection_ids:
-            inspection_key = (inspection_id,)
-            row = (
-                current_by_table["quality_inspections"].get(inspection_key)
-                or old_by_table["quality_inspections"].get(inspection_key)
-            )
-            if row and row.get("card_id") is not None:
-                touched_card_ids.add(int(row["card_id"]))
-
-        # Propaga apenas as referências que uma Inspeção de subset concluiu.
-        items_to_sync_by_card = {}
-        for inspection_id in completed_subset_ids:
-            inspection = current_by_table["quality_inspections"].get((inspection_id,))
-            if not inspection or not bool(inspection.get("source_subset")):
-                continue
-            card_id = int(inspection["card_id"])
-            for link in current_by_table["quality_inspection_items"].values():
-                if int(link["inspection_id"]) == inspection_id:
-                    items_to_sync_by_card.setdefault(card_id, set()).add(int(link["item_id"]))
-
-        # Nunca sobrescreve o estado do Card usando uma cópia local possivelmente velha.
-        # Cada conexão de Qualidade carrega previamente o estado remoto e usa compare-and-set.
-        if previous_card_snapshot is not None:
-            state_columns = (
-                "current_sector", "status", "receiving_type",
-                "purchase_mode", "quality_destination", "updated_at",
-            )
-            for card_id in sorted(touched_card_ids):
-                card = sqlite_con.execute(
-                    "SELECT * FROM cards WHERE id=?", (card_id,)
-                ).fetchone()
-                if not card:
+            # Propaga apenas as referências que uma Inspeção de subset concluiu.
+            items_to_sync_by_card = {}
+            for inspection_id in completed_subset_ids:
+                inspection = current_by_table["quality_inspections"].get((inspection_id,))
+                if not inspection or not bool(inspection.get("source_subset")):
                     continue
-                local_state = {column: card[column] for column in state_columns}
-                baseline = previous_card_snapshot.get(card_id)
-                if baseline is None:
-                    raise RuntimeError(
-                        "O Card {} não possui um estado remoto confiável no Supabase; atualize a base do Card antes de salvar a Qualidade.".format(card_id)
-                    )
-                changed_columns = [
-                    column for column in state_columns
-                    if local_state[column] != baseline.get(column)
-                ]
-                if changed_columns:
-                    set_sql = ", ".join("{}=%s".format(column) for column in changed_columns)
-                    baseline_where = " AND ".join(
-                        "{} IS NOT DISTINCT FROM %s".format(column)
-                        for column in state_columns
-                    )
-                    cur.execute(
-                        "UPDATE outlog_cards SET {} WHERE id=%s AND purchase_id=%s AND {}".format(
-                            set_sql, baseline_where
-                        ),
-                        (
-                            *(local_state[column] for column in changed_columns),
-                            card_id, card["purchase_id"],
-                            *(baseline.get(column) for column in state_columns),
-                        ),
-                    )
-                    if cur.rowcount == 0:
-                        cur.execute(
-                            """SELECT purchase_id,current_sector,status,receiving_type,
-                                      purchase_mode,quality_destination,updated_at
-                               FROM outlog_cards WHERE id=%s""",
-                            (card_id,),
-                        )
-                        live = cur.fetchone()
-                        same_state = bool(live) and str(live["purchase_id"]) == str(card["purchase_id"]) and all(
-                            live[column] == local_state[column] for column in state_columns
-                        )
-                        if not same_state:
-                            raise RuntimeError(
-                                "O estado do Card {} mudou em outra operação durante a Qualidade. Atualize e tente novamente.".format(card_id)
-                            )
-                if card_id in previous_card_snapshot:
-                    previous_card_snapshot[card_id].update(local_state)
+                card_id = int(inspection["card_id"])
+                for link in current_by_table["quality_inspection_items"].values():
+                    if int(link["inspection_id"]) == inspection_id:
+                        items_to_sync_by_card.setdefault(card_id, set()).add(int(link["item_id"]))
 
-            if items_to_sync_by_card:
-                item_columns_sql = ",".join(ITEM_COLUMNS)
-                item_marks = ",".join(["%s"] * len(ITEM_COLUMNS))
-                item_updates = ", ".join(
-                    "{}=EXCLUDED.{}".format(column, column)
-                    for column in ITEM_COLUMNS if column not in {"id", "card_id", "source_key"}
+            # Nunca sobrescreve o estado do Card usando uma cópia local possivelmente velha.
+            # Cada conexão de Qualidade carrega previamente o estado remoto e usa compare-and-set.
+            if previous_card_snapshot is not None:
+                state_columns = (
+                    "current_sector", "status", "receiving_type",
+                    "purchase_mode", "quality_destination", "updated_at",
                 )
-                item_sql = (
-                    "INSERT INTO outlog_items ({}) VALUES ({}) "
-                    "ON CONFLICT (id) DO UPDATE SET {}".format(
-                        item_columns_sql, item_marks, item_updates
+                for card_id in sorted(touched_card_ids):
+                    card = sqlite_con.execute(
+                        "SELECT * FROM cards WHERE id=?", (card_id,)
+                    ).fetchone()
+                    if not card:
+                        continue
+                    local_state = {column: card[column] for column in state_columns}
+                    baseline = previous_card_snapshot.get(card_id)
+                    if baseline is None:
+                        raise RuntimeError(
+                            "O Card {} não possui um estado remoto confiável no Supabase; atualize a base do Card antes de salvar a Qualidade.".format(card_id)
+                        )
+                    changed_columns = [
+                        column for column in state_columns
+                        if local_state[column] != baseline.get(column)
+                    ]
+                    if changed_columns:
+                        set_sql = ", ".join("{}=%s".format(column) for column in changed_columns)
+                        baseline_where = " AND ".join(
+                            "{} IS NOT DISTINCT FROM %s".format(column)
+                            for column in state_columns
+                        )
+                        cur.execute(
+                            "UPDATE outlog_cards SET {} WHERE id=%s AND purchase_id=%s AND {}".format(
+                                set_sql, baseline_where
+                            ),
+                            (
+                                *(local_state[column] for column in changed_columns),
+                                card_id, card["purchase_id"],
+                                *(baseline.get(column) for column in state_columns),
+                            ),
+                        )
+                        if cur.rowcount == 0:
+                            cur.execute(
+                                """SELECT purchase_id,current_sector,status,receiving_type,
+                                          purchase_mode,quality_destination,updated_at
+                                   FROM outlog_cards WHERE id=%s""",
+                                (card_id,),
+                            )
+                            live = cur.fetchone()
+                            same_state = bool(live) and str(live["purchase_id"]) == str(card["purchase_id"]) and all(
+                                live[column] == local_state[column] for column in state_columns
+                            )
+                            if not same_state:
+                                raise RuntimeError(
+                                    "O estado do Card {} mudou em outra operação durante a Qualidade. Atualize e tente novamente.".format(card_id)
+                                )
+                    if card_id in previous_card_snapshot:
+                        previous_card_snapshot[card_id].update(local_state)
+
+                if items_to_sync_by_card:
+                    item_columns_sql = ",".join(ITEM_COLUMNS)
+                    item_marks = ",".join(["%s"] * len(ITEM_COLUMNS))
+                    item_updates = ", ".join(
+                        "{}=EXCLUDED.{}".format(column, column)
+                        for column in ITEM_COLUMNS if column not in {"id", "card_id", "source_key"}
                     )
-                    + " WHERE outlog_items.card_id=EXCLUDED.card_id "
-                    "AND outlog_items.source_key=EXCLUDED.source_key"
-                )
-                for card_id, item_ids in items_to_sync_by_card.items():
-                    for item_id in sorted(item_ids):
-                        item = sqlite_con.execute(
-                            "SELECT * FROM items WHERE id=? AND card_id=?", (item_id, card_id)
-                        ).fetchone()
-                        if not item:
-                            raise RuntimeError(
-                                "A referência {} da Inspeção concluída não existe mais no Card {}.".format(item_id, card_id)
-                            )
-                        cur.execute(item_sql, _item_tuple(item))
-                        if cur.rowcount != 1:
-                            raise RuntimeError(
-                                "Não foi possível persistir a referência {} do Card {} no Supabase.".format(item_id, card_id)
-                            )
+                    item_sql = (
+                        "INSERT INTO outlog_items ({}) VALUES ({}) "
+                        "ON CONFLICT (id) DO UPDATE SET {}".format(
+                            item_columns_sql, item_marks, item_updates
+                        )
+                        + " WHERE outlog_items.card_id=EXCLUDED.card_id "
+                        "AND outlog_items.source_key=EXCLUDED.source_key"
+                    )
+                    for card_id, item_ids in items_to_sync_by_card.items():
+                        for item_id in sorted(item_ids):
+                            item = sqlite_con.execute(
+                                "SELECT * FROM items WHERE id=? AND card_id=?", (item_id, card_id)
+                            ).fetchone()
+                            if not item:
+                                raise RuntimeError(
+                                    "A referência {} da Inspeção concluída não existe mais no Card {}.".format(item_id, card_id)
+                                )
+                            cur.execute(item_sql, _item_tuple(item))
+                            if cur.rowcount != 1:
+                                raise RuntimeError(
+                                    "Não foi possível persistir a referência {} do Card {} no Supabase.".format(item_id, card_id)
+                                )
 
         con.commit()
 
