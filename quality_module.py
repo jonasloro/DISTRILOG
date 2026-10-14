@@ -515,7 +515,7 @@ def migrate_legacy_quality_evidence() -> None:
 
         con = db_connect()
         assignments = con.execute(
-            """SELECT id,photo_paths FROM quality_assignments
+            """SELECT id,photo_paths,assigned_by FROM quality_assignments
                WHERE photo_paths LIKE '%/uploads/%'"""
         ).fetchall()
         pending_files: dict[str, dict] = {}
@@ -549,7 +549,7 @@ def migrate_legacy_quality_evidence() -> None:
                     "original_name": filename[:255],
                     "content_type": content_type,
                     "content": content,
-                    "uploaded_by": 1,
+                    "uploaded_by": int(assignment["assigned_by"] or 0),
                     "created_at": iso_now(),
                 })
                 revised[index] = "/api/quality/files/{}".format(file_id)
