@@ -1513,7 +1513,7 @@ function qualityAssignmentResultsTable(worker, canEdit, canManage) {
         <td>
           <div class="quality-result-actions">
             ${photos.map((p,i)=>`<a class="photo-link" target="_blank" href="${p}">Evidência ${i+1}</a>`).join("")}
-            ${canEdit?`<label class="secondary small-btn quality-evidence-upload">+ Foto<input id="qaFiles_${a.id}" type="file" multiple hidden onchange="uploadQualityAssignmentPhotos(${a.id})"></label>`:""}
+            ${canEdit?`<label class="secondary small-btn quality-evidence-upload">+ Foto<input id="qaFiles_${a.id}" type="file" accept="image/jpeg,image/png,image/webp,image/gif,image/bmp" multiple hidden onchange="uploadQualityAssignmentPhotos(${a.id})"></label>`:""}
             ${canManage && worker.status==="NAO_INICIADA"?`<button class="danger small-btn" onclick="releaseQualityAssignment(${a.id})">Devolver</button>`:""}
             ${canManage && Number(a.inspected_qty||0)===0?`<details class="quality-manage-details"><summary>Transferir</summary><select id="qaTransferTo_${a.id}"><option value="">Inspetor...</option>${qualityInspectorOptions()}</select><input id="qaTransferReason_${a.id}" placeholder="Motivo"><button class="warning small-btn" onclick="transferQualityAssignment(${a.id})">Transferir</button></details>`:""}
           </div>
@@ -1593,7 +1593,8 @@ async function uploadQualityAssignmentPhotos(id) {
     const files = Array.from($(`qaFiles_${id}`).files||[]);
     if (!files.length) return;
     const form=new FormData(); files.forEach((f)=>form.append("files",f));
-    const uploaded=await api("/api/uploads",{method:"POST",body:form});
+    form.append("user_id", String(currentUser.id));
+    const uploaded=await api("/api/quality/uploads",{method:"POST",body:form});
     const worker=cardData.quality.workers.find((w)=>w.assignments.some((a)=>a.id===id));
     const assignment=worker.assignments.find((a)=>a.id===id);
     await saveQualityResult(id,[...(assignment.photo_paths||[]),...uploaded.paths]);
