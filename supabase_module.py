@@ -1113,6 +1113,11 @@ def restore_quality_state_from_supabase(sqlite_con) -> dict[str, list[dict]]:
             )
             for row in snapshot.get(local_table, []):
                 sqlite_con.execute(statement, tuple(row.get(column) for column in columns))
+        # End the restore transaction before re-enabling SQLite foreign-key checks.
+        sqlite_con.commit()
+    except Exception:
+        sqlite_con.rollback()
+        raise
     finally:
         sqlite_con.execute("PRAGMA foreign_keys=ON")
     return snapshot
