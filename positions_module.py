@@ -992,6 +992,35 @@ def _release_card_allocations_local(card_id: int, keep_quality_qty: int = 0) -> 
 
 
 
+
+def total_ten_percent_sample_in_balance(card_id: int) -> int:
+    """Quantity of already merged sample bags in stock positions (idempotent completion guard)."""
+    if not os.getenv("SUPABASE_DATABASE_URL"):
+        con = _local_db_connect()
+        try:
+            row = con.execute(
+                """SELECT COALESCE(SUM(quantidade),0) total FROM card_allocations
+                   WHERE card_id=? AND setor IN ('RM','PR') AND item_id IS NULL
+                     AND allocation_purpose='TEN_PERCENT_SAMPLE'""",
+                (card_id,),
+            ).fetchone()
+            return int(row["total"] or 0)
+        finally:
+            con.close()
+    try:
+        with pg_connect() as con:
+            with con.cursor() as cur:
+                cur.execute(
+                    """SELECT COALESCE(SUM(quantidade),0) total FROM card_allocations
+                       WHERE card_id=%s AND setor = ANY(%s) AND item_id IS NULL
+                         AND allocation_purpose='TEN_PERCENT_SAMPLE'""",
+                    (card_id, ["RM", "PR"]),
+                )
+                return int(cur.fetchone()["total"] or 0)
+    except RuntimeError:
+        return 0
+
+
 def _move_ten_percent_sample_into_balance_local(card_id: int) -> dict[str, Any]:
     con = _local_db_connect()
     try:
