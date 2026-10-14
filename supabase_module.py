@@ -732,6 +732,17 @@ def sync_card_items_to_supabase(sqlite_con, card_id: int) -> None:
         "SELECT * FROM items WHERE card_id=? ORDER BY id",
         (card_id,),
     ).fetchall()
+    receiving_ids = [
+        int(row["id"])
+        for row in sqlite_con.execute("SELECT id FROM receivings WHERE card_id=? ORDER BY id", (card_id,)).fetchall()
+    ]
+    operation_items = []
+    if receiving_ids:
+        marks = ",".join("?" for _ in receiving_ids)
+        operation_items = sqlite_con.execute(
+            "SELECT receiving_id,item_id FROM receiving_operation_items WHERE receiving_id IN ({}) ORDER BY receiving_id,item_id".format(marks),
+            receiving_ids,
+        ).fetchall()
     columns_sql = ",".join(ITEM_COLUMNS)
     placeholders = ",".join(["%s"] * len(ITEM_COLUMNS))
     updates = ", ".join(f"{column}=EXCLUDED.{column}" for column in ITEM_COLUMNS if column != "id")
@@ -744,6 +755,17 @@ def sync_card_items_to_supabase(sqlite_con, card_id: int) -> None:
             cur.execute("DELETE FROM outlog_items WHERE card_id=%s", (card_id,))
             if items:
                 cur.executemany(item_sql, [_item_tuple(row) for row in items])
+            if receiving_ids:
+                cur.execute(
+                    "DELETE FROM outlog_receiving_operation_items WHERE receiving_id = ANY(%s)",
+                    (receiving_ids,),
+                )
+            if operation_items:
+                cur.executemany(
+                    """INSERT INTO outlog_receiving_operation_items(receiving_id,item_id)
+                       VALUES(%s,%s) ON CONFLICT(receiving_id,item_id) DO NOTHING""",
+                    [(int(row["receiving_id"]), int(row["item_id"])) for row in operation_items],
+                )
         con.commit()
 
 
