@@ -1942,8 +1942,10 @@ async def save_receiving(receiving_id: int, request: Request):
         minimum = max(math.ceil(int(received_qty) * 0.10), item_count if card["purchase_mode"] == "GRADE" else 0)
         con.execute("UPDATE receivings SET ten_percent_min=? WHERE id=?", (minimum, receiving_id))
     add_history(con, rec["card_id"], "RECEBIMENTO_SALVO", "Dados do Recebimento atualizados.", user_id)
-    con.commit()
-    con.close()
+    persist_receiving_then_commit(
+        con, int(rec["card_id"]),
+        "Os dados do Recebimento não foram confirmados no Supabase. Nada foi considerado salvo; tente novamente."
+    )
     return {"ok": True}
 
 
@@ -1990,8 +1992,10 @@ async def complete_physical(receiving_id: int, request: Request):
     )
     add_history(con, rec["card_id"], "RECEBIMENTO_FISICO_CONCLUIDO", f"{user['name']} concluiu o recebimento físico.", user_id)
     next_status = update_new_receiving_flow(con, receiving_id, user_id)
-    con.commit()
-    con.close()
+    persist_receiving_then_commit(
+        con, int(rec["card_id"]),
+        "O recebimento físico não foi confirmado no Supabase. A conclusão não foi registrada; tente novamente."
+    )
     return {"ok": True, "next_status": next_status}
 
 
@@ -2042,8 +2046,10 @@ async def sample_timer(receiving_id: int, action: str, request: Request):
     next_status = None
     if action == "finish" and rec["receiving_type"] != "COSTURA":
         next_status = update_new_receiving_flow(con, receiving_id, user_id)
-    con.commit()
-    con.close()
+    persist_receiving_then_commit(
+        con, int(rec["card_id"]),
+        "A etapa dos 10% não foi confirmada no Supabase. O cronômetro não foi considerado salvo; tente novamente."
+    )
     return summary | {"next_status": next_status}
 @app.delete("/api/cards/{card_id}")
 async def delete_card(card_id: int, request: Request):
@@ -2134,8 +2140,10 @@ async def mark_arrived(card_id: int, request: Request):
     add_history(con, card_id, "CHEGADA_CONFIRMADA",
                 f"{user['name']} marcou a mercadoria como recebida (chegou ao CD). Recebimento físico e separação dos 10% liberados.",
                 user_id)
-    con.commit()
-    con.close()
+    persist_receiving_then_commit(
+        con, card_id,
+        "A chegada e o controle de Recebimento não foram confirmados no Supabase. Tente novamente."
+    )
     return {"ok": True, "status": "AGUARDANDO_RECEBIMENTO"}
 
 
@@ -2260,8 +2268,10 @@ async def complete_dispatch(card_id: int, request: Request):
         (next_sector, next_status, "COSTURA" if destination == "CD01" else card["receiving_type"], iso_now(), card_id),
     )
     add_history(con, card_id, "DESPACHO_COSTURA", description, user_id)
-    con.commit()
-    con.close()
+    persist_receiving_then_commit(
+        con, card_id,
+        "O despacho não foi confirmado no armazenamento persistente. Tente novamente."
+    )
     return {"ok": True, "next_status": next_status, "item_ids": item_ids}
 
 
@@ -2293,8 +2303,10 @@ async def simulate_quality_return(card_id: int, request: Request):
         f"Ferramenta de teste: Inspeção 1 concluída com destino {destination}. Card devolvido ao Recebimento para despacho.",
         user_id,
     )
-    con.commit()
-    con.close()
+    persist_receiving_then_commit(
+        con, card_id,
+        "O retorno não foi confirmado no armazenamento persistente. Tente novamente."
+    )
     return {"ok": True}
 
 
