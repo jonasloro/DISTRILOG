@@ -1005,16 +1005,22 @@ async function renderQualityTab() {
   }
   const q = cardData.quality;
   const importedQualityItems = (cardData.items||[]).filter((item)=>["QUALIDADE","QUALIDADE_RETRABALHO","QUALIDADE_REJEITADO"].includes(item.source_stage));
-  if (cardData.source_snapshot_at && (!q || q.status === "CONCLUIDA") && cardData.current_sector !== "QUALIDADE") {
-    if (importedQualityItems.length && canOperateQuality()) {
-      window.qualitySourceSubset = true;
-      $("cardTab").innerHTML = qualitySetupHtml(null, true);
-      toggleQualitySetupFields();
+  if (cardData.source_snapshot_at && (!q || q.status === "CONCLUIDA")) {
+    if (importedQualityItems.length) {
+      if (canOperateQuality()) {
+        window.qualitySourceSubset = true;
+        $("cardTab").innerHTML = qualitySetupHtml(null, true);
+        toggleQualitySetupFields();
+      } else {
+        renderImportedSectorSnapshot("tabQualityBtn",["QUALIDADE","QUALIDADE_RETRABALHO","QUALIDADE_REJEITADO"],"Itens localizados na Qualidade");
+        $("cardTab").insertAdjacentHTML("afterbegin",'<div class="notice warn">Entre com um perfil da Qualidade, Supervisor ou Administrador para assumir estes itens e iniciar a inspeção.</div>');
+      }
       return;
     }
-    renderImportedSectorSnapshot("tabQualityBtn",["QUALIDADE","QUALIDADE_RETRABALHO","QUALIDADE_REJEITADO"],"Itens localizados na Qualidade");
-    if (importedQualityItems.length) $("cardTab").insertAdjacentHTML("afterbegin",'<div class="notice warn">Entre com um perfil da Qualidade, Supervisor ou Administrador para assumir estes itens e iniciar a inspeção.</div>');
-    return;
+    if (cardData.current_sector !== "QUALIDADE") {
+      renderImportedSectorSnapshot("tabQualityBtn",["QUALIDADE","QUALIDADE_RETRABALHO","QUALIDADE_REJEITADO"],"Itens localizados na Qualidade");
+      return;
+    }
   }
   window.qualitySourceSubset = false;
   const needsNewInspection = cardData.current_sector === "QUALIDADE" && (!q || q.status === "CONCLUIDA");

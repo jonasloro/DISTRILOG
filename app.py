@@ -1246,10 +1246,15 @@ def update_new_receiving_flow(con: sqlite3.Connection, receiving_id: int, user_i
                         WHERE id IN ({marks})""",
                     mapped_ids,
                 )
-            status = "ORIGEM_MISTO"
+            if is_return:
+                status = "AGUARDANDO_INSPECAO"
+                next_sector = "QUALIDADE"
+            else:
+                status = "ORIGEM_MISTO"
+                next_sector = "RECEBIMENTO"
             con.execute(
-                "UPDATE cards SET current_sector='RECEBIMENTO',status=?,updated_at=? WHERE id=?",
-                (status, iso_now(), rec["card_id"]),
+                "UPDATE cards SET current_sector=?,status=?,updated_at=? WHERE id=?",
+                (next_sector, status, iso_now(), rec["card_id"]),
             )
             con.execute("UPDATE receivings SET closed_at=? WHERE id=?", (iso_now(), receiving_id))
             if rec["receiving_type"] == "RETORNO":
@@ -1294,6 +1299,76 @@ def update_new_receiving_flow(con: sqlite3.Connection, receiving_id: int, user_i
     return status
 
 
+def reconcile_completed_subset_returns(con: sqlite3.Connection) -> int:
+    """Repair completed return operations stranded in Receiving by the legacy mixed-source rule."""
+    candidates = con.execute(
+        """SELECT c.id, r.id receiving_id
+           FROM cards c
+           JOIN receivings r ON r.card_id=c.id
+           WHERE c.current_sector='RECEBIMENTO'
+             AND c.status='ORIGEM_MISTO'
+             AND r.receiving_type='RETORNO'
+             AND r.source_subset=1
+             AND r.physical_status='CONCLUIDO'
+             AND r.ten_percent_status='CONCLUIDA'
+             AND r.closed_at IS NOT NULL
+             AND r.id=(
+                 SELECT MAX(latest.id)
+                 FROM receivings latest
+                 WHERE latest.card_id=c.id AND latest.receiving_type='RETORNO'
+             )
+             AND EXISTS (
+                 SELECT 1
+                 FROM receiving_operation_items roi
+                 JOIN items i ON i.id=roi.item_id
+                 WHERE roi.receiving_id=r.id AND i.card_id=c.id
+             )
+             AND NOT EXISTS (
+                 SELECT 1
+                 FROM quality_inspections qi
+                 WHERE qi.card_id=c.id AND qi.inspection_type=2
+             )
+           ORDER BY c.id"""
+    ).fetchall()
+    repaired = 0
+    for candidate in candidates:
+        card_id = int(candidate["id"])
+        receiving_id = int(candidate["receiving_id"])
+        item_ids = [
+            int(row["item_id"])
+            for row in con.execute(
+                """SELECT roi.item_id
+                   FROM receiving_operation_items roi
+                   JOIN items i ON i.id=roi.item_id
+                   WHERE roi.receiving_id=? AND i.card_id=?""",
+                (receiving_id, card_id),
+            ).fetchall()
+        ]
+        if not item_ids:
+            continue
+        placeholders = ",".join("?" for _ in item_ids)
+        con.execute(
+            f"""UPDATE items
+                SET source_stage='QUALIDADE',source_status_quality='Pendente'
+                WHERE id IN ({placeholders})""",
+            item_ids,
+        )
+        con.execute(
+            """UPDATE cards
+               SET current_sector='QUALIDADE',status='AGUARDANDO_INSPECAO',updated_at=?
+               WHERE id=?""",
+            (iso_now(), card_id),
+        )
+        add_history(
+            con,
+            card_id,
+            "RECEBIMENTO_RETORNO_RECONCILIADO",
+            "Correção automática: o recebimento do retorno da Costura estava concluído, mas o Card permaneceu no Recebimento. Encaminhado à Qualidade para inspeção.",
+        )
+        repaired += 1
+    return repaired
+
+
 @app.on_event("startup")
 def startup() -> None:
     init_db()
@@ -1324,6 +1399,25 @@ def startup() -> None:
     init_positions_db()
     init_collab_db()
     init_unified_db()
+
+    # Corrige Cards que já concluíram o retorno, mas ficaram presos na fila antiga.
+    # Executa após a criação das tabelas da Qualidade e sincroniza primeiro no Supabase.
+    try:
+        con = db_connect()
+        repaired_returns = reconcile_completed_subset_returns(con)
+        if repaired_returns:
+            sync_all_cards_to_supabase(con, include_items=True)
+            con.commit()
+            print(f"[correção] {repaired_returns} retorno(s) concluído(s) encaminhado(s) à Qualidade.")
+        con.close()
+    except Exception as e:
+        if "con" in locals():
+            try:
+                con.rollback()
+                con.close()
+            except Exception:
+                pass
+        print(f"[aviso] não consegui reconciliar retornos concluídos no startup: {e}")
 
     # Popula os 16 usuários padrão no Supabase (só na primeira vez — se já
     # existirem lá, não faz nada). Se o Supabase ainda não estiver
@@ -1717,7 +1811,7 @@ def dashboard():
     ).fetchall()
     totals = {
         "cards": con.execute("SELECT COUNT(*) n FROM cards").fetchone()["n"],
-        "receiving": con.execute("SELECT COUNT(*) n FROM cards WHERE current_sector='RECEBIMENTO' OR source_snapshot_at IS NOT NULL").fetchone()["n"],
+        "receiving": con.execute("SELECT COUNT(*) n FROM cards WHERE current_sector='RECEBIMENTO'").fetchone()["n"],
         "pending_10": counts.get("RECEBIMENTO_FISICO_CONCLUIDO_10_PENDENTE", 0),
         "pending_physical": counts.get("SEPARACAO_10_CONCLUIDA_RECEBIMENTO_PENDENTE", 0),
         "awaiting_dispatch": counts.get("AGUARDANDO_DESPACHO_COSTURA", 0),
@@ -1740,9 +1834,7 @@ def dashboard():
         ).fetchone()
         return int(row["total"] or 0)
 
-    totals["receiving_qty"] = sum_expected(
-        "c.current_sector='RECEBIMENTO' OR c.source_snapshot_at IS NOT NULL"
-    )
+    totals["receiving_qty"] = sum_expected("c.current_sector='RECEBIMENTO'")
     totals["quality_qty"] = sum_expected(
         "c.current_sector='QUALIDADE' OR EXISTS (SELECT 1 FROM items si WHERE si.card_id=c.id "
         "AND si.source_stage IN ('QUALIDADE','QUALIDADE_RETRABALHO','QUALIDADE_REJEITADO'))"
@@ -1783,7 +1875,7 @@ def list_cards(scope: str = "receiving", search: str = ""):
              FROM cards c LEFT JOIN items i ON i.card_id=c.id WHERE 1=1"""
     params: list[Any] = []
     if scope == "receiving":
-        sql += " AND (c.current_sector='RECEBIMENTO' OR c.source_snapshot_at IS NOT NULL)"
+        sql += " AND c.current_sector='RECEBIMENTO'"
     elif scope == "quality":
         sql += " AND (c.current_sector='QUALIDADE' OR EXISTS (SELECT 1 FROM items si WHERE si.card_id=c.id AND si.source_stage IN ('QUALIDADE','QUALIDADE_RETRABALHO','QUALIDADE_REJEITADO')))"
     elif scope == "processing":
