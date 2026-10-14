@@ -80,8 +80,10 @@ def db_connect(persist: bool = True) -> sqlite3.Connection:
                 restore_quality_state_from_supabase,
             )
 
-            con._quality_remote_card_snapshot = restore_card_state_for_quality(con)
+            # Restore the Quality tables first, while SQLite foreign-key mode can be
+            # safely toggled by the restore routine; then refresh the live Card routing fields.
             con._quality_remote_snapshot = restore_quality_state_from_supabase(con)
+            con._quality_remote_card_snapshot = restore_card_state_for_quality(con)
             con.commit()
             con._quality_persistence_enabled = True
         except HTTPException:
