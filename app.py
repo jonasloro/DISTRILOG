@@ -201,6 +201,21 @@ def persist_receiving_then_commit(
     con.close()
 
 
+def refresh_receiving_card_state(con: sqlite3.Connection, card_id: int) -> None:
+    """Refresh the Card's authoritative workflow state from Supabase before a sector action."""
+    try:
+        restore_receiving_state_from_supabase(con, card_id=int(card_id))
+        con.commit()
+    except Exception as exc:
+        con.rollback()
+        con.close()
+        print("[erro] falha ao atualizar o estado do Card {} no Supabase: {}".format(card_id, exc))
+        raise HTTPException(
+            503,
+            "Não foi possível atualizar o estado persistido do Card no Supabase. A operação não foi executada; tente novamente.",
+        ) from exc
+
+
 def refresh_receiving_operation(con: sqlite3.Connection, receiving_id: int) -> sqlite3.Row:
     """Refresh one Receiving operation from Supabase before reading or mutating it."""
     rec = con.execute(
