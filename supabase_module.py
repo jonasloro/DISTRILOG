@@ -926,3 +926,307 @@ def bootstrap_card_persistence(sqlite_con) -> dict:
     return {"mode": "restored", "cards": len(cards), "items": len(items), "receivings": receiving_count}
 
 
+# Persistência da Qualidade: Supabase é a fonte de verdade; SQLite é apenas cache
+# de compatibilidade para as consultas e transações legadas do módulo.
+QUALITY_PERSISTENCE_TABLES = {
+    "quality_inspections": {
+        "remote": "outlog_quality_inspections",
+        "columns": [
+            "id", "card_id", "inspection_type", "status", "destination", "sample_source",
+            "source_receiving_id", "purchase_mode", "sample_target_total", "development_required",
+            "development_separated", "development_pending", "source_subset", "send_to_costura",
+            "created_by", "completed_by", "created_at", "completed_at",
+        ],
+        "pk": ["id"],
+    },
+    "quality_sample_items": {
+        "remote": "outlog_quality_sample_items",
+        "columns": ["id", "inspection_id", "item_id", "sample_qty", "sample_scope"],
+        "pk": ["id"],
+    },
+    "quality_inspection_items": {
+        "remote": "outlog_quality_inspection_items",
+        "columns": ["inspection_id", "item_id"],
+        "pk": ["inspection_id", "item_id"],
+    },
+    "quality_item_routes": {
+        "remote": "outlog_quality_item_routes",
+        "columns": ["inspection_id", "item_id", "destination"],
+        "pk": ["inspection_id", "item_id"],
+    },
+    "quality_workers": {
+        "remote": "outlog_quality_workers",
+        "columns": ["id", "inspection_id", "inspector_id", "status", "created_at", "completed_at"],
+        "pk": ["id"],
+    },
+    "quality_worker_timer_events": {
+        "remote": "outlog_quality_worker_timer_events",
+        "columns": ["id", "worker_id", "event_type", "event_at", "user_id"],
+        "pk": ["id"],
+    },
+    "quality_assignments": {
+        "remote": "outlog_quality_assignments",
+        "columns": [
+            "id", "worker_id", "sample_item_id", "assigned_qty", "inspected_qty", "approved_qty",
+            "rejected_qty", "rework_qty", "reject_reason", "rework_reason", "observation",
+            "photo_paths", "result_status", "assigned_by", "assigned_at",
+        ],
+        "pk": ["id"],
+    },
+}
+QUALITY_DELETE_ORDER = [
+    "quality_assignments",
+    "quality_worker_timer_events",
+    "quality_item_routes",
+    "quality_inspection_items",
+    "quality_workers",
+    "quality_sample_items",
+    "quality_inspections",
+]
+QUALITY_INSERT_ORDER = [
+    "quality_inspections",
+    "quality_sample_items",
+    "quality_inspection_items",
+    "quality_item_routes",
+    "quality_workers",
+    "quality_worker_timer_events",
+    "quality_assignments",
+]
+
+
+def init_quality_persistence() -> None:
+    """Cria o armazenamento remoto da Qualidade sem apagar registros existentes."""
+    ddl = [
+        """CREATE TABLE IF NOT EXISTS outlog_quality_inspections (
+            id BIGINT PRIMARY KEY, card_id BIGINT NOT NULL, inspection_type INTEGER NOT NULL,
+            status TEXT NOT NULL DEFAULT 'ABERTA', destination TEXT, sample_source TEXT NOT NULL,
+            source_receiving_id BIGINT, purchase_mode TEXT NOT NULL DEFAULT 'GRADE',
+            sample_target_total BIGINT NOT NULL DEFAULT 0, development_required SMALLINT,
+            development_separated SMALLINT, development_pending SMALLINT NOT NULL DEFAULT 0,
+            source_subset SMALLINT NOT NULL DEFAULT 0, send_to_costura SMALLINT,
+            created_by BIGINT NOT NULL, completed_by BIGINT, created_at TEXT NOT NULL,
+            completed_at TEXT
+        )""",
+        """CREATE TABLE IF NOT EXISTS outlog_quality_sample_items (
+            id BIGINT PRIMARY KEY, inspection_id BIGINT NOT NULL
+                REFERENCES outlog_quality_inspections(id) ON DELETE CASCADE,
+            item_id BIGINT NOT NULL, sample_qty BIGINT NOT NULL DEFAULT 0,
+            sample_scope TEXT NOT NULL DEFAULT 'ITEM', UNIQUE(inspection_id, item_id)
+        )""",
+        """CREATE TABLE IF NOT EXISTS outlog_quality_inspection_items (
+            inspection_id BIGINT NOT NULL
+                REFERENCES outlog_quality_inspections(id) ON DELETE CASCADE,
+            item_id BIGINT NOT NULL, PRIMARY KEY(inspection_id, item_id)
+        )""",
+        """CREATE TABLE IF NOT EXISTS outlog_quality_item_routes (
+            inspection_id BIGINT NOT NULL
+                REFERENCES outlog_quality_inspections(id) ON DELETE CASCADE,
+            item_id BIGINT NOT NULL, destination TEXT, PRIMARY KEY(inspection_id, item_id)
+        )""",
+        """CREATE TABLE IF NOT EXISTS outlog_quality_workers (
+            id BIGINT PRIMARY KEY,
+            inspection_id BIGINT NOT NULL
+                REFERENCES outlog_quality_inspections(id) ON DELETE CASCADE,
+            inspector_id BIGINT NOT NULL, status TEXT NOT NULL DEFAULT 'NAO_INICIADA',
+            created_at TEXT NOT NULL, completed_at TEXT, UNIQUE(inspection_id, inspector_id)
+        )""",
+        """CREATE TABLE IF NOT EXISTS outlog_quality_worker_timer_events (
+            id BIGINT PRIMARY KEY,
+            worker_id BIGINT NOT NULL
+                REFERENCES outlog_quality_workers(id) ON DELETE CASCADE,
+            event_type TEXT NOT NULL, event_at TEXT NOT NULL, user_id BIGINT NOT NULL
+        )""",
+        """CREATE TABLE IF NOT EXISTS outlog_quality_assignments (
+            id BIGINT PRIMARY KEY,
+            worker_id BIGINT NOT NULL
+                REFERENCES outlog_quality_workers(id) ON DELETE CASCADE,
+            sample_item_id BIGINT NOT NULL
+                REFERENCES outlog_quality_sample_items(id) ON DELETE CASCADE,
+            assigned_qty BIGINT NOT NULL, inspected_qty BIGINT NOT NULL DEFAULT 0,
+            approved_qty BIGINT NOT NULL DEFAULT 0, rejected_qty BIGINT NOT NULL DEFAULT 0,
+            rework_qty BIGINT NOT NULL DEFAULT 0, reject_reason TEXT, rework_reason TEXT,
+            observation TEXT, photo_paths TEXT, result_status TEXT NOT NULL DEFAULT 'PENDENTE',
+            assigned_by BIGINT NOT NULL, assigned_at TEXT NOT NULL
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_outlog_quality_inspections_card ON outlog_quality_inspections(card_id, id DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_outlog_quality_workers_inspection ON outlog_quality_workers(inspection_id)",
+        "CREATE INDEX IF NOT EXISTS idx_outlog_quality_assignments_worker ON outlog_quality_assignments(worker_id)",
+        "CREATE INDEX IF NOT EXISTS idx_outlog_quality_sample_items_inspection ON outlog_quality_sample_items(inspection_id)",
+    ]
+    with pg_connect() as con:
+        with con.cursor() as cur:
+            for statement in ddl:
+                cur.execute(statement)
+        con.commit()
+
+
+def _read_quality_snapshot() -> dict[str, list[dict]]:
+    snapshot: dict[str, list[dict]] = {}
+    with pg_connect() as con:
+        with con.cursor() as cur:
+            for local_table in QUALITY_INSERT_ORDER:
+                spec = QUALITY_PERSISTENCE_TABLES[local_table]
+                order_by = ", ".join(spec["pk"])
+                cur.execute("SELECT * FROM {} ORDER BY {}".format(spec["remote"], order_by))
+                snapshot[local_table] = [dict(row) for row in cur.fetchall()]
+    return snapshot
+
+
+def _local_quality_snapshot(sqlite_con) -> dict[str, list[dict]]:
+    result: dict[str, list[dict]] = {}
+    for local_table in QUALITY_INSERT_ORDER:
+        spec = QUALITY_PERSISTENCE_TABLES[local_table]
+        result[local_table] = [
+            {column: row[column] for column in spec["columns"]}
+            for row in sqlite_con.execute("SELECT * FROM {}".format(local_table)).fetchall()
+        ]
+    return result
+
+
+def _quality_key(row: dict, key_columns: list[str]) -> tuple:
+    return tuple(row.get(column) for column in key_columns)
+
+
+def _quality_row_equal(left: dict | None, right: dict | None, columns: list[str]) -> bool:
+    if left is None or right is None:
+        return left is right
+    return all(left.get(column) == right.get(column) for column in columns)
+
+
+def _quality_snapshot_empty(snapshot: dict[str, list[dict]]) -> bool:
+    return not any(snapshot.get(table) for table in QUALITY_PERSISTENCE_TABLES)
+
+
+def restore_quality_state_from_supabase(sqlite_con) -> dict[str, list[dict]]:
+    """Refresh the local compatibility cache from Supabase and return its conflict snapshot."""
+    snapshot = _read_quality_snapshot()
+    sqlite_con.execute("PRAGMA foreign_keys=OFF")
+    try:
+        for local_table in QUALITY_DELETE_ORDER:
+            sqlite_con.execute("DELETE FROM {}".format(local_table))
+        for local_table in QUALITY_INSERT_ORDER:
+            spec = QUALITY_PERSISTENCE_TABLES[local_table]
+            columns = spec["columns"]
+            marks = ",".join(["?"] * len(columns))
+            statement = "INSERT INTO {} ({}) VALUES ({})".format(
+                local_table, ",".join(columns), marks
+            )
+            for row in snapshot.get(local_table, []):
+                sqlite_con.execute(statement, tuple(row.get(column) for column in columns))
+    finally:
+        sqlite_con.execute("PRAGMA foreign_keys=ON")
+    return snapshot
+
+
+def bootstrap_quality_state(sqlite_con) -> dict[str, list[dict]]:
+    """Migrate legacy local rows once when Supabase has no Quality data, then restore it."""
+    init_quality_persistence()
+    snapshot = _read_quality_snapshot()
+    if _quality_snapshot_empty(snapshot):
+        legacy = _local_quality_snapshot(sqlite_con)
+        if any(legacy.get(table) for table in QUALITY_PERSISTENCE_TABLES):
+            sync_quality_state_to_supabase(sqlite_con, snapshot)
+            snapshot = _read_quality_snapshot()
+    return restore_quality_state_from_supabase(sqlite_con)
+
+
+def sync_quality_state_to_supabase(
+    sqlite_con, previous_snapshot: dict[str, list[dict]] | None
+) -> dict[str, list[dict]]:
+    """Write only changed Quality rows; optimistic checks prevent silent overwrites."""
+    previous_snapshot = previous_snapshot or {table: [] for table in QUALITY_PERSISTENCE_TABLES}
+    current = _local_quality_snapshot(sqlite_con)
+    old_by_table = {
+        table: {_quality_key(row, QUALITY_PERSISTENCE_TABLES[table]["pk"]): row
+                for row in previous_snapshot.get(table, [])}
+        for table in QUALITY_PERSISTENCE_TABLES
+    }
+    current_by_table = {
+        table: {_quality_key(row, QUALITY_PERSISTENCE_TABLES[table]["pk"]): row
+                for row in current.get(table, [])}
+        for table in QUALITY_PERSISTENCE_TABLES
+    }
+
+    with pg_connect() as con:
+        with con.cursor() as cur:
+            # Serialize cross-instance writes. The per-row checks below detect stale snapshots.
+            cur.execute("SELECT pg_advisory_xact_lock(%s)", (742119885,))
+            for local_table in QUALITY_DELETE_ORDER:
+                spec = QUALITY_PERSISTENCE_TABLES[local_table]
+                remote = spec["remote"]
+                columns = spec["columns"]
+                keys = spec["pk"]
+                for key, old_row in old_by_table[local_table].items():
+                    if key in current_by_table[local_table]:
+                        continue
+                    key_where = " AND ".join("{}=%s".format(column) for column in keys)
+                    compare_old = " AND ".join("{} IS NOT DISTINCT FROM %s".format(column) for column in columns)
+                    params = (*key, *(old_row.get(column) for column in columns))
+                    cur.execute(
+                        "DELETE FROM {} WHERE {} AND {}".format(remote, key_where, compare_old),
+                        params,
+                    )
+                    if cur.rowcount == 0:
+                        cur.execute(
+                            "SELECT * FROM {} WHERE {}".format(remote, key_where), key
+                        )
+                        live = cur.fetchone()
+                        if live is not None and not _quality_row_equal(dict(live), old_row, columns):
+                            raise RuntimeError(
+                                "A Qualidade foi alterada por outra sessão. Atualize a tela e tente novamente."
+                            )
+
+            for local_table in QUALITY_INSERT_ORDER:
+                spec = QUALITY_PERSISTENCE_TABLES[local_table]
+                remote = spec["remote"]
+                columns = spec["columns"]
+                keys = spec["pk"]
+                key_where = " AND ".join("{}=%s".format(column) for column in keys)
+                updates = [column for column in columns if column not in keys]
+                marks = ",".join(["%s"] * len(columns))
+                key_sql = ",".join(keys)
+                insert_sql = "INSERT INTO {} ({}) VALUES ({}) ON CONFLICT ({}) DO NOTHING".format(
+                    remote, ",".join(columns), marks, key_sql
+                )
+                for key, row in current_by_table[local_table].items():
+                    old_row = old_by_table[local_table].get(key)
+                    if old_row is not None and _quality_row_equal(old_row, row, columns):
+                        continue
+                    if old_row is None:
+                        cur.execute(insert_sql, tuple(row.get(column) for column in columns))
+                        if cur.rowcount == 0:
+                            cur.execute(
+                                "SELECT * FROM {} WHERE {}".format(remote, key_where), key
+                            )
+                            live = cur.fetchone()
+                            if live is None or not _quality_row_equal(dict(live), row, columns):
+                                raise RuntimeError(
+                                    "Conflito de identificação ao salvar Qualidade no Supabase; nenhum dado local foi confirmado."
+                                )
+                        continue
+
+                    if not updates:
+                        continue
+                    set_sql = ", ".join("{}=%s".format(column) for column in updates)
+                    compare_old = " AND ".join("{} IS NOT DISTINCT FROM %s".format(column) for column in columns)
+                    params = (
+                        *(row.get(column) for column in updates),
+                        *key,
+                        *(old_row.get(column) for column in columns),
+                    )
+                    cur.execute(
+                        "UPDATE {} SET {} WHERE {} AND {}".format(remote, set_sql, key_where, compare_old),
+                        params,
+                    )
+                    if cur.rowcount == 0:
+                        cur.execute(
+                            "SELECT * FROM {} WHERE {}".format(remote, key_where), key
+                        )
+                        live = cur.fetchone()
+                        if live is None or not _quality_row_equal(dict(live), row, columns):
+                            raise RuntimeError(
+                                "A Qualidade foi alterada por outra sessão. Atualize a tela e tente novamente."
+                            )
+        con.commit()
+
+    return _read_quality_snapshot()
