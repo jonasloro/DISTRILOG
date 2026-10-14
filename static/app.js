@@ -130,6 +130,7 @@ async function goTo(view) {
     if (view === "labeling") await renderCards("labeling");
     if (view === "storage") await renderCards("storage");
     if (view === "storage-hub") await renderStorageHub();
+    if (view === "address-map") await renderAddressMap();
     if (view === "sgo") await renderSgo();
     if (view === "sgo-indicators") await renderSgoIndicators();
     if (view === "production") await renderProduction();
@@ -193,6 +194,177 @@ function metricCardsHtml(scope, totals) {
     return `<div class="metric-row-2"><div class="kpi"><div class="kpi-label">Peças em Processamento</div><div class="kpi-value">${qty.toLocaleString("pt-BR")}</div></div><div class="kpi"><div class="kpi-label">% em execução ativa</div><div class="kpi-value">${total?(active*100/total).toFixed(1):"0.0"}%</div></div></div>`;
   }
   return "";
+}
+
+
+let addressMapLoadId = 0;
+
+async function renderAddressMap() {
+  setPage("Mapa de endereçamento", "Visão geral dos endereços WMS, organizada por setor, zona, casulo e nível.");
+  const requestId = ++addressMapLoadId;
+  window.addressMapState = {
+    sector: window.addressMapState?.sector || "RM",
+    zone: window.addressMapState?.zone || "ALL",
+    status: window.addressMapState?.status || "ALL",
+    search: window.addressMapState?.search || "",
+    bySector: {}
+  };
+  $("mainContent").innerHTML = '<section class="address-map-page"><div class="state-panel"><b>Carregando endereços...</b><span>Consultando a ocupação atual de RM, QA, PR, ET e EC.</span></div></section>';
+
+  try {
+    const sectors = ["RM", "QA", "PR", "ET", "EC"];
+    const entries = await Promise.all(sectors.map(async (sector) => {
+      const positions = await apiWithTimeout("/api/positions?setor=" + encodeURIComponent(sector));
+      if (!Array.isArray(positions)) {
+        throw new Error("O servidor retornou dados inválidos para o setor " + sector + ".");
+      }
+      if (!positions.length) {
+        throw new Error("Nenhum endereço foi retornado para o setor " + sector + ". Verifique a conexão e o cadastro das posições WMS.");
+      }
+      return [sector, positions];
+    }));
+    if (requestId !== addressMapLoadId || currentView !== "address-map") return;
+    window.addressMapState.bySector = Object.fromEntries(entries);
+    if (!window.addressMapState.bySector[window.addressMapState.sector]) {
+      window.addressMapState.sector = "RM";
+    }
+    renderAddressMapContent();
+  } catch (error) {
+    if (requestId !== addressMapLoadId || currentView !== "address-map") return;
+    $("mainContent").innerHTML =
+      '<section class="address-map-page"><div class="state-panel error-state"><b>Não foi possível carregar o mapa de endereçamento.</b><span>' +
+      esc(error?.message || "Erro desconhecido ao consultar os endereços.") +
+      '</span><button class="primary" onclick="renderAddressMap()">Tentar novamente</button></div></section>';
+  }
+}
+
+function addressMapCurrentPositions() {
+  const state = window.addressMapState;
+  return state?.bySector?.[state.sector] || [];
+}
+
+function renderAddressMapContent() {
+  const state = window.addressMapState;
+  const allPositions = addressMapCurrentPositions();
+  const zones = [...new Map(allPositions.map((p) => [
+    String(p.zona),
+    { value: String(p.zona), label: String(p.zona_label || ("Zona " + p.zona)) }
+  ])).values()].sort((a, b) => a.value.localeCompare(b.value, "pt-BR", { numeric: true }));
+  const sectors = [
+    { value: "RM", label: "RM — Recebimento" },
+    { value: "QA", label: "QA — Qualidade" },
+    { value: "PR", label: "PR — Processamento" },
+    { value: "ET", label: "ET — Etiquetagem" },
+    { value: "EC", label: "EC — Estocagem" }
+  ];
+  const occupied = allPositions.filter((p) => Number(p.ocupado || 0) > 0).length;
+  const free = allPositions.length - occupied;
+  const allocated = allPositions.reduce((sum, p) => sum + Math.max(0, Number(p.ocupado || 0)), 0);
+  $("mainContent").innerHTML =
+    '<section class="address-map-page">' +
+      '<div class="address-map-intro"><div><span class="address-map-eyebrow">WMS · CONSULTA</span><h2>Mapa físico de endereçamento</h2><p>Consulte a ocupação das posições sem precisar abrir um Card. Este painel é somente leitura.</p></div>' +
+      '<button class="secondary" type="button" onclick="renderAddressMap()">Atualizar mapa</button></div>' +
+      '<div class="address-map-stats">' +
+        '<div class="address-map-stat"><span>Posições no setor</span><strong id="addressMapTotal">' + allPositions.length.toLocaleString("pt-BR") + '</strong></div>' +
+        '<div class="address-map-stat"><span>Posições livres</span><strong id="addressMapFree">' + free.toLocaleString("pt-BR") + '</strong></div>' +
+        '<div class="address-map-stat"><span>Posições ocupadas</span><strong id="addressMapOccupied">' + occupied.toLocaleString("pt-BR") + '</strong></div>' +
+        '<div class="address-map-stat"><span>Unidades alocadas</span><strong id="addressMapAllocated">' + allocated.toLocaleString("pt-BR") + '</strong></div>' +
+      '</div>' +
+      '<div class="address-map-controls">' +
+        '<div class="field"><label for="addressMapSector">Setor</label><select id="addressMapSector" onchange="changeAddressMapSector(this.value)">' +
+          sectors.map((s) => '<option value="' + s.value + '"' + (s.value === state.sector ? ' selected' : '') + '>' + esc(s.label) + '</option>').join("") +
+        '</select></div>' +
+        '<div class="field"><label for="addressMapZone">Zona</label><select id="addressMapZone" onchange="filterAddressMap()"><option value="ALL">Todas as zonas</option>' +
+          zones.map((z) => '<option value="' + esc(z.value) + '"' + (z.value === state.zone ? ' selected' : '') + '>' + esc(z.label) + '</option>').join("") +
+        '</select></div>' +
+        '<div class="field"><label for="addressMapStatus">Ocupação</label><select id="addressMapStatus" onchange="filterAddressMap()"><option value="ALL"' + (state.status === "ALL" ? " selected" : "") + '>Todas as posições</option><option value="FREE"' + (state.status === "FREE" ? " selected" : "") + '>Livres</option><option value="OCCUPIED"' + (state.status === "OCCUPIED" ? " selected" : "") + '>Ocupadas</option></select></div>' +
+        '<div class="field"><label for="addressMapSearch">Buscar endereço</label><input id="addressMapSearch" type="search" value="' + esc(state.search) + '" placeholder="Ex.: 1RM06A" oninput="filterAddressMap()"></div>' +
+      '</div>' +
+      '<div class="address-map-legend"><span><i class="address-map-dot is-free"></i>Livre</span><span><i class="address-map-dot is-occupied"></i>Ocupada</span><small>Os números nas posições representam unidades atualmente alocadas.</small></div>' +
+      '<div id="addressMapGrid" class="address-map-grid"></div>' +
+    '</section>';
+  renderAddressMapGrid();
+}
+
+async function changeAddressMapSector(sector) {
+  const state = window.addressMapState;
+  if (!state || !state.bySector?.[sector]) return;
+  state.sector = sector;
+  state.zone = "ALL";
+  renderAddressMapContent();
+}
+
+function filterAddressMap() {
+  const state = window.addressMapState;
+  if (!state) return;
+  state.zone = $("addressMapZone")?.value || "ALL";
+  state.status = $("addressMapStatus")?.value || "ALL";
+  state.search = $("addressMapSearch")?.value || "";
+  renderAddressMapGrid();
+}
+
+function renderAddressMapGrid() {
+  const state = window.addressMapState;
+  const grid = $("addressMapGrid");
+  if (!state || !grid) return;
+  const normalizedTerm = normalizeSearch(state.search || "");
+  const allPositions = addressMapCurrentPositions();
+  const positions = allPositions.filter((p) => {
+    const occupied = Math.max(0, Number(p.ocupado || 0));
+    const zoneMatches = state.zone === "ALL" || String(p.zona) === state.zone;
+    const statusMatches = state.status === "ALL" ||
+      (state.status === "FREE" && occupied === 0) ||
+      (state.status === "OCCUPIED" && occupied > 0);
+    const searchMatches = !normalizedTerm ||
+      normalizeSearch([p.address, p.setor, p.zona, p.zona_label, p.casulo, p.nivel].join(" ")).includes(normalizedTerm);
+    return zoneMatches && statusMatches && searchMatches;
+  });
+
+  if (!positions.length) {
+    grid.innerHTML = '<div class="position-empty large">Nenhuma posição encontrada com os filtros atuais.</div>';
+    return;
+  }
+
+  const byZone = new Map();
+  positions.forEach((p) => {
+    const zoneKey = String(p.zona);
+    if (!byZone.has(zoneKey)) byZone.set(zoneKey, new Map());
+    const byCasulo = byZone.get(zoneKey);
+    const casuloKey = String(p.casulo);
+    if (!byCasulo.has(casuloKey)) byCasulo.set(casuloKey, []);
+    byCasulo.get(casuloKey).push(p);
+  });
+
+  grid.innerHTML = [...byZone.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0], "pt-BR", { numeric: true }))
+    .map(([zoneKey, casulos]) => {
+      const zoneRows = allPositions.filter((p) => String(p.zona) === zoneKey);
+      const visibleCount = [...casulos.values()].reduce((sum, rows) => sum + rows.length, 0);
+      const zoneLabel = zoneRows[0]?.zona_label || ("Zona " + zoneKey);
+      const casuloHtml = [...casulos.entries()]
+        .sort((a, b) => a[0].localeCompare(b[0], "pt-BR", { numeric: true }))
+        .map(([casulo, rows]) =>
+          '<div class="position-casulo"><div class="position-casulo-head"><span>CASULO</span><b>' + esc(casulo) + '</b></div><div class="position-levels">' +
+          rows.sort((a, b) => String(a.nivel).localeCompare(String(b.nivel))).map((p) => {
+            const quantity = Math.max(0, Number(p.ocupado || 0));
+            const statusClassName = quantity > 0 ? "is-occupied" : "is-free";
+            const title = p.address + " • " + (quantity > 0 ? quantity.toLocaleString("pt-BR") + " unidade(s) alocada(s)" : "Livre");
+            return '<div class="position-cell ' + statusClassName + '" title="' + esc(title) + '" aria-label="' + esc(title) + '">' +
+              '<span class="position-level">' + esc(p.nivel) + '</span><strong>' + esc(p.address) + '</strong>' +
+              '<small>' + (quantity > 0 ? quantity.toLocaleString("pt-BR") + ' alocado(s)' : 'Livre') + '</small></div>';
+          }).join("") +
+          '</div></div>'
+        ).join("");
+      return '<section class="position-zone"><div class="position-zone-head"><div><b>' + esc(zoneLabel) + '</b><span>' + casulos.size + ' casulo(s) visível(is)</span></div><small>' + visibleCount + ' posições</small></div><div class="position-casulo-grid address-map-casulos">' + casuloHtml + '</div></section>';
+    }).join("");
+
+  const occupied = allPositions.filter((p) => Number(p.ocupado || 0) > 0).length;
+  const free = allPositions.length - occupied;
+  const allocated = allPositions.reduce((sum, p) => sum + Math.max(0, Number(p.ocupado || 0)), 0);
+  if ($("addressMapTotal")) $("addressMapTotal").textContent = allPositions.length.toLocaleString("pt-BR");
+  if ($("addressMapFree")) $("addressMapFree").textContent = free.toLocaleString("pt-BR");
+  if ($("addressMapOccupied")) $("addressMapOccupied").textContent = occupied.toLocaleString("pt-BR");
+  if ($("addressMapAllocated")) $("addressMapAllocated").textContent = allocated.toLocaleString("pt-BR");
 }
 
 async function renderCards(scope) {
