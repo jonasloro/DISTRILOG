@@ -242,7 +242,10 @@ def get_latest_receiving_from_supabase(card_id: int, receiving_type: str) -> dic
 
 
 def sync_receiving_card_state_to_supabase(
-    sqlite_con, card_id: int, sync_item_ids: list[int] | None = None
+    sqlite_con,
+    card_id: int,
+    sync_item_ids: list[int] | None = None,
+    receiving_type: str | None = None,
 ) -> dict[str, int]:
     """Write through Receiving state without overwriting unrelated item changes."""
     if not os.getenv("SUPABASE_DATABASE_URL"):
@@ -254,8 +257,13 @@ def sync_receiving_card_state_to_supabase(
     items = sqlite_con.execute(
         "SELECT * FROM items WHERE card_id=? ORDER BY id", (int(card_id),)
     ).fetchall()
+    receiving_query = "SELECT * FROM receivings WHERE card_id=?"
+    receiving_params: tuple = (int(card_id),)
+    if receiving_type is not None:
+        receiving_query += " AND receiving_type=?"
+        receiving_params += (receiving_type,)
     receivings = sqlite_con.execute(
-        "SELECT * FROM receivings WHERE card_id=? ORDER BY id", (int(card_id),)
+        receiving_query + " ORDER BY id", receiving_params
     ).fetchall()
     receiving_ids = [int(row["id"]) for row in receivings]
 
