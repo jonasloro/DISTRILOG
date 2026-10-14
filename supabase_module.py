@@ -241,8 +241,10 @@ def get_latest_receiving_from_supabase(card_id: int, receiving_type: str) -> dic
             return cur.fetchone()
 
 
-def sync_receiving_card_state_to_supabase(sqlite_con, card_id: int) -> dict[str, int]:
-    """Write through one Card's current Receiving state to Supabase before confirming success."""
+def sync_receiving_card_state_to_supabase(
+    sqlite_con, card_id: int, sync_item_ids: list[int] | None = None
+) -> dict[str, int]:
+    """Write through Receiving state without overwriting unrelated item changes."""
     if not os.getenv("SUPABASE_DATABASE_URL"):
         raise RuntimeError("SUPABASE_DATABASE_URL não está configurada; o Recebimento não pode ser confirmado.")
 
@@ -278,7 +280,10 @@ def sync_receiving_card_state_to_supabase(sqlite_con, card_id: int) -> dict[str,
     item_marks = ",".join(["%s"] * len(ITEM_COLUMNS))
     receiving_marks = ",".join(["%s"] * len(RECEIVING_COLUMNS))
     timer_marks = ",".join(["%s"] * len(TIMER_EVENT_COLUMNS))
-    card_updates = ", ".join("{}=EXCLUDED.{}".format(c, c) for c in CARD_COLUMNS if c != "id")
+    card_updates = ", ".join(
+        "{}=EXCLUDED.{}".format(c, c)
+        for c in ("current_sector", "status", "receiving_type", "purchase_mode", "quality_destination", "updated_at")
+    )
     item_updates = ", ".join("{}=EXCLUDED.{}".format(c, c) for c in ITEM_COLUMNS if c not in {"id", "card_id", "source_key"})
     receiving_updates = ", ".join("{}=EXCLUDED.{}".format(c, c) for c in RECEIVING_COLUMNS if c != "id")
     timer_updates = ", ".join("{}=EXCLUDED.{}".format(c, c) for c in TIMER_EVENT_COLUMNS if c != "id")
@@ -288,7 +293,12 @@ def sync_receiving_card_state_to_supabase(sqlite_con, card_id: int) -> dict[str,
             card_columns_sql, card_marks, card_updates
         )
     )
-    item_sql = (
+    item_insert_sql = (
+        "INSERT INTO outlog_items ({}) VALUES ({}) ON CONFLICT (id) DO NOTHING".format(
+            item_columns_sql, item_marks
+        )
+    )
+    item_update_sql = (
         "INSERT INTO outlog_items ({}) VALUES ({}) ON CONFLICT (id) DO UPDATE SET {}".format(
             item_columns_sql, item_marks, item_updates
         )
@@ -318,12 +328,36 @@ def sync_receiving_card_state_to_supabase(sqlite_con, card_id: int) -> dict[str,
             if cur.rowcount != 1:
                 raise RuntimeError("Não foi possível sincronizar a identidade do Card {} no Supabase.".format(card_id))
 
+            requested_item_ids = {int(item_id) for item_id in (sync_item_ids or [])}
+            available_item_ids = {int(item["id"]) for item in items}
+            if not requested_item_ids.issubset(available_item_ids):
+                missing_ids = sorted(requested_item_ids - available_item_ids)
+                raise RuntimeError(
+                    "Não foi possível atualizar item(ns) inexistente(s) {} do Card {}.".format(missing_ids, card_id)
+                )
             for item in items:
-                cur.execute(item_sql, _item_tuple(item))
-                if cur.rowcount != 1:
-                    raise RuntimeError(
-                        "Conflito de identidade ao sincronizar o item {} do Card {} no Supabase.".format(item["id"], card_id)
-                    )
+                if int(item["id"]) in requested_item_ids:
+                    cur.execute(item_update_sql, _item_tuple(item))
+                    if cur.rowcount != 1:
+                        raise RuntimeError(
+                            "Conflito de identidade ao atualizar item {} do Card {} no Supabase.".format(item["id"], card_id)
+                        )
+                else:
+                    cur.execute(item_insert_sql, _item_tuple(item))
+                    if cur.rowcount == 0:
+                        cur.execute(
+                            "SELECT card_id,source_key FROM outlog_items WHERE id=%s",
+                            (int(item["id"]),),
+                        )
+                        remote_item = cur.fetchone()
+                        if (
+                            not remote_item
+                            or int(remote_item["card_id"]) != int(card_id)
+                            or remote_item["source_key"] != item["source_key"]
+                        ):
+                            raise RuntimeError(
+                                "Conflito de identidade ao preservar item {} do Card {} no Supabase.".format(item["id"], card_id)
+                            )
 
             for receiving in receivings:
                 cur.execute(receiving_sql, _receiving_tuple(receiving))
