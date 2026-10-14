@@ -609,8 +609,6 @@ def inspection_validation(con: sqlite3.Connection, inspection_id: int) -> list[s
     errors: list[str] = []
     if inspection["inspection_type"] == 1 and inspection["destination"] not in ("CD01", "CD02"):
         errors.append("Defina o destino CD01 ou CD02.")
-    if inspection["inspection_type"] == 1 and not inspection["source_subset"] and inspection["destination"] not in ("CD01", "CD02"):
-        errors.append("Defina o destino da Inspeção 1.")
     if inspection["source_subset"] and inspection["inspection_type"] == 1:
         mapped = [int(row["item_id"]) for row in con.execute(
             "SELECT item_id FROM quality_inspection_items WHERE inspection_id=?", (inspection_id,)
@@ -827,22 +825,26 @@ async def create_inspection(card_id: int, request: Request):
     else:
         development_separated = None
     send_to_costura: Optional[int] = None
-    if inspection_type == 1 and source_subset_requested:
+    if inspection_type == 1:
         if destination not in ("CD01", "CD02"):
-            raise HTTPException(400, "Defina o destino da Inspeção 1 por referência.")
-    elif inspection_type == 1:
-        if send_to_costura_raw is None or str(send_to_costura_raw).strip() == "":
-            raise HTTPException(400, "Responda obrigatoriamente: Vai para a Costura?")
-        normalized_costura = str(send_to_costura_raw).strip().lower()
-        if isinstance(send_to_costura_raw, bool):
-            send_to_costura = 1 if send_to_costura_raw else 0
-        elif normalized_costura in {"1", "true", "sim", "s"}:
-            send_to_costura = 1
-        elif normalized_costura in {"0", "false", "não", "nao", "n"}:
-            send_to_costura = 0
-        else:
-            raise HTTPException(400, "Selecione Sim ou Não em Vai para a Costura?")
-        destination = "CD01" if send_to_costura else None
+            message = (
+                "Defina o destino da Inspeção 1 por referência."
+                if source_subset_requested
+                else "Selecione o destino CD01 ou CD02 da Inspeção 1."
+            )
+            raise HTTPException(400, message)
+        if not source_subset_requested:
+            if send_to_costura_raw is None or str(send_to_costura_raw).strip() == "":
+                raise HTTPException(400, "Responda obrigatoriamente: Vai para a Costura?")
+            normalized_costura = str(send_to_costura_raw).strip().lower()
+            if isinstance(send_to_costura_raw, bool):
+                send_to_costura = 1 if send_to_costura_raw else 0
+            elif normalized_costura in {"1", "true", "sim", "s"}:
+                send_to_costura = 1
+            elif normalized_costura in {"0", "false", "não", "nao", "n"}:
+                send_to_costura = 0
+            else:
+                raise HTTPException(400, "Selecione Sim ou Não em Vai para a Costura?")
     else:
         destination = None
         send_to_costura = 0

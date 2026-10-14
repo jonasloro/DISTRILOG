@@ -988,3 +988,78 @@ input:disabled,select:disabled,textarea:disabled{
   .card-location-addresses{grid-template-columns:1fr}
   .card-location-address-main strong{font-size:18px}
 }
+
+
+/* Qualidade: escolhas de fluxo com controles de rádio acessíveis e alinhados */
+.quality-costura-field{grid-column:1/-1}
+.field .field-label{display:block;font-size:11px;font-weight:800;margin:0 0 8px}
+.quality-choice-options{
+  display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:12px;
+  width:min(100%,720px);
+  margin:0 auto;
+}
+.quality-choice-card{
+  position:relative;
+  display:flex!important;
+  align-items:center;
+  justify-content:center;
+  gap:12px;
+  min-width:0;
+  min-height:78px;
+  margin:0!important;
+  padding:15px 18px;
+  border:1px solid var(--border);
+  border-radius:10px;
+  background:var(--card);
+  color:var(--text);
+  text-align:left;
+  cursor:pointer;
+  transition:border-color .15s ease,background-color .15s ease,box-shadow .15s ease;
+}
+.quality-choice-card:hover{border-color:#94a3b8;background:#f8fafc}
+.quality-choice-card.is-selected{
+  border:2px solid var(--blue);
+  padding:14px 17px;
+  background:#eff6ff;
+  box-shadow:0 0 0 2px #2563eb14;
+}
+.quality-choice-card:focus-within{outline:3px solid #2563eb35;outline-offset:2px}
+.quality-choice-card input[type="radio"]{
+  position:absolute;
+  width:1px;
+  height:1px;
+  padding:0;
+  margin:-1px;
+  overflow:hidden;
+  clip:rect(0,0,0,0);
+  white-space:nowrap;
+  border:0;
+}
+.quality-choice-indicator{
+  display:grid;
+  place-items:center;
+  flex:0 0 20px;
+  width:20px;
+  height:20px;
+  border:2px solid #94a3b8;
+  border-radius:50%;
+  background:#fff;
+}
+.quality-choice-card.is-selected .quality-choice-indicator{border-color:var(--blue)}
+.quality-choice-card.is-selected .quality-choice-indicator:after{
+  content:"";
+  width:10px;
+  height:10px;
+  border-radius:50%;
+  background:var(--blue);
+}
+.quality-choice-copy{display:flex;flex-direction:column;gap:4px;min-width:0}
+.quality-choice-copy strong{font-size:14px;line-height:1.2}
+.quality-choice-copy small{font-size:11px;line-height:1.4;color:var(--muted);font-weight:500}
+.quality-choice-help{display:block;margin-top:9px;text-align:center;color:var(--muted);line-height:1.5}
+@media(max-width:650px){
+  .quality-choice-options{grid-template-columns:1fr;max-width:420px}
+  .quality-choice-card{justify-content:flex-start;min-height:68px}
+}
