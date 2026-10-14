@@ -2173,6 +2173,8 @@ async def set_purchase_mode(card_id: int, request: Request):
     if not card:
         con.close()
         raise HTTPException(404, "Card não encontrado.")
+    refresh_receiving_card_state(con, card_id)
+    card = con.execute("SELECT id,purchase_mode,current_sector,source_snapshot_at FROM cards WHERE id=?", (card_id,)).fetchone()
     role = user["role"]
     has_quality_snapshot_items = False
     if card["source_snapshot_at"] and card["current_sector"] != "QUALIDADE":
@@ -2219,6 +2221,7 @@ async def mark_arrived(card_id: int, request: Request):
     if not con.execute("SELECT 1 FROM cards WHERE id=?", (card_id,)).fetchone():
         con.close()
         raise HTTPException(404, "Card não encontrado.")
+    refresh_receiving_card_state(con, card_id)
     if not awaiting_arrival(con, card_id):
         con.close()
         raise HTTPException(400, "Este Card não está aguardando chegada.")
@@ -2294,6 +2297,8 @@ async def complete_dispatch(card_id: int, request: Request):
     if not card:
         con.close()
         raise HTTPException(404, "Card não encontrado.")
+    refresh_receiving_card_state(con, card_id)
+    card = con.execute("SELECT * FROM cards WHERE id=?", (card_id,)).fetchone()
     if card["current_sector"] != "RECEBIMENTO" or card["status"] != "AGUARDANDO_DESPACHO_COSTURA":
         con.close()
         raise HTTPException(400, "O Card não está aguardando despacho no Recebimento.")
@@ -2379,6 +2384,8 @@ async def simulate_quality_return(card_id: int, request: Request):
     if not card:
         con.close()
         raise HTTPException(404, "Card não encontrado.")
+    refresh_receiving_card_state(con, card_id)
+    card = con.execute("SELECT * FROM cards WHERE id=?", (card_id,)).fetchone()
     if card["current_sector"] != "QUALIDADE":
         con.close()
         raise HTTPException(400, "A simulação exige que o Card esteja encaminhado à Qualidade.")
@@ -2411,6 +2418,8 @@ async def simulate_costura_return(card_id: int, request: Request):
     if not card:
         con.close()
         raise HTTPException(404, "Card não encontrado.")
+    refresh_receiving_card_state(con, card_id)
+    card = con.execute("SELECT * FROM cards WHERE id=?", (card_id,)).fetchone()
     if card["status"] != "EM_COSTURA_CD01":
         con.close()
         raise HTTPException(400, "Somente Cards em Costura CD01 podem retornar.")
