@@ -973,8 +973,14 @@ QUALITY_PERSISTENCE_TABLES = {
         ],
         "pk": ["id"],
     },
+    "quality_audit_events": {
+        "remote": "outlog_quality_history",
+        "columns": ["id", "card_id", "user_id", "event_type", "description", "created_at"],
+        "pk": ["id"],
+    },
 }
 QUALITY_DELETE_ORDER = [
+    "quality_audit_events",
     "quality_assignments",
     "quality_worker_timer_events",
     "quality_item_routes",
@@ -991,6 +997,7 @@ QUALITY_INSERT_ORDER = [
     "quality_workers",
     "quality_worker_timer_events",
     "quality_assignments",
+    "quality_audit_events",
 ]
 
 
@@ -1047,6 +1054,10 @@ def init_quality_persistence() -> None:
             rework_qty BIGINT NOT NULL DEFAULT 0, reject_reason TEXT, rework_reason TEXT,
             observation TEXT, photo_paths TEXT, result_status TEXT NOT NULL DEFAULT 'PENDENTE',
             assigned_by BIGINT NOT NULL, assigned_at TEXT NOT NULL
+        )""",
+        """CREATE TABLE IF NOT EXISTS outlog_quality_history (
+            id BIGINT PRIMARY KEY, card_id BIGINT NOT NULL, user_id BIGINT,
+            event_type TEXT NOT NULL, description TEXT NOT NULL, created_at TEXT NOT NULL
         )""",
         "CREATE INDEX IF NOT EXISTS idx_outlog_quality_inspections_card ON outlog_quality_inspections(card_id, id DESC)",
         "CREATE INDEX IF NOT EXISTS idx_outlog_quality_workers_inspection ON outlog_quality_workers(inspection_id)",
@@ -1113,6 +1124,41 @@ def restore_quality_state_from_supabase(sqlite_con) -> dict[str, list[dict]]:
             )
             for row in snapshot.get(local_table, []):
                 sqlite_con.execute(statement, tuple(row.get(column) for column in columns))
+        # Reconstitui o histórico visível do Card a partir dos eventos auditados da Qualidade.
+        local_tables = {
+            row["name"] for row in sqlite_con.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        if "history" in local_tables:
+            for event in snapshot.get("quality_audit_events", []):
+                values = (
+                    event.get("card_id"), event.get("user_id"), event.get("event_type"),
+                    event.get("description"), event.get("created_at"),
+                )
+                already_present = sqlite_con.execute(
+                    """SELECT 1 FROM history WHERE card_id=? AND event_type=?
+                       AND description=? AND created_at=?
+                       AND COALESCE(user_id,-1)=COALESCE(?,-1) LIMIT 1""",
+                    (values[0], values[2], values[3], values[4], values[1]),
+                ).fetchone()
+                if already_present:
+                    continue
+                id_in_use = sqlite_con.execute(
+                    "SELECT 1 FROM history WHERE id=?", (event.get("id"),)
+                ).fetchone()
+                if id_in_use:
+                    sqlite_con.execute(
+                        """INSERT INTO history(card_id,user_id,event_type,description,created_at)
+                           VALUES(?,?,?,?,?)""",
+                        values,
+                    )
+                else:
+                    sqlite_con.execute(
+                        """INSERT INTO history(id,card_id,user_id,event_type,description,created_at)
+                           VALUES(?,?,?,?,?,?)""",
+                        (event.get("id"), *values),
+                    )
         # End the restore transaction before re-enabling SQLite foreign-key checks.
         sqlite_con.commit()
     except Exception:
