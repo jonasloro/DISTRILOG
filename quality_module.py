@@ -69,7 +69,7 @@ def latest_receiving_sample(con: sqlite3.Connection, card_id: int, receiving_typ
 
 
 def require_completed_receiving_sample(con: sqlite3.Connection, card_id: int, receiving_type: str) -> sqlite3.Row:
-    """Read the 10% gate from Supabase, then refresh the local working copy for the inspection FK.""",
+    """Read the 10% gate from Supabase, then refresh the local working copy for the inspection FK."""
     from supabase_module import (
         get_latest_receiving_from_supabase,
         restore_receiving_state_from_supabase,
