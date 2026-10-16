@@ -1252,6 +1252,13 @@ def startup() -> None:
     init_collab_db()
     init_unified_db()
 
+    # Traz uma única vez os cards e dados antigos (tabelas outlog_*) para o schema distrilog.
+    try:
+        from legacy_import import import_legacy_once
+        import_legacy_once()
+    except Exception as e:
+        print(f"[aviso] importação dos dados antigos não concluída: {e}")
+
     # Corrige Cards que já concluíram o retorno, mas ficaram presos na fila antiga.
     # Executa após a criação das tabelas da Qualidade e sincroniza primeiro no Supabase.
     try:
