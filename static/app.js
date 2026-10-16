@@ -1051,8 +1051,22 @@ function qualitySetupHtml(previousInspection=null, sourceSubset=false) {
       <div class="field"><label>É necessário separar peças para Desenvolvimento?</label><select id="developmentRequired" onchange="toggleDevelopmentSetup()"><option value="">Selecione</option><option value="0">Não</option><option value="1">Sim</option></select></div>
       <div class="field" id="developmentSeparatedField" style="display:none"><label>As peças para Desenvolvimento já foram separadas?</label><select id="developmentSeparated"><option value="">Selecione</option><option value="0">Não</option><option value="1">Sim</option></select></div>
     </div>
-    <div class="actions"><button class="primary" onclick="createQualityInspection()">Criar inspeção</button></div>
+    <div class="actions"><button class="primary" onclick="createQualityInspection()">Criar inspeção</button>${isCosturaReturn ? '<button onclick="transferInspectionToProcessing()">Transferir Inspeção 2 para o Processamento</button>' : ""}</div>
   </div>`;
+}
+
+async function transferInspectionToProcessing() {
+  if (!confirm("Transferir a Inspeção 2 para o Processamento? O Card sairá da Qualidade sem criar a inspeção.")) return;
+  try {
+    await api(`/api/cards/${currentCardId}/quality/transfer-processing`, {
+      method: "POST",
+      body: JSON.stringify({ user_id: currentUser.id }),
+    });
+    toast("Card transferido para o Processamento.");
+    await openCard(currentCardId, "processing");
+  } catch (error) {
+    toast(error.message);
+  }
 }
 
 function setQualityCosturaChoice(value) {

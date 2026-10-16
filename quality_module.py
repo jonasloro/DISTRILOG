@@ -926,6 +926,38 @@ def get_quality_evidence(file_id: str):
     )
 
 
+@router.post("/cards/{card_id}/quality/transfer-processing")
+async def transfer_inspection_to_processing(card_id: int, request: Request):
+    """Retorno da Costura: transfere a Inspeção 2 para o Processamento, sem criá-la na Qualidade."""
+    payload = await request.json()
+    user_id = int(payload.get("user_id") or 0)
+    con = db_connect()
+    try:
+        actor = require_role(con, user_id, QUALITY_ROLES)
+        card = con.execute("SELECT * FROM cards WHERE id=?", (card_id,)).fetchone()
+        if not card:
+            raise HTTPException(404, "Card não encontrado.")
+        if card["current_sector"] != "QUALIDADE" or card["receiving_type"] != "RETORNO":
+            raise HTTPException(400, "Só é possível transferir Cards de Retorno da Costura que estão na Qualidade.")
+        if con.execute("SELECT 1 FROM quality_inspections WHERE card_id=? AND status='ABERTA'", (card_id,)).fetchone():
+            raise HTTPException(400, "Há uma inspeção aberta neste Card. Conclua-a antes de transferir.")
+        now = iso_now()
+        con.execute(
+            "UPDATE cards SET current_sector='PROCESSAMENTO',status='AGUARDANDO_PROCESSAMENTO',quality_destination=NULL,updated_at=? WHERE id=?",
+            (now, card_id),
+        )
+        con.execute(
+            "UPDATE items SET source_stage='AGUARDANDO_PROCESSAMENTO' WHERE card_id=? AND expected_qty>0",
+            (card_id,),
+        )
+        add_history(con, card_id, "INSPECAO_TRANSFERIDA_PROCESSAMENTO",
+                    f"{actor['name']} transferiu a Inspeção 2 para o Processamento (retorno da Costura).", user_id)
+        con.commit()
+    finally:
+        con.close()
+    return {"ok": True, "status": "AGUARDANDO_PROCESSAMENTO"}
+
+
 @router.post("/cards/{card_id}/quality/inspections")
 async def create_inspection(card_id: int, request: Request):
     payload = await request.json()
