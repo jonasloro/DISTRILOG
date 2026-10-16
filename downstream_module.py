@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-import sqlite3
+import db
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -9,25 +9,20 @@ from typing import Any
 from fastapi import APIRouter, FastAPI, HTTPException, Request
 
 BASE_DIR = Path(__file__).resolve().parent
-DB_PATH = Path(os.getenv("OUTLOG_DATA_DIR", str(BASE_DIR / "data"))).resolve() / "controle_logistica.db"
 router = APIRouter(prefix="/api", tags=["Etiquetagem e Estocagem"])
 SECTORS = {"ETIQUETAGEM", "ESTOCAGEM"}
 
 
-def db_connect() -> sqlite3.Connection:
-    con = sqlite3.connect(DB_PATH, timeout=10)
-    con.row_factory = sqlite3.Row
-    con.execute("PRAGMA foreign_keys=ON")
-    con.execute("PRAGMA journal_mode=WAL")
-    con.execute("PRAGMA synchronous=NORMAL")
-    return con
+def db_connect() -> "db.Connection":
+    """Conexão direta com o Supabase (pool)."""
+    return db.connect()
 
 
 def now() -> str:
     return datetime.now().replace(microsecond=0).isoformat()
 
 
-def user(con: sqlite3.Connection, user_id: int, sector: str) -> sqlite3.Row:
+def user(con: "db.Connection", user_id: int, sector: str) -> db.Row:
     row = con.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
     allowed = {sector.lower(), "supervisor", "admin"}
     if not row or row["role"] not in allowed:
@@ -35,7 +30,7 @@ def user(con: sqlite3.Connection, user_id: int, sector: str) -> sqlite3.Row:
     return row
 
 
-def history(con: sqlite3.Connection, card_id: int, kind: str, text: str, user_id: int) -> None:
+def history(con: "db.Connection", card_id: int, kind: str, text: str, user_id: int) -> None:
     con.execute(
         "INSERT INTO history(card_id,user_id,event_type,description,created_at) VALUES(?,?,?,?,?)",
         (card_id, user_id, kind, text, now()),
@@ -71,7 +66,7 @@ def init_downstream_db() -> None:
     con.close()
 
 
-def ensure_operation(con: sqlite3.Connection, card_id: int, sector: str) -> sqlite3.Row:
+def ensure_operation(con: "db.Connection", card_id: int, sector: str) -> db.Row:
     sector = sector.upper()
     if sector not in SECTORS:
         raise HTTPException(400, "Setor inválido.")
@@ -104,14 +99,14 @@ def ensure_operation(con: sqlite3.Connection, card_id: int, sector: str) -> sqli
     return operation
 
 
-def elapsed(row: sqlite3.Row) -> int:
+def elapsed(row: db.Row) -> int:
     seconds = int(row["accumulated_seconds"] or 0)
     if row["timer_state"] == "EM_ANDAMENTO" and row["timer_started_at"]:
         seconds += max(0, int((datetime.now() - datetime.fromisoformat(row["timer_started_at"])).total_seconds()))
     return seconds
 
 
-def downstream_card_data(con: sqlite3.Connection, card_id: int, sector: str) -> dict[str, Any] | None:
+def downstream_card_data(con: "db.Connection", card_id: int, sector: str) -> dict[str, Any] | None:
     op = con.execute("SELECT * FROM downstream_operations WHERE card_id=? AND sector=?", (card_id, sector)).fetchone()
     card = con.execute("SELECT purchase_mode FROM cards WHERE id=?", (card_id,)).fetchone()
     if not card:

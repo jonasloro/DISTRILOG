@@ -10,14 +10,12 @@ O DISTRILOG usa como base operacional a lógica do repositório `Distribox-`, pr
 - Endereçamento WMS por RM, QA, PR, ET e EC; sugestão de posição, saldos e trilha de alocações.
 - Saldo global de alocação compartilhado entre RM + QA + PR.
 - Mapa físico de casulos, mapa de calor e simulador de capacidade removidos para reduzir carga; o endereçamento WMS operacional permanece independente.
-- Supabase como fonte persistente de Cards, Recebimento e Qualidade; o SQLite local é mantido apenas como cache de compatibilidade para módulos que ainda usam consultas SQLite.
+- Banco único: tudo (Cards, Recebimento, Qualidade, Processamento, Endereçamento, GOAT, Devoluções etc.) é lido e gravado direto no schema `distrilog` do Supabase, sem SQLite, cópia local ou sincronização.
 
 ## Render
 O serviço usa o `Dockerfile` e `render.yaml`. Configure a variável `SUPABASE_DATABASE_URL` nas variáveis do Render com a connection string PostgreSQL de um projeto Supabase **dedicado ao DISTRILOG**, caso queira login seguro e persistência compartilhada entre redeploys. Não reutilize o banco do Distribox- sem querer compartilhar cards e operações.
 
-A Qualidade exige essa variável e bloqueia gravações se o Supabase estiver ausente ou indisponível; ela não confirma inspeções, resultados ou cronômetros apenas no SQLite local. Na inicialização, o app cria as tabelas persistentes da Qualidade (`outlog_quality_*`), incluindo evidências de imagem na tabela `outlog_quality_files`, e tenta migrar registros legados locais somente quando o armazenamento remoto de Qualidade ainda está vazio. As operações de Qualidade gravam primeiro no Supabase e tratam conflitos de concorrência como erro, sem apresentar a gravação como concluída.
-
-Sem essa variável, os demais fluxos que ainda possuem modo local podem continuar usando SQLite e o endereçamento gera posições localmente, mas o login seguro fica indisponível e os dados locais podem ser perdidos quando o container é recriado. Não deixamos uma senha administrativa fixa habilitada no serviço online.
+A variável `SUPABASE_DATABASE_URL` é obrigatória: sem ela o app não inicia. Na inicialização o app cria o schema `distrilog` e todas as tabelas (inclusive as evidências de imagem da Qualidade em `distrilog.quality_files`). Cada operação é uma transação única no Supabase; se falhar, nada é salvo pela metade. Para menor latência, mantenha o serviço do Render na mesma região do projeto Supabase e prefira a connection string do pooler (porta 6543 ou 5432).
 
 Após salvar a variável, publique o commit mais recente em **Manual Deploy → Deploy latest commit** ou aguarde o deploy automático. A rota `/health` é o health check.
 

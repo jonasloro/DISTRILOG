@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-import sqlite3
+import db
 from datetime import datetime, time, timedelta
 from pathlib import Path
 from typing import Any, Optional
@@ -11,34 +11,29 @@ from fastapi import APIRouter, FastAPI, HTTPException, Request
 from positions_module import item_allocation_totals, total_allocated, total_volume_only_allocated
 
 BASE_DIR = Path(__file__).resolve().parent
-DB_PATH = Path(os.getenv("OUTLOG_DATA_DIR", str(BASE_DIR / "data"))).resolve() / "controle_logistica.db"
 router = APIRouter(prefix="/api", tags=["Processamento"])
 
 PROCESSING_ROLES = {"processamento", "supervisor", "admin"}
 SUPERVISOR_ROLES = {"supervisor", "admin"}
 
 
-def db_connect() -> sqlite3.Connection:
-    con = sqlite3.connect(DB_PATH, timeout=10)
-    con.row_factory = sqlite3.Row
-    con.execute("PRAGMA foreign_keys=ON")
-    con.execute("PRAGMA journal_mode=WAL")
-    con.execute("PRAGMA synchronous=NORMAL")
-    return con
+def db_connect() -> "db.Connection":
+    """Conexão direta com o Supabase (pool)."""
+    return db.connect()
 
 
 def iso_now() -> str:
     return datetime.now().replace(microsecond=0).isoformat()
 
 
-def get_user(con: sqlite3.Connection, user_id: int) -> sqlite3.Row:
+def get_user(con: "db.Connection", user_id: int) -> db.Row:
     row = con.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
     if not row:
         raise HTTPException(401, "Usuário inválido.")
     return row
 
 
-def require_role(con: sqlite3.Connection, user_id: int, allowed: set[str]) -> sqlite3.Row:
+def require_role(con: "db.Connection", user_id: int, allowed: set[str]) -> db.Row:
     user = get_user(con, user_id)
     if user["role"] not in allowed:
         raise HTTPException(403, "Seu perfil não possui permissão para esta ação.")
@@ -46,7 +41,7 @@ def require_role(con: sqlite3.Connection, user_id: int, allowed: set[str]) -> sq
 
 
 def add_history(
-    con: sqlite3.Connection,
+    con: "db.Connection",
     card_id: int,
     event_type: str,
     description: str,
@@ -168,13 +163,13 @@ def init_processing_db() -> None:
     con.close()
 
 
-def worker_timer_events(con: sqlite3.Connection, worker_id: int) -> list[sqlite3.Row]:
+def worker_timer_events(con: "db.Connection", worker_id: int) -> list[db.Row]:
     return con.execute(
         "SELECT * FROM processing_timer_events WHERE worker_id=? ORDER BY id", (worker_id,)
     ).fetchall()
 
 
-def worker_timer_summary(con: sqlite3.Connection, worker_id: int) -> dict[str, Any]:
+def worker_timer_summary(con: "db.Connection", worker_id: int) -> dict[str, Any]:
     events = worker_timer_events(con, worker_id)
     state = "NAO_INICIADA"
     first_start: Optional[datetime] = None
@@ -230,15 +225,15 @@ def worker_timer_summary(con: sqlite3.Connection, worker_id: int) -> dict[str, A
 def ensure_worker_function_column() -> None:
     con = db_connect()
     try:
-        con.execute("ALTER TABLE processing_workers ADD COLUMN function TEXT NOT NULL DEFAULT 'PROCESSAMENTO'")
+        con.execute("ALTER TABLE processing_workers ADD COLUMN IF NOT EXISTS function TEXT NOT NULL DEFAULT 'PROCESSAMENTO'")
         con.commit()
-    except sqlite3.OperationalError:
+    except db.Error:
         pass
     finally:
         con.close()
 
 
-def refresh_processing_card_status(con: sqlite3.Connection, processing_id: int) -> None:
+def refresh_processing_card_status(con: "db.Connection", processing_id: int) -> None:
     record = con.execute("SELECT * FROM processing_records WHERE id=?", (processing_id,)).fetchone()
     if not record or record["status"] != "ABERTO":
         return
@@ -265,7 +260,7 @@ def refresh_processing_card_status(con: sqlite3.Connection, processing_id: int) 
     )
 
 
-def processing_validation(con: sqlite3.Connection, processing_id: int) -> list[str]:
+def processing_validation(con: "db.Connection", processing_id: int) -> list[str]:
     record = con.execute("SELECT * FROM processing_records WHERE id=?", (processing_id,)).fetchone()
     if not record:
         return ["Processamento não encontrado."]
@@ -337,7 +332,7 @@ def processing_validation(con: sqlite3.Connection, processing_id: int) -> list[s
 
 
 
-def processing_card_data(con: sqlite3.Connection, card_id: int) -> Optional[dict[str, Any]]:
+def processing_card_data(con: "db.Connection", card_id: int) -> Optional[dict[str, Any]]:
     record = con.execute(
         """SELECT pr.*,u1.name created_by_name,u2.name completed_by_name
            FROM processing_records pr
@@ -661,7 +656,7 @@ async def add_processing_worker(processing_id: int, request: Request):
             "INSERT INTO processing_workers(processing_id,user_id,created_at,function) VALUES(?,?,?,?)",
             (processing_id, worker_user_id, iso_now(), func),
         )
-    except sqlite3.IntegrityError:
+    except db.IntegrityError:
         con.close()
         raise HTTPException(400, "Este colaborador já está no Processamento.")
     add_history(

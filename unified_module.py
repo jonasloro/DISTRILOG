@@ -3,7 +3,7 @@ from __future__ import annotations
 import io
 import os
 import re
-import sqlite3
+import db
 import unicodedata
 from datetime import datetime
 from pathlib import Path
@@ -16,14 +16,11 @@ from pypdf import PdfReader
 
 
 BASE_DIR = Path(__file__).resolve().parent
-DB_PATH = Path(os.getenv("OUTLOG_DATA_DIR", str(BASE_DIR / "data"))).resolve() / "controle_logistica.db"
 
 
-def db_connect() -> sqlite3.Connection:
-    con = sqlite3.connect(DB_PATH)
-    con.row_factory = sqlite3.Row
-    con.execute("PRAGMA foreign_keys=ON")
-    return con
+def db_connect() -> "db.Connection":
+    """Conexão direta com o Supabase (pool)."""
+    return db.connect()
 
 
 def now() -> str:
@@ -77,7 +74,7 @@ def parse_pdf_items(raw: bytes) -> tuple[str, list[dict[str, Any]]]:
     return document_no, list(parsed.values())
 
 
-def require_user(con: sqlite3.Connection, user_id: int, roles: set[str] | None = None) -> sqlite3.Row:
+def require_user(con: "db.Connection", user_id: int, roles: set[str] | None = None) -> db.Row:
     row = con.execute("SELECT id,username,name,role FROM users WHERE id=?", (user_id,)).fetchone()
     if not row:
         raise HTTPException(401, "Usuário inválido.")
@@ -223,7 +220,7 @@ def init_unified_db() -> None:
     con.close()
 
 
-def add_movement(con: sqlite3.Connection, domain: str, entity_id: int | None, event: str, description: str, user_id: int | None) -> None:
+def add_movement(con: "db.Connection", domain: str, entity_id: int | None, event: str, description: str, user_id: int | None) -> None:
     con.execute(
         "INSERT INTO unified_movements(domain,entity_id,event_type,description,user_id,created_at) VALUES(?,?,?,?,?,?)",
         (domain, entity_id, event, description, user_id, now()),

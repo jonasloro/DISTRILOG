@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import math
 import os
-import sqlite3
+import db
 import uuid
 import mimetypes
 from datetime import datetime, time, timedelta
@@ -16,7 +16,6 @@ from fastapi.responses import Response
 from positions_module import move_ten_percent_sample_into_balance, total_ten_percent_sample_in_balance, total_volume_only_allocated
 
 BASE_DIR = Path(__file__).resolve().parent
-DB_PATH = Path(os.getenv("OUTLOG_DATA_DIR", str(BASE_DIR / "data"))).resolve() / "controle_logistica.db"
 router = APIRouter(prefix="/api", tags=["Qualidade"])
 
 QUALITY_ROLES = {"qualidade", "supervisor", "admin"}
@@ -38,64 +37,15 @@ QUALITY_HISTORY_EVENT_TYPES = (
 )
 
 
-class QualitySQLiteConnection(sqlite3.Connection):
-    """SQLite compatível com os módulos legados; o commit só é confirmado após gravar no Supabase."""
-
-    def commit(self) -> None:
-        if getattr(self, "_quality_persistence_enabled", False):
-            from supabase_module import sync_quality_state_to_supabase
-
-            try:
-                snapshot = sync_quality_state_to_supabase(
-                    self,
-                    getattr(self, "_quality_remote_snapshot", {}),
-                    getattr(self, "_quality_remote_card_snapshot", None),
-                )
-            except Exception as exc:
-                self.rollback()
-                raise HTTPException(
-                    503,
-                    "Não foi possível salvar a operação da Qualidade no Supabase. A alteração local foi revertida; atualize e tente novamente.",
-                ) from exc
-            self._quality_remote_snapshot = snapshot
-        super().commit()
-
-
-def db_connect(persist: bool = True) -> sqlite3.Connection:
-    if persist and not os.getenv("SUPABASE_DATABASE_URL"):
+def db_connect(persist: bool = True) -> "db.Connection":
+    """Conexão direta com o Supabase: a Qualidade grava e lê tudo lá, sem cópia local."""
+    try:
+        return db.connect()
+    except RuntimeError as exc:
         raise HTTPException(
             503,
-            "A Qualidade exige conexão com o Supabase. Configure SUPABASE_DATABASE_URL; operações não serão salvas apenas no SQLite.",
-        )
-    con = sqlite3.connect(DB_PATH, timeout=10, factory=QualitySQLiteConnection)
-    con.row_factory = sqlite3.Row
-    con.execute("PRAGMA foreign_keys=ON")
-    con.execute("PRAGMA journal_mode=WAL")
-    con.execute("PRAGMA synchronous=NORMAL")
-    con._quality_persistence_enabled = False
-    if persist:
-        try:
-            from supabase_module import (
-                restore_card_state_for_quality,
-                restore_quality_state_from_supabase,
-            )
-
-            # Restore the Quality tables first, while SQLite foreign-key mode can be
-            # safely toggled by the restore routine; then refresh the live Card routing fields.
-            con._quality_remote_snapshot = restore_quality_state_from_supabase(con)
-            con._quality_remote_card_snapshot = restore_card_state_for_quality(con)
-            con.commit()
-            con._quality_persistence_enabled = True
-        except HTTPException:
-            con.close()
-            raise
-        except Exception as exc:
-            con.close()
-            raise HTTPException(
-                503,
-                "Não foi possível carregar os dados persistidos da Qualidade no Supabase. A operação foi bloqueada para evitar divergência.",
-            ) from exc
-    return con
+            "A Qualidade exige conexão com o Supabase. Configure SUPABASE_DATABASE_URL.",
+        ) from exc
 
 
 def iso_now() -> str:
@@ -115,21 +65,21 @@ def from_json(value: Optional[str], default: Any) -> Any:
         return default
 
 
-def get_user(con: sqlite3.Connection, user_id: int) -> sqlite3.Row:
+def get_user(con: "db.Connection", user_id: int) -> db.Row:
     row = con.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
     if not row:
         raise HTTPException(401, "Usuário inválido.")
     return row
 
 
-def require_role(con: sqlite3.Connection, user_id: int, allowed: set[str]) -> sqlite3.Row:
+def require_role(con: "db.Connection", user_id: int, allowed: set[str]) -> db.Row:
     user = get_user(con, user_id)
     if user["role"] not in allowed:
         raise HTTPException(403, "Seu perfil não possui permissão para esta ação.")
     return user
 
 
-def latest_receiving_sample(con: sqlite3.Connection, card_id: int, receiving_type: str) -> Optional[sqlite3.Row]:
+def latest_receiving_sample(con: "db.Connection", card_id: int, receiving_type: str) -> Optional[db.Row]:
     """Find the latest receiving operation for this Card and receiving type."""
     return con.execute(
         "SELECT * FROM receivings WHERE card_id=? AND receiving_type=? ORDER BY id DESC LIMIT 1",
@@ -137,44 +87,10 @@ def latest_receiving_sample(con: sqlite3.Connection, card_id: int, receiving_typ
     ).fetchone()
 
 
-def require_completed_receiving_sample(con: sqlite3.Connection, card_id: int, receiving_type: str) -> sqlite3.Row:
+def require_completed_receiving_sample(con: "db.Connection", card_id: int, receiving_type: str) -> db.Row:
     """Read the 10% gate from Supabase, then refresh the local working copy for the inspection FK."""
-    from supabase_module import (
-        get_latest_receiving_from_supabase,
-        restore_receiving_state_from_supabase,
-        sync_receiving_card_state_to_supabase,
-    )
-
-    try:
-        # Supabase is authoritative for this gate. If an older deployment missed a write,
-        # seed the remote row from the existing local operation once, then query Supabase again.
-        remote_latest = get_latest_receiving_from_supabase(card_id, receiving_type)
-        if not remote_latest:
-            local_candidate = latest_receiving_sample(con, card_id, receiving_type)
-            if local_candidate:
-                # Refresh canonical Receiving rows first, then backfill only the legacy
-                # operation that is missing remotely.
-                restore_receiving_state_from_supabase(con, card_id=card_id)
-                con.commit()
-                local_candidate = latest_receiving_sample(con, card_id, receiving_type)
-                if local_candidate:
-                    sync_receiving_card_state_to_supabase(
-                        con, card_id, receiving_type=receiving_type
-                    )
-                    remote_latest = get_latest_receiving_from_supabase(card_id, receiving_type)
-        # Load the authoritative row (and events/links) into SQLite only as the local
-        # working copy required by existing Quality tables and foreign keys.
-        restore_receiving_state_from_supabase(con, card_id=card_id)
-        con.commit()
-        local_latest = latest_receiving_sample(con, card_id, receiving_type)
-    except Exception as exc:
-        con.rollback()
-        con.close()
-        print("[qualidade] falha ao consultar/restaurar Recebimento do Card {} no Supabase: {}".format(card_id, exc))
-        raise HTTPException(
-            503,
-            "Não foi possível consultar o Recebimento persistido no Supabase. A inspeção não foi criada; verifique a conexão e tente novamente.",
-        ) from exc
+    local_latest = latest_receiving_sample(con, card_id, receiving_type)
+    remote_latest = local_latest
 
     if remote_latest:
         if remote_latest["physical_status"] != "CONCLUIDO":
@@ -254,14 +170,7 @@ def require_completed_receiving_sample(con: sqlite3.Connection, card_id: int, re
                 con, card_id, "RECEBIMENTO_RECUPERADO",
                 "O registro original do Recebimento não existia no Supabase. O controle foi reaberto como pendente; volumes e separação dos 10% precisam ser registrados novamente.",
             )
-            try:
-                sync_receiving_card_state_to_supabase(con, card_id)
-                con.commit()
-            except Exception as exc:
-                con.rollback()
-                con.close()
-                print("[qualidade] falha ao reabrir Recebimento do Card {} no Supabase: {}".format(card_id, exc))
-                raise HTTPException(503, "Não foi possível reabrir o Recebimento no Supabase. A inspeção não foi criada; tente novamente.") from exc
+            con.commit()
             con.close()
             raise HTTPException(
                 409,
@@ -280,7 +189,7 @@ def require_completed_receiving_sample(con: sqlite3.Connection, card_id: int, re
     )
 
 
-def ensure_quality_sector_owner(con: sqlite3.Connection, inspection: sqlite3.Row, actor_role: str) -> None:
+def ensure_quality_sector_owner(con: "db.Connection", inspection: db.Row, actor_role: str) -> None:
     """Allow mutations only while the Card or the selected Quality items belong to Quality."""
     card = con.execute(
         "SELECT id,current_sector,source_snapshot_at FROM cards WHERE id=?",
@@ -309,7 +218,7 @@ def ensure_quality_sector_owner(con: sqlite3.Connection, inspection: sqlite3.Row
 
 
 def add_history(
-    con: sqlite3.Connection,
+    con: "db.Connection",
     card_id: int,
     event_type: str,
     description: str,
@@ -353,7 +262,7 @@ def business_seconds_between(start: datetime, end: datetime) -> int:
 
 
 def init_quality_db() -> None:
-    con = db_connect(persist=False)
+    con = db_connect()
     con.executescript(
         """
         CREATE TABLE IF NOT EXISTS quality_inspections (
@@ -462,6 +371,16 @@ def init_quality_db() -> None:
             created_at TEXT NOT NULL
         )"""
     )
+    con.execute(
+        """CREATE TABLE IF NOT EXISTS quality_files (
+            id TEXT PRIMARY KEY,
+            original_name TEXT NOT NULL,
+            content_type TEXT NOT NULL,
+            content BYTEA NOT NULL,
+            uploaded_by BIGINT NOT NULL,
+            created_at TEXT NOT NULL
+        )"""
+    )
     inspection_columns = {row["name"] for row in con.execute("PRAGMA table_info(quality_inspections)").fetchall()}
     if "purchase_mode" not in inspection_columns:
         con.execute("ALTER TABLE quality_inspections ADD COLUMN purchase_mode TEXT NOT NULL DEFAULT 'GRADE'")
@@ -491,93 +410,37 @@ def init_quality_db() -> None:
     con.commit()
     con.close()
 
-    # Migra registros antigos apenas se o Supabase ainda não tiver dados de Qualidade.
-    # A partir daqui, toda rota exige Supabase e o SQLite funciona só como cache de compatibilidade.
-    if os.getenv("SUPABASE_DATABASE_URL"):
-        cache_con = db_connect(persist=False)
-        try:
-            from supabase_module import bootstrap_quality_state
-
-            bootstrap_quality_state(cache_con)
-            cache_con.commit()
-        except Exception as exc:
-            print("[qualidade] não foi possível inicializar a persistência no Supabase: {}".format(exc))
-        finally:
-            cache_con.close()
-        migrate_legacy_quality_evidence()
-
-def migrate_legacy_quality_evidence() -> None:
-    """Move locally stored legacy Quality photos to Supabase without duplicating uploads."""
-    if not os.getenv("SUPABASE_DATABASE_URL"):
-        return
-    con = None
+def store_quality_files(files: list[dict]) -> list[str]:
+    """Grava todas as evidências (fotos) da Qualidade de uma vez, direto no Supabase."""
+    if not files:
+        return []
+    con = db_connect()
     try:
-        from app import UPLOAD_DIR
-        from supabase_module import store_quality_files
-
-        con = db_connect()
-        assignments = con.execute(
-            """SELECT id,photo_paths,assigned_by FROM quality_assignments
-               WHERE photo_paths LIKE '%/uploads/%'"""
-        ).fetchall()
-        pending_files: dict[str, dict] = {}
-        updated_paths: dict[int, list[str]] = {}
-        allowed_types = {"image/jpeg", "image/png", "image/webp", "image/gif", "image/bmp"}
-        max_file_size = 10 * 1024 * 1024
-        for assignment in assignments:
-            paths = from_json(assignment["photo_paths"], [])
-            if not isinstance(paths, list):
-                continue
-            revised = list(paths)
-            changed = False
-            for index, value in enumerate(paths):
-                if not isinstance(value, str) or not value.startswith("/uploads/"):
-                    continue
-                filename = Path(value).name
-                source_path = Path(UPLOAD_DIR) / filename
-                if not filename or not source_path.is_file():
-                    continue
-                content_type = mimetypes.guess_type(filename)[0]
-                if content_type not in allowed_types:
-                    continue
-                content = source_path.read_bytes()
-                if not content or len(content) > max_file_size:
-                    continue
-                file_id = uuid.uuid5(
-                    uuid.NAMESPACE_URL, "distrilog-quality-legacy:" + filename
-                ).hex
-                pending_files.setdefault(file_id, {
-                    "id": file_id,
-                    "original_name": filename[:255],
-                    "content_type": content_type,
-                    "content": content,
-                    "uploaded_by": int(assignment["assigned_by"] or 0),
-                    "created_at": iso_now(),
-                })
-                revised[index] = "/api/quality/files/{}".format(file_id)
-                changed = True
-            if changed:
-                updated_paths[int(assignment["id"])] = revised
-
-        if pending_files:
-            store_quality_files(list(pending_files.values()))
-        for assignment_id, paths in updated_paths.items():
+        for uploaded in files:
             con.execute(
-                "UPDATE quality_assignments SET photo_paths=? WHERE id=?",
-                (to_json(paths), assignment_id),
+                """INSERT OR IGNORE INTO quality_files(
+                       id,original_name,content_type,content,uploaded_by,created_at
+                   ) VALUES(?,?,?,?,?,?)""",
+                (
+                    uploaded["id"], uploaded["original_name"], uploaded["content_type"],
+                    uploaded["content"], int(uploaded["uploaded_by"]), uploaded["created_at"],
+                ),
             )
-        if updated_paths:
-            con.commit()
-    except Exception as exc:
-        print("[qualidade] não foi possível migrar todas as evidências locais para o Supabase: {}".format(exc))
-        if con is not None:
-            try:
-                con.rollback()
-            except Exception:
-                pass
+        con.commit()
     finally:
-        if con is not None:
-            con.close()
+        con.close()
+    return ["/api/quality/files/{}".format(uploaded["id"]) for uploaded in files]
+
+
+def get_quality_file(file_id: str) -> dict | None:
+    con = db_connect()
+    try:
+        row = con.execute(
+            "SELECT original_name,content_type,content FROM quality_files WHERE id=?", (file_id,)
+        ).fetchone()
+    finally:
+        con.close()
+    return dict(row) if row else None
 
 
 def normalize_purchase_mode(value: Any) -> str:
@@ -587,7 +450,7 @@ def normalize_purchase_mode(value: Any) -> str:
     return mode
 
 
-def distribute_grade_sample(items: list[sqlite3.Row], requested_total: int) -> tuple[int, list[tuple[int, int]]]:
+def distribute_grade_sample(items: list[db.Row], requested_total: int) -> tuple[int, list[tuple[int, int]]]:
     valid = [item for item in items if int(item["expected_qty"] or 0) > 0]
     if not valid:
         raise HTTPException(400, "Não existem itens com quantidade válida para compor a amostra da Grade.")
@@ -619,7 +482,7 @@ def distribute_grade_sample(items: list[sqlite3.Row], requested_total: int) -> t
 
 
 def create_automatic_sample(
-    con: sqlite3.Connection, inspection_id: int, card_id: int, purchase_mode: str, requested_total: int,
+    con: "db.Connection", inspection_id: int, card_id: int, purchase_mode: str, requested_total: int,
     item_ids: Optional[list[int]] = None,
 ) -> int:
     if item_ids:
@@ -651,14 +514,14 @@ def create_automatic_sample(
     return target
 
 
-def worker_timer_events(con: sqlite3.Connection, worker_id: int) -> list[sqlite3.Row]:
+def worker_timer_events(con: "db.Connection", worker_id: int) -> list[db.Row]:
     return con.execute(
         "SELECT * FROM quality_worker_timer_events WHERE worker_id=? ORDER BY id",
         (worker_id,),
     ).fetchall()
 
 
-def worker_timer_summary(con: sqlite3.Connection, worker_id: int) -> dict[str, Any]:
+def worker_timer_summary(con: "db.Connection", worker_id: int) -> dict[str, Any]:
     events = worker_timer_events(con, worker_id)
     state = "NAO_INICIADA"
     first_start: Optional[datetime] = None
@@ -711,7 +574,7 @@ def worker_timer_summary(con: sqlite3.Connection, worker_id: int) -> dict[str, A
     }
 
 
-def assignment_is_valid(row: sqlite3.Row | dict[str, Any]) -> tuple[bool, list[str]]:
+def assignment_is_valid(row: db.Row | dict[str, Any]) -> tuple[bool, list[str]]:
     data = dict(row)
     errors: list[str] = []
     assigned = int(data.get("assigned_qty") or 0)
@@ -744,10 +607,10 @@ def assignment_is_valid(row: sqlite3.Row | dict[str, Any]) -> tuple[bool, list[s
 
 
 def get_or_create_worker(
-    con: sqlite3.Connection,
+    con: "db.Connection",
     inspection_id: int,
     inspector_id: int,
-) -> sqlite3.Row:
+) -> db.Row:
     worker = con.execute(
         "SELECT * FROM quality_workers WHERE inspection_id=? AND inspector_id=?",
         (inspection_id, inspector_id),
@@ -761,7 +624,7 @@ def get_or_create_worker(
     return con.execute("SELECT * FROM quality_workers WHERE id=?", (cur.lastrowid,)).fetchone()
 
 
-def sample_item_rows(con: sqlite3.Connection, inspection_id: int) -> list[dict[str, Any]]:
+def sample_item_rows(con: "db.Connection", inspection_id: int) -> list[dict[str, Any]]:
     rows = con.execute(
         """
         SELECT qs.*,i.product,i.reference,i.sku,i.color,i.size,i.lot,i.expected_qty,
@@ -790,7 +653,7 @@ def sample_item_rows(con: sqlite3.Connection, inspection_id: int) -> list[dict[s
     return result
 
 
-def inspection_validation(con: sqlite3.Connection, inspection_id: int) -> list[str]:
+def inspection_validation(con: "db.Connection", inspection_id: int) -> list[str]:
     inspection = con.execute("SELECT * FROM quality_inspections WHERE id=?", (inspection_id,)).fetchone()
     if not inspection:
         return ["Inspeção não encontrada."]
@@ -862,7 +725,7 @@ def inspection_validation(con: sqlite3.Connection, inspection_id: int) -> list[s
     return errors
 
 
-def refresh_quality_card_status(con: sqlite3.Connection, inspection_id: int) -> str:
+def refresh_quality_card_status(con: "db.Connection", inspection_id: int) -> str:
     inspection = con.execute("SELECT * FROM quality_inspections WHERE id=?", (inspection_id,)).fetchone()
     if not inspection or inspection["status"] == "CONCLUIDA":
         return "INSPECAO_CONCLUIDA"
@@ -888,7 +751,7 @@ def refresh_quality_card_status(con: sqlite3.Connection, inspection_id: int) -> 
     return card_status
 
 
-def quality_card_data(con: sqlite3.Connection, card_id: int) -> Optional[dict[str, Any]]:
+def quality_card_data(con: "db.Connection", card_id: int) -> Optional[dict[str, Any]]:
     inspection = con.execute(
         """SELECT qi.*,uc.name created_by_name,uf.name completed_by_name
            FROM quality_inspections qi
@@ -1032,7 +895,6 @@ async def upload_quality_files(
         })
 
     try:
-        from supabase_module import store_quality_files
 
         paths = store_quality_files(prepared)
     except Exception as exc:
@@ -1046,7 +908,6 @@ def get_quality_evidence(file_id: str):
     if not file_id or len(file_id) != 32 or any(ch not in "0123456789abcdef" for ch in file_id.lower()):
         raise HTTPException(404, "Evidência não encontrada.")
     try:
-        from supabase_module import get_quality_file
 
         file_record = get_quality_file(file_id.lower())
     except Exception as exc:
@@ -1146,7 +1007,7 @@ async def create_inspection(card_id: int, request: Request):
                     f"Até agora foram alocados {sample_allocated}.",
                 )
 
-    source_items: list[sqlite3.Row] = []
+    source_items: list[db.Row] = []
     source_subset = False
     if source_subset_requested:
         stage_filter = (
@@ -1456,10 +1317,10 @@ async def create_assignments_batch(inspection_id: int, request: Request):
             JOIN items i ON i.id=qs.item_id
             LEFT JOIN quality_assignments a ON a.sample_item_id=qs.id
             WHERE qs.inspection_id=?
-            GROUP BY qs.id""",
+            GROUP BY qs.id, i.id""",
         (inspection_id,),
     ).fetchall()
-    samples: dict[int, sqlite3.Row] = {int(row["id"]): row for row in sample_rows}
+    samples: dict[int, db.Row] = {int(row["id"]): row for row in sample_rows}
     errors: list[str] = []
     for sample_item_id, qty in normalized:
         sample = samples.get(sample_item_id)

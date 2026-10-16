@@ -1,12 +1,10 @@
 """Conversa entre colaboradores + calendário de compromissos.
 
-Grava no Supabase (Postgres) quando SUPABASE_DATABASE_URL está configurada, para
-sobreviver a redeploys; sem ela (ex.: teste local) usa um SQLite separado.
+Grava direto no Supabase (Postgres) — SUPABASE_DATABASE_URL é obrigatória.
 """
 from __future__ import annotations
 
 import os
-import sqlite3
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -14,9 +12,6 @@ from typing import Any
 from fastapi import APIRouter, FastAPI, HTTPException
 
 BASE_DIR = Path(__file__).resolve().parent
-DATA_DIR = Path(os.getenv("OUTLOG_DATA_DIR", str(BASE_DIR / "data"))).resolve()
-LOCAL_DB = DATA_DIR / "colaboracao.db"
-USE_PG = bool(os.getenv("SUPABASE_DATABASE_URL"))
 
 router = APIRouter(prefix="/api")
 
@@ -35,20 +30,14 @@ CREATE TABLE IF NOT EXISTS calendar_events(
   created_by_name TEXT NOT NULL, attendees TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS idx_cal_start ON calendar_events(start_at);
 """
-_SQLITE_DDL = _PG_DDL.replace("BIGSERIAL PRIMARY KEY", "INTEGER PRIMARY KEY AUTOINCREMENT").replace("BIGINT", "INTEGER")
 
 
 class _Db:
-    """Camada mínima que esconde a diferença entre Postgres e SQLite."""
+    """Camada mínima sobre o Postgres do Supabase."""
 
     def __init__(self) -> None:
-        if USE_PG:
-            from supabase_module import pg_connect
-            self.con = pg_connect()
-        else:
-            os.makedirs(LOCAL_DB.parent, exist_ok=True)
-            self.con = sqlite3.connect(LOCAL_DB, timeout=10)
-            self.con.row_factory = sqlite3.Row
+        from supabase_module import pg_connect
+        self.con = pg_connect()
 
     def __enter__(self) -> "_Db":
         return self
@@ -60,7 +49,7 @@ class _Db:
             self.con.close()
 
     def _sql(self, sql: str) -> str:
-        return sql.replace("?", "%s") if USE_PG else sql
+        return sql.replace("?", "%s")
 
     def rows(self, sql: str, params: tuple = ()) -> list[dict[str, Any]]:
         cur = self.con.cursor()
@@ -73,17 +62,17 @@ class _Db:
 
     def run(self, sql: str, params: tuple = ()) -> int:
         cur = self.con.cursor()
-        if USE_PG and sql.lstrip().upper().startswith("INSERT"):
+        if sql.lstrip().upper().startswith("INSERT"):
             cur.execute(self._sql(sql) + " RETURNING id", params)
             return int(cur.fetchone()["id"])
         cur.execute(self._sql(sql), params)
-        return int(cur.lastrowid or 0) if not USE_PG else 0
+        return 0
 
 
 def init_collab_db() -> None:
     try:
         with _Db() as db:
-            for stmt in (_PG_DDL if USE_PG else _SQLITE_DDL).split(";"):
+            for stmt in _PG_DDL.split(";"):
                 if stmt.strip():
                     db.run(stmt)
     except Exception as exc:  # não derruba o app se o banco estiver indisponível
@@ -93,13 +82,15 @@ def init_collab_db() -> None:
 def _user(uid: int, fallback: Any = "") -> dict[str, Any]:
     """Nome e perfil vêm da tabela de usuários do app; se não achar, usa o nome informado."""
     try:
-        con = sqlite3.connect(DATA_DIR / "controle_logistica.db", timeout=10)
-        con.row_factory = sqlite3.Row
-        row = con.execute("SELECT name,role FROM users WHERE id=?", (uid,)).fetchone()
-        con.close()
+        import db
+        con = db.connect()
+        try:
+            row = con.execute("SELECT name,role FROM users WHERE id=?", (uid,)).fetchone()
+        finally:
+            con.close()
         if row:
             return {"name": row["name"], "role": row["role"]}
-    except sqlite3.Error:
+    except Exception:
         pass
     return {"name": str(fallback or "").strip()[:80] or f"Usuário {uid}", "role": ""}
 

@@ -3,22 +3,16 @@ from __future__ import annotations
 import json
 import os
 import re
-import sqlite3
+import db
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 from fastapi import APIRouter, FastAPI, File, HTTPException, UploadFile
 from openpyxl import load_workbook
 
-from supabase_module import (
-    pg_connect,
-    sync_card_with_items_to_supabase,
-    sync_receiving_card_state_to_supabase,
-    restore_receiving_state_from_supabase,
-)
+from supabase_module import pg_connect
 
 BASE_DIR = Path(__file__).resolve().parent
-DB_PATH = Path(os.getenv("OUTLOG_DATA_DIR", str(BASE_DIR / "data"))).resolve() / "controle_logistica.db"
 router = APIRouter(prefix="/api/goat", tags=["GOAT"])
 
 SHEET_LABELS = {
@@ -32,13 +26,9 @@ SHEET_LABELS = {
 }
 
 
-def db_connect() -> sqlite3.Connection:
-    os.makedirs(DB_PATH.parent, exist_ok=True)
-    con = sqlite3.connect(DB_PATH, timeout=10)
-    con.row_factory = sqlite3.Row
-    con.execute("PRAGMA journal_mode=WAL")
-    con.execute("PRAGMA synchronous=NORMAL")
-    return con
+def db_connect() -> "db.Connection":
+    """Conexão direta com o Supabase (pool)."""
+    return db.connect()
 
 
 def init_goat_db() -> None:
@@ -47,50 +37,25 @@ def init_goat_db() -> None:
             with con.cursor() as cur:
                 cur.execute(
                     """
-                    CREATE TABLE IF NOT EXISTS goat_imports (
+                    CREATE TABLE IF NOT EXISTS distrilog.goat_imports (
                         id SERIAL PRIMARY KEY,
                         filename TEXT,
                         sheets_count INTEGER,
                         rows_count INTEGER,
                         imported_at TEXT NOT NULL
                     );
-                    CREATE TABLE IF NOT EXISTS goat_records (
+                    CREATE TABLE IF NOT EXISTS distrilog.goat_records (
                         id SERIAL PRIMARY KEY,
                         sheet TEXT NOT NULL,
                         data TEXT NOT NULL,
                         imported_at TEXT NOT NULL
                     );
-                    CREATE INDEX IF NOT EXISTS idx_goat_records_sheet ON goat_records(sheet);
+                    CREATE INDEX IF NOT EXISTS idx_goat_records_sheet ON distrilog.goat_records(sheet);
                     """
                 )
             con.commit()
     except Exception as e:
-        print(f"[aviso] GOAT PG init fallback to SQLite: {e}")
-
-    try:
-        con = db_connect()
-        con.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS goat_imports (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                filename TEXT,
-                sheets_count INTEGER,
-                rows_count INTEGER,
-                imported_at TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS goat_records (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                sheet TEXT NOT NULL,
-                data TEXT NOT NULL,
-                imported_at TEXT NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_goat_records_sheet ON goat_records(sheet);
-            """
-        )
-        con.commit()
-        con.close()
-    except Exception as e:
-        print(f"[erro] GOAT SQLite init error: {e}")
+        print(f"[aviso] GOAT: não consegui preparar as tabelas no Supabase: {e}")
 
 
 def _cell(v: Any) -> Any:
@@ -115,32 +80,18 @@ def _get_sheet_records(sheet_name: str) -> list[dict[str, Any]]:
     try:
         with pg_connect() as con:
             with con.cursor() as cur:
-                cur.execute("SELECT data FROM goat_records WHERE sheet=%s", (sheet_name,))
+                cur.execute("SELECT data FROM distrilog.goat_records WHERE sheet=%s", (sheet_name,))
                 rows = cur.fetchall()
-                res = []
-                for r in rows:
-                    try:
-                        res.append(json.loads(r[0]))
-                    except Exception:
-                        pass
-                if res:
-                    return res
-    except Exception:
-        pass
-
-    try:
-        con = db_connect()
-        rows = con.execute("SELECT data FROM goat_records WHERE sheet=?", (sheet_name,)).fetchall()
-        con.close()
-        res = []
-        for r in rows:
-            try:
-                res.append(json.loads(r["data"]))
-            except Exception:
-                pass
-        return res
-    except Exception:
+    except Exception as e:
+        print(f"[aviso] GOAT: não consegui ler a aba {sheet_name} no Supabase: {e}")
         return []
+    res = []
+    for r in rows:
+        try:
+            res.append(json.loads(r[0]))
+        except Exception:
+            pass
+    return res
 
 
 @router.post("/import")
@@ -159,7 +110,7 @@ async def import_report(file: UploadFile = File(...)) -> dict[str, Any]:
     try:
         with pg_connect() as con:
             with con.cursor() as cur:
-                cur.execute("DELETE FROM goat_records")
+                cur.execute("DELETE FROM distrilog.goat_records")
                 for sheet_name in wb.sheetnames:
                     ws = wb[sheet_name]
                     rows_iter = ws.iter_rows(values_only=True)
@@ -174,46 +125,16 @@ async def import_report(file: UploadFile = File(...)) -> dict[str, Any]:
                         record = {headers[i]: _cell(row[i]) for i in range(min(len(headers), len(row)))}
                         batch.append((sheet_name, json.dumps(record, ensure_ascii=False), now))
                     if batch:
-                        cur.executemany("INSERT INTO goat_records(sheet,data,imported_at) VALUES(%s,%s,%s)", batch)
+                        cur.executemany("INSERT INTO distrilog.goat_records(sheet,data,imported_at) VALUES(%s,%s,%s)", batch)
                         total_rows += len(batch)
                 cur.execute(
-                    "INSERT INTO goat_imports(filename,sheets_count,rows_count,imported_at) VALUES(%s,%s,%s,%s)",
+                    "INSERT INTO distrilog.goat_imports(filename,sheets_count,rows_count,imported_at) VALUES(%s,%s,%s,%s)",
                     (file.filename, len(wb.sheetnames), total_rows, now),
                 )
             con.commit()
     except Exception as e:
-        print(f"[aviso] Falha ao importar no Supabase: {e}")
-
-    try:
-        con = db_connect()
-        con.execute("DELETE FROM goat_records")
-        sq_total = 0
-        for sheet_name in wb.sheetnames:
-            ws = wb[sheet_name]
-            rows_iter = ws.iter_rows(values_only=True)
-            headers = next(rows_iter, None)
-            if not headers:
-                continue
-            headers = [str(h).strip() if h else f"col{i}" for i, h in enumerate(headers)]
-            for row in rows_iter:
-                if not any(v is not None for v in row):
-                    continue
-                record = {headers[i]: _cell(row[i]) for i in range(min(len(headers), len(row)))}
-                con.execute(
-                    "INSERT INTO goat_records(sheet,data,imported_at) VALUES(?,?,?)",
-                    (sheet_name, json.dumps(record, ensure_ascii=False), now),
-                )
-                sq_total += 1
-        con.execute(
-            "INSERT INTO goat_imports(filename,sheets_count,rows_count,imported_at) VALUES(?,?,?,?)",
-            (file.filename, len(wb.sheetnames), sq_total, now),
-        )
-        con.commit()
-        con.close()
-        if total_rows == 0:
-            total_rows = sq_total
-    except Exception as e:
-        print(f"[erro] Falha no SQLite import: {e}")
+        print(f"[erro] GOAT: falha ao importar no Supabase: {e}")
+        raise HTTPException(503, "Não foi possível salvar a importação do GOAT no Supabase. Tente novamente.") from e
     finally:
         if tmp.exists():
             tmp.unlink()
@@ -226,9 +147,9 @@ def status() -> dict[str, Any]:
     try:
         with pg_connect() as con:
             with con.cursor() as cur:
-                cur.execute("SELECT id, filename, sheets_count, rows_count, imported_at FROM goat_imports ORDER BY id DESC LIMIT 1")
+                cur.execute("SELECT id, filename, sheets_count, rows_count, imported_at FROM distrilog.goat_imports ORDER BY id DESC LIMIT 1")
                 last = cur.fetchone()
-                cur.execute("SELECT sheet, COUNT(*) FROM goat_records GROUP BY sheet")
+                cur.execute("SELECT sheet, COUNT(*) FROM distrilog.goat_records GROUP BY sheet")
                 sheets = cur.fetchall()
 
                 last_dict = None
@@ -243,18 +164,6 @@ def status() -> dict[str, Any]:
 
                 sheets_list = [{"sheet": s[0], "label": SHEET_LABELS.get(s[0], s[0]), "rows": s[1]} for s in sheets if s]
                 return {"last_import": last_dict, "sheets": sheets_list}
-    except Exception:
-        pass
-
-    try:
-        con = db_connect()
-        last = con.execute("SELECT * FROM goat_imports ORDER BY id DESC LIMIT 1").fetchone()
-        sheets = con.execute("SELECT sheet, COUNT(*) c FROM goat_records GROUP BY sheet").fetchall()
-        con.close()
-
-        last_dict = dict(last) if last else None
-        sheets_list = [{"sheet": s["sheet"], "label": SHEET_LABELS.get(s["sheet"], s["sheet"]), "rows": s["c"]} for s in sheets if s]
-        return {"last_import": last_dict, "sheets": sheets_list}
     except Exception as e:
         print(f"[aviso] GOAT status error: {e}")
         return {"last_import": None, "sheets": []}
@@ -437,10 +346,6 @@ def create_manual_card(payload: dict[str, Any]) -> dict[str, Any]:
                 now,
             ),
         )
-        # Persiste card e grade no Supabase antes do commit local.
-        # Se a persistência remota falhar, a transação SQLite também é revertida.
-        if os.getenv("SUPABASE_DATABASE_URL"):
-            sync_card_with_items_to_supabase(con, card_id)
         con.commit()
     finally:
         con.close()
@@ -486,16 +391,6 @@ def confirm_receiving(payload: dict[str, Any]) -> dict[str, Any]:
         con.execute("PRAGMA foreign_keys=ON")
         if not con.execute("SELECT 1 FROM cards WHERE id=?", (card_id,)).fetchone():
             raise HTTPException(404, "Card não encontrado.")
-        try:
-            restore_receiving_state_from_supabase(con, card_id=card_id)
-            con.commit()
-        except Exception as exc:
-            con.rollback()
-            print("[erro] não consegui ler o Recebimento do Card {} no Supabase: {}".format(card_id, exc))
-            raise HTTPException(
-                503,
-                "Não foi possível atualizar o Recebimento no Supabase. A conferência não foi executada; tente novamente.",
-            ) from exc
         rec = con.execute(
             "SELECT id FROM receivings WHERE card_id=? AND closed_at IS NULL ORDER BY id DESC LIMIT 1", (card_id,)
         ).fetchone()
@@ -512,15 +407,6 @@ def confirm_receiving(payload: dict[str, Any]) -> dict[str, Any]:
             "INSERT INTO history(card_id,user_id,event_type,description,created_at) VALUES(?,?,?,?,?)",
             (card_id, None, "CONFERENCIA", f"Conferência {status}: {pecas} peças, {vol} volumes, casulo {casulo}. {obs}".strip(), now),
         )
-        try:
-            sync_receiving_card_state_to_supabase(con, card_id)
-        except Exception as exc:
-            con.rollback()
-            print("[erro] falha ao persistir a conferência do Card {} no Supabase: {}".format(card_id, exc))
-            raise HTTPException(
-                503,
-                "A conferência não foi confirmada no Supabase. Nenhuma alteração foi considerada salva; tente novamente.",
-            ) from exc
         con.commit()
     finally:
         con.close()
