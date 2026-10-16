@@ -190,6 +190,11 @@ def _translate_segment(seg: str) -> str:
     seg = seg.replace("?", _PARAM)
     seg = _TABLE_RE.sub(lambda m: f"{SCHEMA}.{m.group(1)}", seg)
     seg = re.sub(r"\bLIKE\b", "ILIKE", seg, flags=re.IGNORECASE)
+    # card_allocations.active é BOOLEAN no Postgres; o SQL legado compara com 0/1
+    seg = re.sub(r"\bSET\s+active\s*=\s*0\b", "SET active=FALSE", seg, flags=re.IGNORECASE)
+    seg = re.sub(r"\bSET\s+active\s*=\s*1\b", "SET active=TRUE", seg, flags=re.IGNORECASE)
+    seg = re.sub(r"\bactive\s*=\s*1\b", "active IS TRUE", seg, flags=re.IGNORECASE)
+    seg = re.sub(r"\bactive\s*=\s*0\b", "active IS FALSE", seg, flags=re.IGNORECASE)
     seg = re.sub(r"\bINTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT\b", "BIGSERIAL PRIMARY KEY", seg, flags=re.IGNORECASE)
     seg = re.sub(r"\bREAL\b", "DOUBLE PRECISION", seg, flags=re.IGNORECASE)
     seg = re.sub(r"\bBLOB\b", "BYTEA", seg, flags=re.IGNORECASE)

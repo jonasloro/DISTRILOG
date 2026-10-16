@@ -65,8 +65,8 @@ STATUS_LABELS = {
     "DESPACHO_CD02": "Despacho CD02",
     "AGUARDANDO_RECEBIMENTO_RETORNO": "Aguardando recebimento do retorno",
     "RETORNO_CONCLUIDO": "Retorno concluído — aguardando inspeção",
-    "RETORNO_FISICO_CONCLUIDO_10_PENDENTE": "Retorno recebido — separação dos 10% pendente",
-    "SEPARACAO_RETORNO_10_CONCLUIDA_FISICO_PENDENTE": "10% do retorno separados — recebimento pendente",
+    "RETORNO_FISICO_CONCLUIDO_10_PENDENTE": "Retorno recebido — endereçamento pendente",
+    "SEPARACAO_RETORNO_10_CONCLUIDA_FISICO_PENDENTE": "Endereçamento do retorno — conferência física pendente",
     "AGUARDANDO_INSPECAO": "Aguardando inspeção",
     "EM_INSPECAO": "Em inspeção",
     "INSPECAO_PAUSADA": "Inspeção pausada",
@@ -121,9 +121,24 @@ def iso_now() -> str:
 def persist_receiving_then_commit(
     con: "db.Connection", card_id: int, failure_message: str,
     sync_item_ids: list[int] | None = None,
+    release_stock_allocations: bool = False,
+    release_stock_allocations_before: str | None = None,
 ) -> None:
-    """Confirma a operação direto no Supabase (uma transação só)."""
+    """Confirma a operação direto no Supabase (uma transação só), liberando alocações se pedido."""
     try:
+        if release_stock_allocations:
+            con.execute(
+                """UPDATE card_allocations SET active=FALSE
+                   WHERE card_id=? AND active IS TRUE AND setor IN ('RM','QA','PR')""",
+                (int(card_id),),
+            )
+        elif release_stock_allocations_before is not None:
+            con.execute(
+                """UPDATE card_allocations SET active=FALSE
+                   WHERE card_id=? AND active IS TRUE AND setor IN ('RM','QA','PR')
+                     AND (created_at < ? OR allocation_purpose='TEN_PERCENT_SAMPLE')""",
+                (int(card_id), release_stock_allocations_before),
+            )
         con.commit()
     except Exception as exc:
         con.rollback()
@@ -644,7 +659,9 @@ def init_db() -> None:
         );
         """
     )
-    # Garante as colunas/vínculos necessários do Recebimento no banco.
+    # These Receiving migrations must exist before bootstrap restoration reads Supabase.
+    # Otherwise a fresh local SQLite file can lack columns/links needed to restore the
+    # authoritative remote Receiving record.
     receiving_columns = {row["name"] for row in con.execute("PRAGMA table_info(receivings)").fetchall()}
     if "source_subset" not in receiving_columns:
         con.execute("ALTER TABLE receivings ADD COLUMN source_subset INTEGER NOT NULL DEFAULT 0")
@@ -717,19 +734,14 @@ def init_db() -> None:
             FOREIGN KEY(item_id) REFERENCES items(id) ON DELETE CASCADE
         )"""
     )
-    con.execute("UPDATE receivings SET ten_percent_required=1 WHERE receiving_type='RETORNO' AND closed_at IS NULL")
-    open_returns = con.execute(
-        """SELECT r.id,r.received_qty,c.purchase_mode,c.id card_id
-           FROM receivings r JOIN cards c ON c.id=r.card_id
-           WHERE r.receiving_type='RETORNO' AND r.closed_at IS NULL"""
-    ).fetchall()
-    for receiving in open_returns:
-        base_qty = int(receiving["received_qty"] or 0)
-        item_count = con.execute(
-            "SELECT COUNT(*) n FROM items WHERE card_id=? AND expected_qty>0", (receiving["card_id"],)
-        ).fetchone()["n"]
-        minimum = max(math.ceil(base_qty * 0.10), item_count if receiving["purchase_mode"] == "GRADE" else 0)
-        con.execute("UPDATE receivings SET ten_percent_min=? WHERE id=?", (minimum, receiving["id"]))
+    # Retorno da Costura tem conferência física e Inspeção 2, sem tiragem no Recebimento.
+    # Dados históricos de registros fechados são preservados; retornos abertos são normalizados.
+    con.execute(
+        """UPDATE receivings SET ten_percent_required=0,ten_percent_min=0,
+           ten_percent_actual=CASE WHEN closed_at IS NULL THEN NULL ELSE ten_percent_actual END,
+           ten_percent_status=CASE WHEN closed_at IS NULL THEN 'NAO_INICIADA' ELSE ten_percent_status END
+           WHERE receiving_type='RETORNO'"""
+    )
     con.execute("""UPDATE cards SET purchase_mode=CASE
         WHEN lower(COALESCE(original_type,'')) LIKE '%private%label%' THEN 'GRADE'
         WHEN lower(COALESCE(original_type,'')) LIKE '%saldo%' THEN 'SALDO'
@@ -832,15 +844,22 @@ def ensure_receiving(
         item_count = con.execute(
             "SELECT COUNT(*) n FROM items WHERE card_id=? AND expected_qty>0", (card_id,)
         ).fetchone()["n"]
-    required = 1
+    requires_sample = receiving_type != "RETORNO"
+    required = 1 if requires_sample else 0
     mode = con.execute("SELECT purchase_mode FROM cards WHERE id=?", (card_id,)).fetchone()["purchase_mode"]
-    minimum = max(math.ceil(total * 0.10), item_count if mode == "GRADE" else 0)
+    minimum = max(math.ceil(total * 0.10), item_count if mode == "GRADE" else 0) if requires_sample else 0
     if row:
         receiving_id = int(row["id"])
+        if not requires_sample:
+            con.execute(
+                """UPDATE receivings SET ten_percent_required=0,ten_percent_min=0,
+                   ten_percent_actual=NULL,ten_percent_status='NAO_INICIADA' WHERE id=?""",
+                (receiving_id,),
+            )
         if normalized_ids:
             con.execute(
-                "UPDATE receivings SET source_subset=1,ten_percent_required=1,ten_percent_min=? WHERE id=?",
-                (minimum, receiving_id),
+                "UPDATE receivings SET source_subset=1,ten_percent_required=?,ten_percent_min=? WHERE id=?",
+                (required, minimum, receiving_id),
             )
             con.execute("DELETE FROM receiving_operation_items WHERE receiving_id=?", (receiving_id,))
             con.executemany(
@@ -1069,10 +1088,13 @@ def update_new_receiving_flow(con: "db.Connection", receiving_id: int, user_id: 
         raise HTTPException(404, "Recebimento não encontrado.")
     physical_done = rec["physical_status"] == "CONCLUIDO"
     sample_done = rec["ten_percent_status"] == "CONCLUIDA"
+    is_return = rec["receiving_type"] == "RETORNO"
     if rec["receiving_type"] == "COSTURA":
         return con.execute("SELECT status FROM cards WHERE id=?", (rec["card_id"],)).fetchone()["status"]
-    if physical_done and sample_done:
-        is_return = rec["receiving_type"] == "RETORNO"
+
+    # Only the initial receipt requires the 10% separation. A physical sewing return
+    # moves directly to Quality after the full returned stock has been allocated.
+    if physical_done and (sample_done or is_return):
         if rec["source_subset"]:
             mapped_ids = [row["item_id"] for row in con.execute(
                 "SELECT item_id FROM receiving_operation_items WHERE receiving_id=?", (receiving_id,)
@@ -1084,21 +1106,31 @@ def update_new_receiving_flow(con: "db.Connection", receiving_id: int, user_id: 
                         WHERE id IN ({marks})""",
                     mapped_ids,
                 )
-            status = "ORIGEM_MISTO"
+            if is_return:
+                status, next_sector = "AGUARDANDO_INSPECAO", "QUALIDADE"
+            else:
+                status, next_sector = "ORIGEM_MISTO", "RECEBIMENTO"
             con.execute(
-                "UPDATE cards SET current_sector='RECEBIMENTO',status=?,updated_at=? WHERE id=?",
-                (status, iso_now(), rec["card_id"]),
+                "UPDATE cards SET current_sector=?,status=?,updated_at=? WHERE id=?",
+                (next_sector, status, iso_now(), rec["card_id"]),
             )
             con.execute("UPDATE receivings SET closed_at=? WHERE id=?", (iso_now(), receiving_id))
-            if rec["receiving_type"] == "RETORNO":
+            if is_return:
                 event_type = "RECEBIMENTO_RETORNO_CONCLUIDO"
-                description = "Itens retornados da Costura recebidos e nova amostra de 10% separada. Somente esses itens foram encaminhados à Inspeção 2."
+                description = "Retorno da Costura conferido fisicamente e encaminhado à Qualidade para a Inspeção 2. Não há separação dos 10% no Recebimento."
             else:
                 event_type = "RECEBIMENTO_PARCIAL_CONCLUIDO"
                 description = "Itens em trânsito recebidos e com amostra de 10% separada. Somente esses itens foram encaminhados à Qualidade."
             add_history(con, rec["card_id"], event_type, description, user_id)
             return status
-        status = "RETORNO_CONCLUIDO" if is_return else "AGUARDANDO_QUALIDADE"
+
+        status = "AGUARDANDO_INSPECAO" if is_return else "AGUARDANDO_QUALIDADE"
+        if is_return:
+            con.execute(
+                """UPDATE items SET source_stage='QUALIDADE',source_status_quality='Pendente'
+                   WHERE card_id=? AND expected_qty>0""",
+                (rec["card_id"],),
+            )
         con.execute(
             "UPDATE cards SET current_sector='QUALIDADE',status=?,updated_at=? WHERE id=?",
             (status, iso_now(), rec["card_id"]),
@@ -1107,22 +1139,20 @@ def update_new_receiving_flow(con: "db.Connection", receiving_id: int, user_id: 
         add_history(
             con,
             rec["card_id"],
-            "RECEBIMENTO_CONCLUIDO",
-            ("Retorno CD01 recebido e nova amostra de 10% separada. Card encaminhado à Inspeção 2."
+            "RECEBIMENTO_RETORNO_CONCLUIDO" if is_return else "RECEBIMENTO_CONCLUIDO",
+            ("Retorno da Costura conferido fisicamente e encaminhado à Qualidade para a Inspeção 2. Não há separação dos 10% no Recebimento."
              if is_return else
              "Recebimento físico e separação dos 10% concluídos. Card encaminhado automaticamente à Qualidade."),
             user_id,
         )
     elif physical_done:
-        status = ("RETORNO_FISICO_CONCLUIDO_10_PENDENTE" if rec["receiving_type"] == "RETORNO"
-                  else "RECEBIMENTO_FISICO_CONCLUIDO_10_PENDENTE")
+        status = "RETORNO_FISICO_CONCLUIDO_10_PENDENTE" if is_return else "RECEBIMENTO_FISICO_CONCLUIDO_10_PENDENTE"
         con.execute(
             "UPDATE cards SET current_sector='RECEBIMENTO',status=?,updated_at=? WHERE id=?",
             (status, iso_now(), rec["card_id"]),
         )
     elif sample_done:
-        status = ("SEPARACAO_RETORNO_10_CONCLUIDA_FISICO_PENDENTE" if rec["receiving_type"] == "RETORNO"
-                  else "SEPARACAO_10_CONCLUIDA_RECEBIMENTO_PENDENTE")
+        status = "SEPARACAO_RETORNO_10_CONCLUIDA_FISICO_PENDENTE" if is_return else "SEPARACAO_10_CONCLUIDA_RECEBIMENTO_PENDENTE"
         con.execute(
             "UPDATE cards SET current_sector='RECEBIMENTO',status=?,updated_at=? WHERE id=?",
             (status, iso_now(), rec["card_id"]),
@@ -1130,6 +1160,83 @@ def update_new_receiving_flow(con: "db.Connection", receiving_id: int, user_id: 
     else:
         status = "AGUARDANDO_RECEBIMENTO"
     return status
+
+
+def reconcile_completed_subset_returns(con: "db.Connection") -> int:
+    """Repair completed return operations stranded in Receiving by the legacy mixed-source rule."""
+    candidates = con.execute(
+        """SELECT c.id, r.id receiving_id
+           FROM cards c
+           JOIN receivings r ON r.card_id=c.id
+           WHERE c.current_sector='RECEBIMENTO'
+             AND c.status='ORIGEM_MISTO'
+             AND r.receiving_type='RETORNO'
+             AND r.source_subset=1
+             AND r.physical_status='CONCLUIDO'
+             AND r.closed_at IS NOT NULL
+             AND COALESCE(r.volumes,0)>0
+             AND COALESCE((
+                 SELECT SUM(a.quantidade)
+                 FROM card_allocations a
+                 WHERE a.card_id=c.id AND a.active=1 AND a.setor IN ('RM','QA','PR')
+                   AND COALESCE(a.allocation_purpose,'STOCK')<>'TEN_PERCENT_SAMPLE'
+                   AND NOT (a.setor='QA' AND a.item_id IS NULL)
+             ),0)>=r.volumes
+             AND r.id=(
+                 SELECT MAX(latest.id)
+                 FROM receivings latest
+                 WHERE latest.card_id=c.id AND latest.receiving_type='RETORNO'
+             )
+             AND EXISTS (
+                 SELECT 1
+                 FROM receiving_operation_items roi
+                 JOIN items i ON i.id=roi.item_id
+                 WHERE roi.receiving_id=r.id AND i.card_id=c.id
+             )
+             AND NOT EXISTS (
+                 SELECT 1
+                 FROM quality_inspections qi
+                 WHERE qi.card_id=c.id AND qi.inspection_type=2
+             )
+           ORDER BY c.id"""
+    ).fetchall()
+    repaired = 0
+    for candidate in candidates:
+        card_id = int(candidate["id"])
+        receiving_id = int(candidate["receiving_id"])
+        item_ids = [
+            int(row["item_id"])
+            for row in con.execute(
+                """SELECT roi.item_id
+                   FROM receiving_operation_items roi
+                   JOIN items i ON i.id=roi.item_id
+                   WHERE roi.receiving_id=? AND i.card_id=?""",
+                (receiving_id, card_id),
+            ).fetchall()
+        ]
+        if not item_ids:
+            continue
+        placeholders = ",".join("?" for _ in item_ids)
+        con.execute(
+            f"""UPDATE items
+                SET source_stage='QUALIDADE',source_status_quality='Pendente'
+                WHERE id IN ({placeholders})""",
+            item_ids,
+        )
+        con.execute(
+            """UPDATE cards
+               SET current_sector='QUALIDADE',status='AGUARDANDO_INSPECAO',updated_at=?
+               WHERE id=?""",
+            (iso_now(), card_id),
+        )
+        add_history(
+            con,
+            card_id,
+            "RECEBIMENTO_RETORNO_RECONCILIADO",
+            "Correção automática: o recebimento do retorno da Costura estava concluído, mas o Card permaneceu no Recebimento. Encaminhado à Qualidade para inspeção.",
+        )
+        repaired += 1
+    return repaired
 
 
 @app.on_event("startup")
@@ -1145,8 +1252,30 @@ def startup() -> None:
     init_collab_db()
     init_unified_db()
 
+    # Corrige Cards que já concluíram o retorno, mas ficaram presos na fila antiga.
+    # Executa após a criação das tabelas da Qualidade e sincroniza primeiro no Supabase.
+    try:
+        con = db_connect()
+        repaired_returns = reconcile_completed_subset_returns(con)
+        if repaired_returns:
+            con.commit()
+            print(f"[correção] {repaired_returns} retorno(s) concluído(s) encaminhado(s) à Qualidade.")
+        con.close()
+    except Exception as e:
+        if "con" in locals():
+            try:
+                con.rollback()
+                con.close()
+            except Exception:
+                pass
+        print(f"[aviso] não consegui reconciliar retornos concluídos no startup: {e}")
+
     # Popula os 16 usuários padrão no Supabase (só na primeira vez — se já
-    # existirem lá, não faz nada).
+    # existirem lá, não faz nada). Se o Supabase ainda não estiver
+    # configurado (variável SUPABASE_DATABASE_URL ausente) ou fora do ar,
+    # não derruba o app inteiro por causa disso — só o login fica indisponível
+    # até isso ser resolvido; o resto (cards, tarefas, qualidade etc.,
+    # todos no SQLite local) continua funcionando normalmente.
     try:
         seed_usuarios_supabase([
             ("admin", "1234", "admin"),
@@ -1185,7 +1314,8 @@ async def login(request: Request):
 
     # A senha é conferida no Supabase (hash de verdade, PBKDF2 — não é mais
     # texto puro). O id/nome/papel que o resto do app usa (tarefas, cards,
-    # etc.) vem da tabela users do schema distrilog, ligada pelo username.
+    # etc.) continua vindo do SQLite local, pra não quebrar nada que já
+    # depende desse id — os dois ficam sincronizados pelo username.
     try:
         confirmado = verificar_login_supabase(usuario, senha)
     except Exception as e:
@@ -1527,7 +1657,7 @@ def dashboard():
     ).fetchall()
     totals = {
         "cards": con.execute("SELECT COUNT(*) n FROM cards").fetchone()["n"],
-        "receiving": con.execute("SELECT COUNT(*) n FROM cards WHERE current_sector='RECEBIMENTO' OR source_snapshot_at IS NOT NULL").fetchone()["n"],
+        "receiving": con.execute("SELECT COUNT(*) n FROM cards WHERE current_sector='RECEBIMENTO'").fetchone()["n"],
         "pending_10": counts.get("RECEBIMENTO_FISICO_CONCLUIDO_10_PENDENTE", 0),
         "pending_physical": counts.get("SEPARACAO_10_CONCLUIDA_RECEBIMENTO_PENDENTE", 0),
         "awaiting_dispatch": counts.get("AGUARDANDO_DESPACHO_COSTURA", 0),
@@ -1550,9 +1680,7 @@ def dashboard():
         ).fetchone()
         return int(row["total"] or 0)
 
-    totals["receiving_qty"] = sum_expected(
-        "c.current_sector='RECEBIMENTO' OR c.source_snapshot_at IS NOT NULL"
-    )
+    totals["receiving_qty"] = sum_expected("c.current_sector='RECEBIMENTO'")
     totals["quality_qty"] = sum_expected(
         "c.current_sector='QUALIDADE' OR EXISTS (SELECT 1 FROM items si WHERE si.card_id=c.id "
         "AND si.source_stage IN ('QUALIDADE','QUALIDADE_RETRABALHO','QUALIDADE_REJEITADO'))"
@@ -1593,7 +1721,7 @@ def list_cards(scope: str = "receiving", search: str = ""):
              FROM cards c LEFT JOIN items i ON i.card_id=c.id WHERE 1=1"""
     params: list[Any] = []
     if scope == "receiving":
-        sql += " AND (c.current_sector='RECEBIMENTO' OR c.source_snapshot_at IS NOT NULL)"
+        sql += " AND c.current_sector='RECEBIMENTO'"
     elif scope == "quality":
         sql += " AND (c.current_sector='QUALIDADE' OR EXISTS (SELECT 1 FROM items si WHERE si.card_id=c.id AND si.source_stage IN ('QUALIDADE','QUALIDADE_RETRABALHO','QUALIDADE_REJEITADO')))"
     elif scope == "processing":
@@ -1839,7 +1967,13 @@ async def save_receiving(receiving_id: int, request: Request):
         values,
     )
     received_qty = incoming("received_qty", rec["received_qty"])
-    if received_qty is not None:
+    if rec["receiving_type"] == "RETORNO":
+        con.execute(
+            """UPDATE receivings SET ten_percent_required=0,ten_percent_min=0,
+               ten_percent_actual=NULL,ten_percent_status='NAO_INICIADA' WHERE id=?""",
+            (receiving_id,),
+        )
+    elif received_qty is not None:
         if rec["source_subset"]:
             item_count = con.execute(
                 """SELECT COUNT(*) n FROM receiving_operation_items roi
@@ -1851,11 +1985,23 @@ async def save_receiving(receiving_id: int, request: Request):
                 "SELECT COUNT(*) n FROM items WHERE card_id=? AND expected_qty>0", (rec["card_id"],)
             ).fetchone()["n"]
         minimum = max(math.ceil(int(received_qty) * 0.10), item_count if card["purchase_mode"] == "GRADE" else 0)
-        con.execute("UPDATE receivings SET ten_percent_min=? WHERE id=?", (minimum, receiving_id))
+        con.execute(
+            "UPDATE receivings SET ten_percent_required=1,ten_percent_min=? WHERE id=?",
+            (minimum, receiving_id),
+        )
     add_history(con, rec["card_id"], "RECEBIMENTO_SALVO", "Dados do Recebimento atualizados.", user_id)
+    return_cycle_start = str(rec["created_at"]) if rec["receiving_type"] == "RETORNO" else None
+    if return_cycle_start is not None:
+        con.execute(
+            """UPDATE card_allocations SET active=0
+               WHERE card_id=? AND active=1 AND setor IN ('RM','QA','PR')
+                 AND (created_at < ? OR allocation_purpose='TEN_PERCENT_SAMPLE')""",
+            (int(rec["card_id"]), return_cycle_start),
+        )
     persist_receiving_then_commit(
         con, int(rec["card_id"]),
-        "Os dados do Recebimento não foram confirmados no Supabase. Nada foi considerado salvo; tente novamente."
+        "Os dados do Recebimento não foram confirmados no Supabase. Nada foi considerado salvo; tente novamente.",
+        release_stock_allocations_before=return_cycle_start,
     )
     return {"ok": True}
 
@@ -1875,12 +2021,20 @@ async def complete_physical(receiving_id: int, request: Request):
     if awaiting_arrival(con, rec["card_id"]):
         con.close()
         raise HTTPException(400, "A mercadoria ainda está em trânsito. Marque como recebida quando ela chegar.")
-    if rec["physical_status"] == "CONCLUIDO":
+    is_return = rec["receiving_type"] == "RETORNO"
+    already_physical_done = rec["physical_status"] == "CONCLUIDO"
+    if already_physical_done and not is_return:
         con.close()
         raise HTTPException(400, "O recebimento físico já foi concluído.")
+    if already_physical_done and card["current_sector"] != "RECEBIMENTO":
+        con.close()
+        raise HTTPException(400, "O retorno já saiu do Recebimento.")
     if rec["volumes"] is None or rec["received_qty"] is None:
         con.close()
         raise HTTPException(400, "Informe a quantidade de volumes e a quantidade recebida.")
+    if int(rec["volumes"] or 0) <= 0:
+        con.close()
+        raise HTTPException(400, "A quantidade de volumes deve ser maior que zero para endereçar o retorno completo.")
     if rec["has_damage"] is None:
         con.close()
         raise HTTPException(400, "Informe se existem danos ou avarias.")
@@ -1894,12 +2048,13 @@ async def complete_physical(receiving_id: int, request: Request):
             400,
             f"Aloque o endereço físico (casulo) antes de concluir — {alocado}/{rec['volumes']} volumes alocados (RM + Qualidade + Processamento).",
         )
-    con.execute(
-        """UPDATE receivings SET physical_status='CONCLUIDO',physical_completed_by=?,physical_completed_at=?
-           WHERE id=?""",
-        (user_id, iso_now(), receiving_id),
-    )
-    add_history(con, rec["card_id"], "RECEBIMENTO_FISICO_CONCLUIDO", f"{user['name']} concluiu o recebimento físico.", user_id)
+    if not already_physical_done:
+        con.execute(
+            """UPDATE receivings SET physical_status='CONCLUIDO',physical_completed_by=?,physical_completed_at=?
+               WHERE id=?""",
+            (user_id, iso_now(), receiving_id),
+        )
+        add_history(con, rec["card_id"], "RECEBIMENTO_FISICO_CONCLUIDO", f"{user['name']} concluiu o recebimento físico.", user_id)
     next_status = update_new_receiving_flow(con, receiving_id, user_id)
     persist_receiving_then_commit(
         con, int(rec["card_id"]),
@@ -1936,9 +2091,13 @@ async def sample_timer(receiving_id: int, action: str, request: Request):
             message = ("Informe a quantidade produzida." if rec["receiving_type"] == "COSTURA"
                        else "Informe a quantidade efetivamente separada.")
             raise HTTPException(400, message)
-        if rec["receiving_type"] != "COSTURA" and rec["ten_percent_actual"] < rec["ten_percent_min"]:
+        if rec["receiving_type"] != "COSTURA" and int(rec["ten_percent_actual"]) != int(rec["ten_percent_min"]):
             con.close()
-            raise HTTPException(400, f"A quantidade separada deve ser no mínimo {rec['ten_percent_min']} peças.")
+            raise HTTPException(
+                400,
+                f"A tiragem dos 10% deve ser exatamente {rec['ten_percent_min']} peças. "
+                "Corrija a quantidade informada e salve novamente antes de concluir.",
+            )
     summary = timer_action(con, receiving_id, action, user_id)
     status_map = {"start": "EM_ANDAMENTO", "pause": "PAUSADA", "resume": "EM_ANDAMENTO", "finish": "CONCLUIDA"}
     con.execute("UPDATE receivings SET ten_percent_status=? WHERE id=?",
@@ -2007,15 +2166,25 @@ async def set_purchase_mode(card_id: int, request: Request):
         con.close()
         raise HTTPException(400, "O tipo da compra já foi definido e não pode ser alterado.")
     con.execute("UPDATE cards SET purchase_mode=?,updated_at=? WHERE id=?", (mode, iso_now(), card_id))
-    for rec in con.execute("SELECT id,received_qty,source_subset FROM receivings WHERE card_id=? AND closed_at IS NULL", (card_id,)).fetchall():
+    for rec in con.execute("SELECT id,received_qty,source_subset,receiving_type FROM receivings WHERE card_id=? AND closed_at IS NULL", (card_id,)).fetchall():
         if rec["source_subset"]:
             base = con.execute("""SELECT COALESCE(SUM(i.expected_qty),0) t,COUNT(*) n FROM receiving_operation_items roi
                 JOIN items i ON i.id=roi.item_id WHERE roi.receiving_id=? AND i.expected_qty>0""", (rec["id"],)).fetchone()
         else:
             base = con.execute("SELECT COALESCE(SUM(expected_qty),0) t,COUNT(*) n FROM items WHERE card_id=? AND expected_qty>0", (card_id,)).fetchone()
         qty = int(rec["received_qty"]) if rec["received_qty"] is not None else int(base["t"] or 0)
-        minimum = max(math.ceil(qty * 0.10), int(base["n"] or 0) if mode == "GRADE" else 0)
-        con.execute("UPDATE receivings SET ten_percent_min=? WHERE id=?", (minimum, rec["id"]))
+        if rec["receiving_type"] == "RETORNO":
+            con.execute(
+                """UPDATE receivings SET ten_percent_required=0,ten_percent_min=0,
+                   ten_percent_actual=NULL,ten_percent_status='NAO_INICIADA' WHERE id=?""",
+                (rec["id"],),
+            )
+        else:
+            minimum = max(math.ceil(qty * 0.10), int(base["n"] or 0) if mode == "GRADE" else 0)
+            con.execute(
+                "UPDATE receivings SET ten_percent_required=1,ten_percent_min=? WHERE id=?",
+                (minimum, rec["id"]),
+            )
     add_history(con, card_id, "TIPO_COMPRA_MANUAL",
                 f"{user['name']} informou manualmente o tipo da compra: {'Grade' if mode == 'GRADE' else 'Saldo'}.", user_id)
     persist_receiving_then_commit(
@@ -2187,10 +2356,18 @@ async def complete_dispatch(card_id: int, request: Request):
         (next_sector, next_status, "COSTURA" if destination == "CD01" else card["receiving_type"], iso_now(), card_id),
     )
     add_history(con, card_id, "DESPACHO_COSTURA", description, user_id)
+    # A mercadoria saiu fisicamente dos endereços internos. Preserve a trilha,
+    # mas deixe de contar essas alocações no saldo disponível após o despacho.
+    con.execute(
+        """UPDATE card_allocations SET active=0
+           WHERE card_id=? AND active=1 AND setor IN ('RM','QA','PR')""",
+        (card_id,),
+    )
     persist_receiving_then_commit(
         con, card_id,
         "O despacho não foi confirmado no armazenamento persistente. Tente novamente.",
         sync_item_ids=item_ids,
+        release_stock_allocations=True,
     )
     return {"ok": True, "next_status": next_status, "item_ids": item_ids}
 
@@ -2330,4 +2507,4 @@ def global_history(limit: int = 300):
 
 @app.get("/health")
 def health() -> dict[str, str]:
-    return {"status": "ok", "mode": "operacional", "database": "supabase"}
+    return {"status": "ok", "mode": "operacional", "database": "sqlite-with-optional-supabase"}

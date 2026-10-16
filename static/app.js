@@ -124,12 +124,12 @@ async function goTo(view) {
   try {
     if (view === "dashboard") await renderDashboard();
     if (view === "receiving") await renderCards("receiving");
-    if (view === "painel-recebimento") renderRecebimentoPanel();
     if (view === "quality") await renderCards("quality");
     if (view === "processing") await renderCards("processing");
     if (view === "labeling") await renderCards("labeling");
     if (view === "storage") await renderCards("storage");
     if (view === "storage-hub") await renderStorageHub();
+    if (view === "address-map") await renderAddressMap();
     if (view === "sgo") await renderSgo();
     if (view === "sgo-indicators") await renderSgoIndicators();
     if (view === "production") await renderProduction();
@@ -193,6 +193,177 @@ function metricCardsHtml(scope, totals) {
     return `<div class="metric-row-2"><div class="kpi"><div class="kpi-label">Peças em Processamento</div><div class="kpi-value">${qty.toLocaleString("pt-BR")}</div></div><div class="kpi"><div class="kpi-label">% em execução ativa</div><div class="kpi-value">${total?(active*100/total).toFixed(1):"0.0"}%</div></div></div>`;
   }
   return "";
+}
+
+
+let addressMapLoadId = 0;
+
+async function renderAddressMap() {
+  setPage("Mapa de endereçamento", "Visão geral dos endereços WMS, organizada por setor, zona, casulo e nível.");
+  const requestId = ++addressMapLoadId;
+  window.addressMapState = {
+    sector: window.addressMapState?.sector || "RM",
+    zone: window.addressMapState?.zone || "ALL",
+    status: window.addressMapState?.status || "ALL",
+    search: window.addressMapState?.search || "",
+    bySector: {}
+  };
+  $("mainContent").innerHTML = '<section class="address-map-page"><div class="state-panel"><b>Carregando endereços...</b><span>Consultando a ocupação atual de RM, QA, PR, ET e EC.</span></div></section>';
+
+  try {
+    const sectors = ["RM", "QA", "PR", "ET", "EC"];
+    const entries = await Promise.all(sectors.map(async (sector) => {
+      const positions = await apiWithTimeout("/api/positions?setor=" + encodeURIComponent(sector));
+      if (!Array.isArray(positions)) {
+        throw new Error("O servidor retornou dados inválidos para o setor " + sector + ".");
+      }
+      if (!positions.length) {
+        throw new Error("Nenhum endereço foi retornado para o setor " + sector + ". Verifique a conexão e o cadastro das posições WMS.");
+      }
+      return [sector, positions];
+    }));
+    if (requestId !== addressMapLoadId || currentView !== "address-map") return;
+    window.addressMapState.bySector = Object.fromEntries(entries);
+    if (!window.addressMapState.bySector[window.addressMapState.sector]) {
+      window.addressMapState.sector = "RM";
+    }
+    renderAddressMapContent();
+  } catch (error) {
+    if (requestId !== addressMapLoadId || currentView !== "address-map") return;
+    $("mainContent").innerHTML =
+      '<section class="address-map-page"><div class="state-panel error-state"><b>Não foi possível carregar o mapa de endereçamento.</b><span>' +
+      esc(error?.message || "Erro desconhecido ao consultar os endereços.") +
+      '</span><button class="primary" onclick="renderAddressMap()">Tentar novamente</button></div></section>';
+  }
+}
+
+function addressMapCurrentPositions() {
+  const state = window.addressMapState;
+  return state?.bySector?.[state.sector] || [];
+}
+
+function renderAddressMapContent() {
+  const state = window.addressMapState;
+  const allPositions = addressMapCurrentPositions();
+  const zones = [...new Map(allPositions.map((p) => [
+    String(p.zona),
+    { value: String(p.zona), label: String(p.zona_label || ("Zona " + p.zona)) }
+  ])).values()].sort((a, b) => a.value.localeCompare(b.value, "pt-BR", { numeric: true }));
+  const sectors = [
+    { value: "RM", label: "RM — Recebimento" },
+    { value: "QA", label: "QA — Qualidade" },
+    { value: "PR", label: "PR — Processamento" },
+    { value: "ET", label: "ET — Etiquetagem" },
+    { value: "EC", label: "EC — Estocagem" }
+  ];
+  const occupied = allPositions.filter((p) => Number(p.ocupado || 0) > 0).length;
+  const free = allPositions.length - occupied;
+  const allocated = allPositions.reduce((sum, p) => sum + Math.max(0, Number(p.ocupado || 0)), 0);
+  $("mainContent").innerHTML =
+    '<section class="address-map-page">' +
+      '<div class="address-map-intro"><div><span class="address-map-eyebrow">WMS · CONSULTA</span><h2>Mapa físico de endereçamento</h2><p>Consulte a ocupação das posições sem precisar abrir um Card. Este painel é somente leitura.</p></div>' +
+      '<button class="secondary" type="button" onclick="renderAddressMap()">Atualizar mapa</button></div>' +
+      '<div class="address-map-stats">' +
+        '<div class="address-map-stat"><span>Posições no setor</span><strong id="addressMapTotal">' + allPositions.length.toLocaleString("pt-BR") + '</strong></div>' +
+        '<div class="address-map-stat"><span>Posições livres</span><strong id="addressMapFree">' + free.toLocaleString("pt-BR") + '</strong></div>' +
+        '<div class="address-map-stat"><span>Posições ocupadas</span><strong id="addressMapOccupied">' + occupied.toLocaleString("pt-BR") + '</strong></div>' +
+        '<div class="address-map-stat"><span>Unidades alocadas</span><strong id="addressMapAllocated">' + allocated.toLocaleString("pt-BR") + '</strong></div>' +
+      '</div>' +
+      '<div class="address-map-controls">' +
+        '<div class="field"><label for="addressMapSector">Setor</label><select id="addressMapSector" onchange="changeAddressMapSector(this.value)">' +
+          sectors.map((s) => '<option value="' + s.value + '"' + (s.value === state.sector ? ' selected' : '') + '>' + esc(s.label) + '</option>').join("") +
+        '</select></div>' +
+        '<div class="field"><label for="addressMapZone">Zona</label><select id="addressMapZone" onchange="filterAddressMap()"><option value="ALL">Todas as zonas</option>' +
+          zones.map((z) => '<option value="' + esc(z.value) + '"' + (z.value === state.zone ? ' selected' : '') + '>' + esc(z.label) + '</option>').join("") +
+        '</select></div>' +
+        '<div class="field"><label for="addressMapStatus">Ocupação</label><select id="addressMapStatus" onchange="filterAddressMap()"><option value="ALL"' + (state.status === "ALL" ? " selected" : "") + '>Todas as posições</option><option value="FREE"' + (state.status === "FREE" ? " selected" : "") + '>Livres</option><option value="OCCUPIED"' + (state.status === "OCCUPIED" ? " selected" : "") + '>Ocupadas</option></select></div>' +
+        '<div class="field"><label for="addressMapSearch">Buscar endereço</label><input id="addressMapSearch" type="search" value="' + esc(state.search) + '" placeholder="Ex.: 1RM06A" oninput="filterAddressMap()"></div>' +
+      '</div>' +
+      '<div class="address-map-legend"><span><i class="address-map-dot is-free"></i>Livre</span><span><i class="address-map-dot is-occupied"></i>Ocupada</span><small>Os números nas posições representam unidades atualmente alocadas.</small></div>' +
+      '<div id="addressMapGrid" class="address-map-grid"></div>' +
+    '</section>';
+  renderAddressMapGrid();
+}
+
+async function changeAddressMapSector(sector) {
+  const state = window.addressMapState;
+  if (!state || !state.bySector?.[sector]) return;
+  state.sector = sector;
+  state.zone = "ALL";
+  renderAddressMapContent();
+}
+
+function filterAddressMap() {
+  const state = window.addressMapState;
+  if (!state) return;
+  state.zone = $("addressMapZone")?.value || "ALL";
+  state.status = $("addressMapStatus")?.value || "ALL";
+  state.search = $("addressMapSearch")?.value || "";
+  renderAddressMapGrid();
+}
+
+function renderAddressMapGrid() {
+  const state = window.addressMapState;
+  const grid = $("addressMapGrid");
+  if (!state || !grid) return;
+  const normalizedTerm = normalizeSearch(state.search || "");
+  const allPositions = addressMapCurrentPositions();
+  const positions = allPositions.filter((p) => {
+    const occupied = Math.max(0, Number(p.ocupado || 0));
+    const zoneMatches = state.zone === "ALL" || String(p.zona) === state.zone;
+    const statusMatches = state.status === "ALL" ||
+      (state.status === "FREE" && occupied === 0) ||
+      (state.status === "OCCUPIED" && occupied > 0);
+    const searchMatches = !normalizedTerm ||
+      normalizeSearch([p.address, p.setor, p.zona, p.zona_label, p.casulo, p.nivel].join(" ")).includes(normalizedTerm);
+    return zoneMatches && statusMatches && searchMatches;
+  });
+
+  if (!positions.length) {
+    grid.innerHTML = '<div class="position-empty large">Nenhuma posição encontrada com os filtros atuais.</div>';
+    return;
+  }
+
+  const byZone = new Map();
+  positions.forEach((p) => {
+    const zoneKey = String(p.zona);
+    if (!byZone.has(zoneKey)) byZone.set(zoneKey, new Map());
+    const byCasulo = byZone.get(zoneKey);
+    const casuloKey = String(p.casulo);
+    if (!byCasulo.has(casuloKey)) byCasulo.set(casuloKey, []);
+    byCasulo.get(casuloKey).push(p);
+  });
+
+  grid.innerHTML = [...byZone.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0], "pt-BR", { numeric: true }))
+    .map(([zoneKey, casulos]) => {
+      const zoneRows = allPositions.filter((p) => String(p.zona) === zoneKey);
+      const visibleCount = [...casulos.values()].reduce((sum, rows) => sum + rows.length, 0);
+      const zoneLabel = zoneRows[0]?.zona_label || ("Zona " + zoneKey);
+      const casuloHtml = [...casulos.entries()]
+        .sort((a, b) => a[0].localeCompare(b[0], "pt-BR", { numeric: true }))
+        .map(([casulo, rows]) =>
+          '<div class="position-casulo"><div class="position-casulo-head"><span>CASULO</span><b>' + esc(casulo) + '</b></div><div class="position-levels">' +
+          rows.sort((a, b) => String(a.nivel).localeCompare(String(b.nivel))).map((p) => {
+            const quantity = Math.max(0, Number(p.ocupado || 0));
+            const statusClassName = quantity > 0 ? "is-occupied" : "is-free";
+            const title = p.address + " • " + (quantity > 0 ? quantity.toLocaleString("pt-BR") + " unidade(s) alocada(s)" : "Livre");
+            return '<div class="position-cell ' + statusClassName + '" title="' + esc(title) + '" aria-label="' + esc(title) + '">' +
+              '<span class="position-level">' + esc(p.nivel) + '</span><strong>' + esc(p.address) + '</strong>' +
+              '<small>' + (quantity > 0 ? quantity.toLocaleString("pt-BR") + ' alocado(s)' : 'Livre') + '</small></div>';
+          }).join("") +
+          '</div></div>'
+        ).join("");
+      return '<section class="position-zone"><div class="position-zone-head"><div><b>' + esc(zoneLabel) + '</b><span>' + casulos.size + ' casulo(s) visível(is)</span></div><small>' + visibleCount + ' posições</small></div><div class="position-casulo-grid address-map-casulos">' + casuloHtml + '</div></section>';
+    }).join("");
+
+  const occupied = allPositions.filter((p) => Number(p.ocupado || 0) > 0).length;
+  const free = allPositions.length - occupied;
+  const allocated = allPositions.reduce((sum, p) => sum + Math.max(0, Number(p.ocupado || 0)), 0);
+  if ($("addressMapTotal")) $("addressMapTotal").textContent = allPositions.length.toLocaleString("pt-BR");
+  if ($("addressMapFree")) $("addressMapFree").textContent = free.toLocaleString("pt-BR");
+  if ($("addressMapOccupied")) $("addressMapOccupied").textContent = occupied.toLocaleString("pt-BR");
+  if ($("addressMapAllocated")) $("addressMapAllocated").textContent = allocated.toLocaleString("pt-BR");
 }
 
 async function renderCards(scope) {
@@ -433,6 +604,12 @@ function cardLocationBannerHtml(rows, failed=false, loading=false, currentSector
   const sectorLabels = {RM:"Recebimento / Matéria-prima",QA:"Qualidade",PR:"Processamento",ET:"Etiquetagem",EC:"Estocagem",QUALIDADE:"Qualidade"};
   const locations = new Map();
   (Array.isArray(rows) ? rows : []).forEach((row) => {
+    // A trilha inclui o histórico; este painel deve mostrar apenas alocações ainda ativas.
+    const activeValue = row.active;
+    const inactive = activeValue === false || activeValue === 0 ||
+      (typeof activeValue === "string" && ["false", "0", "f"].includes(activeValue.trim().toLowerCase()));
+    if (inactive) return;
+
     const sector = String(row.setor || "").trim().toUpperCase();
     const address = String(row.address || "").trim();
     const qty = Number(row.quantidade || 0);
@@ -485,7 +662,8 @@ async function openCard(cardId, tab = "receiving") {
     cardData.current_sector === "QUALIDADE" &&
     currentReceiving.ten_percent_required &&
     currentReceiving.ten_percent_status === "CONCLUIDA" &&
-    currentReceiving.receiving_type !== "COSTURA"
+    currentReceiving.receiving_type !== "COSTURA" &&
+    currentReceiving.receiving_type !== "RETORNO"
   );
   window.qaSampleAllocationComplete = !window.qaSampleAllocationRequired;
   if (window.qaSampleAllocationRequired) {
@@ -666,7 +844,8 @@ function renderReceivingTab() {
   }
   const canShowSampleAllocation = cardData.receiving?.ten_percent_status === "CONCLUIDA"
     && cardData.receiving?.ten_percent_required
-    && cardData.receiving?.receiving_type !== "COSTURA";
+    && cardData.receiving?.receiving_type !== "COSTURA"
+    && cardData.receiving?.receiving_type !== "RETORNO";
   if (cardData.source_snapshot_at && cardData.current_sector !== "RECEBIMENTO" && !canShowSampleAllocation) {
     window.sourceAllowedStages=null;
     $("cardTab").innerHTML = `<div class="notice"><b>Andamento local preservado:</b> ${esc(cardData.current_sector)} — ${esc(cardData.status_label)}.</div>${sourceLocationHtml()}`;
@@ -683,7 +862,8 @@ function renderReceivingTab() {
   if (cardData.status === "AGUARDANDO_RECEBIMENTO_RETORNO") {
     $("cardTab").innerHTML = receivingFormHtml(true);
     window.setTimeout(refreshTimerDisplay, 500);
-    if (cardData.receiving?.ten_percent_required && cardData.receiving?.ten_percent_status === "CONCLUIDA" && cardData.receiving?.receiving_type !== "COSTURA") loadReceivingAllocationStep(cardData.id);
+    if (cardData.receiving?.receiving_type === "RETORNO") loadReturnAllocationStep(cardData.id);
+    else if (cardData.receiving?.ten_percent_required && cardData.receiving?.ten_percent_status === "CONCLUIDA" && cardData.receiving?.receiving_type !== "COSTURA") loadReceivingAllocationStep(cardData.id);
     return;
   }
   if (cardData.status === "EM_COSTURA_CD01" || cardData.receiving?.receiving_type === "COSTURA") {
@@ -693,7 +873,8 @@ function renderReceivingTab() {
   const isReturn = cardData.receiving?.receiving_type === "RETORNO" || cardData.receiving_type === "RETORNO";
   $("cardTab").innerHTML = receivingFormHtml(isReturn);
   window.setTimeout(refreshTimerDisplay, 500);
-  if (cardData.receiving?.ten_percent_required && cardData.receiving?.ten_percent_status === "CONCLUIDA" && cardData.receiving?.receiving_type !== "COSTURA") loadReceivingAllocationStep(cardData.id);
+  if (isReturn) loadReturnAllocationStep(cardData.id);
+  else if (cardData.receiving?.ten_percent_required && cardData.receiving?.ten_percent_status === "CONCLUIDA" && cardData.receiving?.receiving_type !== "COSTURA") loadReceivingAllocationStep(cardData.id);
 }
 
 function sourceLocationHtml() {
@@ -747,7 +928,7 @@ function inCosturaHtml() {
       <div class="field full"><label>Observações do despacho</label><textarea class="readonly" readonly>${esc(d?.notes || "")}</textarea></div>
     </div>
     ${r ? costuraProductionHtml(r, productionDone, operate) : '<div class="notice warn">O controle de produção da Costura será criado automaticamente na próxima atualização do relatório.</div>'}
-    <div class="notice warn">Aguardando o retorno da Costura. Quando a mercadoria retornar, será aberto um novo controle de recebimento e uma nova tiragem de 10%, sem perder este acompanhamento.</div>
+    <div class="notice warn">Aguardando o retorno da Costura. Quando a mercadoria retornar, o Recebimento fará a conferência física e o endereçamento integral do saldo; depois o Card seguirá para a Inspeção 2 na Qualidade.</div>
     ${currentUser.role === "admin" ? `<div class="actions"><button class="success" onclick="simulateReturn(${cardData.id})">Registrar retorno CD01 — teste</button></div>` : ""}
   </div>`;
 }
@@ -769,7 +950,7 @@ function costuraProductionHtml(r, productionDone, operate) {
       <div class="form-grid"><div class="field"><label>Quantidade prevista na Costura</label><input class="readonly" readonly value="${(r.operation_items||[]).reduce((sum,item)=>sum+Number(item.expected_qty||0),0)||cardData.expected_total}"></div><div class="field"><label>Quantidade produzida</label><input id="sampleActual" type="number" min="0" ${operate&&!productionDone?"":"readonly"} value="${r.ten_percent_actual??""}"></div></div>
       <div class="timer-grid" style="margin-top:11px"><div class="timer-value"><span>Status</span><strong>${esc(timer.state)}</strong></div><div class="timer-value"><span>Tempo útil</span><strong>${fmtSeconds(timer.business_seconds)}</strong></div><div class="timer-value"><span>Tempo parado</span><strong>${fmtSeconds(timer.paused_seconds)}</strong></div><div class="timer-value"><span>Permanência</span><strong>${fmtSeconds(timer.permanence_seconds)}</strong></div></div>
       <div class="actions">${operate&&!productionDone&&timer.state==="NAO_INICIADA"?'<button class="primary" onclick="sampleAction(\'start\')">Iniciar produção</button>':""}${operate&&!productionDone&&timer.state==="EM_ANDAMENTO"?'<button class="warning" onclick="sampleAction(\'pause\')">Pausar</button><button class="success" onclick="sampleAction(\'finish\')">Concluir produção</button>':""}${operate&&!productionDone&&timer.state==="PAUSADA"?'<button class="primary" onclick="sampleAction(\'resume\')">Retomar</button><button class="success" onclick="sampleAction(\'finish\')">Concluir produção</button>':""}${productionDone?'<span class="badge green">Produção concluída</span>':'<span class="badge orange">Produção em acompanhamento</span>'}</div>
-    </div>${samplePlanTable(r,"Previsão da tiragem de 10% no retorno")}`;
+    </div>`;
 }
 
 function receivingFormHtml(isReturn) {
@@ -783,7 +964,7 @@ function receivingFormHtml(isReturn) {
   const operationItems = r.operation_items || [];
   return `
     <div class="panel-body">
-      <div class="notice ${isReturn ? "success-box" : ""}"><b>${isReturn ? "Recebimento do retorno CD01" : "Recebimento de mercadoria em trânsito"}</b><br>${isReturn ? "Registre e conclua a nova tiragem de 10% antes de alocar os volumes no RM. O Card só segue para a Inspeção 2 quando o recebimento físico e a amostra terminarem." : "Conclua a tiragem dos 10% antes de liberar a alocação dos volumes no RM. O Card só segue para a Qualidade quando o recebimento físico e a amostra terminarem."}</div>
+      <div class="notice ${isReturn ? "success-box" : ""}"><b>${isReturn ? "Recebimento do retorno CD01" : "Recebimento de mercadoria em trânsito"}</b><br>${isReturn ? "Faça a conferência física e informe volumes e quantidade retornada. Não existe tiragem de 10% no Recebimento da volta da Costura. Aloque todo o saldo retornado entre RM, QA e PR antes de concluir; depois o Card seguirá para a Inspeção 2 na Qualidade." : "Conclua a tiragem dos 10% antes de liberar a alocação dos volumes no RM. O Card só segue para a Qualidade quando o recebimento físico e a amostra terminarem."}</div>
       ${!operate && !physicalDone ? `<div class="notice warn"><b>Somente o operador de Recebimento pode operar este Card.</b><br>${cardData.current_sector !== "RECEBIMENTO" ? "Este Card não está no Recebimento." : "Entre com um usuário do perfil Recebimento para usar os botões de ação."}</div>` : ""}
       ${operationItems.length ? `<div class="notice"><b>${operationItems.length} item(ns) fazem parte deste controle</b><br>Somente estes itens serão movimentados. Os demais itens da compra permanecerão em suas etapas atuais.</div>` : ""}
       <h3 class="section-heading">Recebimento físico</h3>
@@ -796,11 +977,11 @@ function receivingFormHtml(isReturn) {
       </div>
       <div class="actions">
         ${operate && !physicalDone ? `<button class="secondary" onclick="saveReceiving()">Salvar dados</button><button class="success" onclick="completePhysical()">Concluir recebimento físico</button><label class="primary small-btn" style="cursor:pointer">Adicionar fotos<input id="receivingFiles" type="file" multiple hidden onchange="uploadReceivingPhotos()"></label>` : ""}
-        ${physicalDone ? '<span class="badge green">Recebimento físico concluído</span>' : '<span class="badge gray">Recebimento físico pendente</span>'}
+        ${isReturn && physicalDone && operate && cardData.current_sector === "RECEBIMENTO" ? '<button class="success" onclick="completePhysical()">Concluir retorno e encaminhar à Qualidade</button>' : (physicalDone ? '<span class="badge green">Recebimento físico concluído</span>' : '<span class="badge gray">Recebimento físico pendente</span>')}
       </div>
-      ${samplePlanTable(r,isReturn?"Plano exato da nova tiragem de 10%":"Plano exato da tiragem de 10%")}
-      ${sampleHtml(r, sampleDone, operate, isReturn)}
-      ${sampleDone ? `<h3 class="section-heading">Endereçamento obrigatório da amostra na Qualidade</h3><div id="posAllocBox" class="notice">Carregando etapa obrigatória de alocação…</div>` : `<h3 class="section-heading">Endereçamento da amostra</h3><div class="notice warn">Conclua a tiragem dos 10% para liberar primeiro a alocação obrigatória na Qualidade.</div>`}
+      ${isReturn
+        ? `<h3 class="section-heading">Endereçamento do retorno</h3><div id="posAllocBox" class="notice">${Number(r.volumes||0)>0 ? "Carregando mapa para alocar todo o saldo retornado…" : "Informe e salve os volumes retornados para liberar o endereçamento completo."}</div>`
+        : `${samplePlanTable(r,"Plano exato da tiragem de 10%")}${sampleHtml(r, sampleDone, operate, false)}${sampleDone ? `<h3 class="section-heading">Endereçamento obrigatório da amostra na Qualidade</h3><div id="posAllocBox" class="notice">Carregando etapa obrigatória de alocação…</div>` : `<h3 class="section-heading">Endereçamento da amostra</h3><div class="notice warn">Conclua a tiragem dos 10% para liberar primeiro a alocação obrigatória na Qualidade.</div>`}`}
       <div class="photos">${receivingPhotos.map((p,i)=>`<a class="photo-link" target="_blank" href="${p}">Arquivo ${i+1}</a>`).join("")}</div>
     </div>`;
 }
@@ -990,6 +1171,17 @@ async function renderQualityTab() {
     $("cardTab").innerHTML = qualityReadOnlyPreviewHtml();
     return;
   }
+  const q = cardData.quality;
+  const returnStatusAwaitingInspection2 = ["RETORNO_CONCLUIDO", "AGUARDANDO_INSPECAO"].includes(cardData.status);
+  const isReturnAwaitingInspection2 = cardData.current_sector === "QUALIDADE" &&
+    !cardData.source_snapshot_at &&
+    returnStatusAwaitingInspection2 &&
+    (
+      cardData.receiving_type === "RETORNO" ||
+      cardData.receiving?.receiving_type === "RETORNO" ||
+      cardData.status === "RETORNO_CONCLUIDO" ||
+      cardData.status === "AGUARDANDO_INSPECAO"
+    );
   if (guardSampleAllocationNavigation()) return;
   try {
     if (!qualityUsers.length) qualityUsers = await api("/api/quality/users");
@@ -997,18 +1189,23 @@ async function renderQualityTab() {
     $("cardTab").innerHTML = `<div class="notice error">${esc(error.message)}</div>`;
     return;
   }
-  const q = cardData.quality;
   const importedQualityItems = (cardData.items||[]).filter((item)=>["QUALIDADE","QUALIDADE_RETRABALHO","QUALIDADE_REJEITADO"].includes(item.source_stage));
-  if (cardData.source_snapshot_at && (!q || q.status === "CONCLUIDA") && cardData.current_sector !== "QUALIDADE") {
-    if (importedQualityItems.length && canOperateQuality()) {
-      window.qualitySourceSubset = true;
-      $("cardTab").innerHTML = qualitySetupHtml(null, true);
-      toggleQualitySetupFields();
+  if (cardData.source_snapshot_at && (!q || q.status === "CONCLUIDA")) {
+    if (importedQualityItems.length) {
+      if (canOperateQuality()) {
+        window.qualitySourceSubset = true;
+        $("cardTab").innerHTML = qualitySetupHtml(null, true);
+        toggleQualitySetupFields();
+      } else {
+        renderImportedSectorSnapshot("tabQualityBtn",["QUALIDADE","QUALIDADE_RETRABALHO","QUALIDADE_REJEITADO"],"Itens localizados na Qualidade");
+        $("cardTab").insertAdjacentHTML("afterbegin",'<div class="notice warn">Entre com um perfil da Qualidade, Supervisor ou Administrador para assumir estes itens e iniciar a inspeção.</div>');
+      }
       return;
     }
-    renderImportedSectorSnapshot("tabQualityBtn",["QUALIDADE","QUALIDADE_RETRABALHO","QUALIDADE_REJEITADO"],"Itens localizados na Qualidade");
-    if (importedQualityItems.length) $("cardTab").insertAdjacentHTML("afterbegin",'<div class="notice warn">Entre com um perfil da Qualidade, Supervisor ou Administrador para assumir estes itens e iniciar a inspeção.</div>');
-    return;
+    if (cardData.current_sector !== "QUALIDADE") {
+      renderImportedSectorSnapshot("tabQualityBtn",["QUALIDADE","QUALIDADE_RETRABALHO","QUALIDADE_REJEITADO"],"Itens localizados na Qualidade");
+      return;
+    }
   }
   window.qualitySourceSubset = false;
   const needsNewInspection = cardData.current_sector === "QUALIDADE" && (!q || q.status === "CONCLUIDA");
@@ -1025,7 +1222,9 @@ async function renderQualityTab() {
 }
 
 function qualitySetupHtml(previousInspection=null, sourceSubset=false) {
-  const isCosturaReturn = cardData.receiving_type === "RETORNO";
+  const isCosturaReturn = cardData.receiving_type === "RETORNO" ||
+    cardData.receiving?.receiving_type === "RETORNO" ||
+    ["AGUARDANDO_RECEBIMENTO_RETORNO", "RETORNO_CONCLUIDO", "AGUARDANDO_INSPECAO"].includes(cardData.status);
   const defaultType = isCosturaReturn ? 2 : 1;
   const defaultMode = cardData.purchase_mode || previousInspection?.purchase_mode || "";
   const destinationField = defaultType === 1
@@ -1655,6 +1854,14 @@ async function completeQualityInspection() {
 }
 
 
+function processingInspectionHandoffNotice() {
+  const transferred = (cardData.history || []).some(
+    (event) => event.event_type === "INSPECAO_2_TRANSFERIDA_PROCESSAMENTO"
+  );
+  if (!transferred) return "";
+  return '<div class="notice success-box"><b>Responsabilidade pela Inspeção 2</b><br>Este Card foi encaminhado diretamente ao Processamento antes de qualquer atividade na Qualidade. A responsabilidade operacional agora é deste setor.</div>';
+}
+
 async function renderProcessingTab() {
   if (guardSampleAllocationNavigation()) return;
   activateTab("tabProcessingBtn");
@@ -1665,6 +1872,7 @@ async function renderProcessingTab() {
     return;
   }
   const p = cardData.processing;
+  const handoffNotice = cardData.current_sector === "PROCESSAMENTO" ? processingInspectionHandoffNotice() : "";
   const importedProcessingItems = (cardData.items||[]).filter((item)=>["AGUARDANDO_PROCESSAMENTO","PROCESSAMENTO"].includes(item.source_stage));
   if (cardData.source_snapshot_at && !p && cardData.current_sector !== "PROCESSAMENTO") {
     if (importedProcessingItems.length && canOperateProcessing()) {
@@ -1680,10 +1888,10 @@ async function renderProcessingTab() {
   }
   if (cardData.current_sector === "PROCESSAMENTO" && !p) {
     if (!canOperateProcessing()) {
-      $("cardTab").innerHTML = '<div class="panel-body"><div class="notice warn">Aguardando um operador do Processamento configurar o Card.</div></div>';
+      $("cardTab").innerHTML = handoffNotice + '<div class="panel-body"><div class="notice warn">Aguardando um operador do Processamento configurar o Card.</div></div>';
       return;
     }
-    $("cardTab").innerHTML = processingSetupHtml();
+    $("cardTab").innerHTML = handoffNotice + processingSetupHtml();
     toggleProcessingLabelField();
     return;
   }
@@ -1691,7 +1899,7 @@ async function renderProcessingTab() {
     $("cardTab").innerHTML = '<div class="panel-body"><div class="notice">Este Card ainda não possui dados do Processamento.</div></div>';
     return;
   }
-  $("cardTab").innerHTML = processingDetailHtml(p);
+  $("cardTab").innerHTML = handoffNotice + processingDetailHtml(p);
   toggleProcessingLabelField();
   if (canOperateProcessing()) {
     $("cardTab").insertAdjacentHTML("beforeend", '<div class="panel-body"><h3 class="section-heading">Endereçamento no Processamento (PR)</h3><div id="posAllocBox" class="notice">Carregando posições…</div></div>');
@@ -2372,253 +2580,6 @@ async function renderSettings(){setPage("Configurações","");$("mainContent").i
 setInterval(() => { if ($("clock")) $("clock").textContent = new Date().toLocaleString("pt-BR"); }, 1000);
 if (currentUser) enterApp();
 
-/**
- * Renderiza o novo Painel de Recebimento com Mapa de Casulos
- * Baseado no layout analítico e visual da Opção 3.
- */
-function renderRecebimentoPanel() {
-    const mainContent = document.getElementById('mainContent');
-    
-    mainContent.innerHTML = `
-        <div class="dashboard-recebimento">
-            <div class="dash-header">
-                <h2>Painel Operacional do Centro de Distribuição</h2>
-                <p id="last-update">Atualizado agora · Turno A · CD Curitiba - PR</p>
-            </div>
-
-            <!-- KPIs Superiores -->
-            <div class="kpi-container">
-                <div class="kpi-box">
-                    <div class="kpi-info">
-                        <h4 style="color: #ffb800;">Peças Aguardando Recebimento</h4>
-                        <div class="kpi-value" id="kpi-pecas">0 <span>peças</span></div>
-                        <p style="color: var(--text-secondary); font-size: 0.8rem;">Cargas no pátio aguardando endereçamento.</p>
-                    </div>
-                </div>
-                <div class="kpi-box">
-                    <div class="kpi-info">
-                        <h4 style="color: #60a5fa;">% Da Capacidade Real do CD</h4>
-                        <div class="kpi-value" id="kpi-capacidade">0% <span>ocupado</span></div>
-                        <p style="color: var(--text-secondary); font-size: 0.8rem;">Limite de segurança operacional em 88%.</p>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Grid Principal -->
-            <div class="main-grid">
-                <!-- Mapa de Casulos -->
-                <div class="panel-section">
-                    <div class="panel-header">
-                        <div>
-                            <h3>Mapa de Casulos</h3>
-                            <p>Setores monitorados em tempo real</p>
-                        </div>
-                        <button class="btn btn-secondary btn-sm">Filtrar</button>
-                    </div>
-                    <div class="casulos-grid" id="casulos-grid">
-                        <!-- Casulos serão injetados aqui -->
-                    </div>
-                </div>
-
-                <!-- Fila de Recebimento -->
-                <div class="panel-section">
-                    <div class="panel-header">
-                        <div>
-                            <h3>Fila de Recebimento</h3>
-                            <p id="fila-count">0 cargas no pátio</p>
-                        </div>
-                        <span class="status-badge" style="background: rgba(16,185,129,0.1); color: #10b981;">● AO VIVO</span>
-                    </div>
-                    <div class="fila-list" id="fila-list">
-                        <!-- Fila será injetada aqui -->
-                    </div>
-                </div>
-            </div>
-        </div>
-    `;
-
-    loadCasulosData();
-    loadRecebimentoQueue();
-}
-
-/**
- * Simula/Carrega os dados dos casulos e injeta no DOM.
- * Em produção, conecte a um endpoint GET /api/casulos.
- */
-function loadCasulosData() {
-    // Dados de exemplo baseados na imagem
-    const casulos = [
-        { id: 'A-01', nome: 'Casulo Alfa', ocupacao: 92, pos_atuais: 1104, pos_total: 1200 },
-        { id: 'A-02', nome: 'Casulo Alfa', ocupacao: 78, pos_atuais: 936, pos_total: 1200 },
-        { id: 'A-03', nome: 'Casulo Alfa', ocupacao: 41, pos_atuais: 492, pos_total: 1200 },
-        { id: 'A-04', nome: 'Casulo Alfa', ocupacao: 12, pos_atuais: 144, pos_total: 1200 },
-        { id: 'B-01', nome: 'Casulo Beta', ocupacao: 100, pos_atuais: 800, pos_total: 800 },
-        { id: 'B-02', nome: 'Casulo Beta', ocupacao: 64, pos_atuais: 512, pos_total: 800 }
-    ];
-
-    const grid = document.getElementById('casulos-grid');
-    grid.innerHTML = '';
-
-    casulos.forEach(c => {
-        let statusClass = 'livre';
-        let statusLabel = 'LIVRE';
-        let bgColor = 'var(--status-free)';
-
-        if (c.ocupacao >= 90) { statusClass = 'critico'; statusLabel = c.ocupacao === 100 ? 'BLOQUEADO' : 'CRÍTICO'; bgColor = 'var(--status-critical)'; }
-        else if (c.ocupacao >= 75) { statusClass = 'atencao'; statusLabel = 'ATENÇÃO'; bgColor = 'var(--status-warning)'; }
-        else if (c.ocupacao >= 30) { statusClass = 'normal'; statusLabel = 'NORMAL'; bgColor = 'var(--status-normal)'; }
-
-        grid.innerHTML += `
-            <div class="casulo-card ${statusClass}" onclick="abrirModalFiltroCasulo('${c.id}')">
-                <div class="casulo-header">
-                    <div>
-                        <div class="casulo-id">${c.id}</div>
-                        <div style="font-size: 0.7rem; color: var(--text-secondary)">${c.nome}</div>
-                    </div>
-                    <div style="font-size: 0.65rem; font-weight: 600; color: ${bgColor}">${statusLabel}</div>
-                </div>
-                <div class="casulo-ocupacao">${c.ocupacao}%</div>
-                <div class="progress-bar-bg">
-                    <div class="progress-bar-fill" style="width: ${c.ocupacao}%; background-color: ${bgColor}"></div>
-                </div>
-                <div class="casulo-posicoes">${c.pos_atuais.toLocaleString()} / ${c.pos_total.toLocaleString()} pos.</div>
-            </div>
-        `;
-    });
-}
-
-/**
- * Carrega a fila de recebimento[cite: 6].
- */
-function loadRecebimentoQueue() {
-    // Dados de exemplo simulando retorno da base de dados
-    const fila = [
-        { id: 1, nf: '884.221', fornecedor: 'Metalúrgica Vetor', status: 'Descarregando' },
-        { id: 2, nf: '884.219', fornecedor: 'Componentes Ápice', status: 'Aguardando' },
-        { id: 3, nf: '884.207', fornecedor: 'Plásticos Orion', status: 'Em Conferência' }
-    ];
-
-    const list = document.getElementById('fila-list');
-    document.getElementById('fila-count').innerText = `${fila.length} cargas no pátio`;
-    list.innerHTML = '';
-
-    fila.forEach(item => {
-        let badgeClass = '';
-        if (item.status === 'Descarregando') badgeClass = 'status-descarregando';
-        else if (item.status === 'Em Conferência') badgeClass = 'status-conferencia';
-        else badgeClass = 'status-aguardando';
-
-        list.innerHTML += `
-            <div class="fila-item" onclick="abrirModalConferencia(${item.id}, '${item.nf}', '${item.fornecedor}')">
-                <div class="fila-info">
-                    <h4>NF ${item.nf}</h4>
-                    <p>${item.fornecedor}</p>
-                </div>
-                <div class="status-badge ${badgeClass}">● ${item.status.toUpperCase()}</div>
-            </div>
-        `;
-    });
-}
-
-/**
- * Abre o Modal de Conferência Física conectando com o backend.
- */
-function abrirModalConferencia(itemId, nf, fornecedor) {
-    // Implementação de modal utilizando SweetAlert2 (ou adapte para o modal nativo do Bootstrap/HTML do seu projeto)
-    Swal.fire({
-        title: `Conferência - NF ${nf}`,
-        html: `
-            <div style="text-align: left; padding-top: 10px;" class="modal-conferencia">
-                <p style="margin-bottom: 20px; color: var(--text-secondary)">Fornecedor: <strong>${fornecedor}</strong></p>
-                
-                <label>Casulo de Destino</label>
-                <input type="text" id="conf-casulo" placeholder="Ex: A-01" class="swal2-input" style="width: 100%; margin: 8px 0 20px 0;">
-                
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
-                    <div>
-                        <label>Volumes Recebidos</label>
-                        <input type="number" id="conf-vol" placeholder="Qtd" class="swal2-input" style="width: 100%; margin-top: 8px;">
-                    </div>
-                    <div>
-                        <label>Peças Recebidas</label>
-                        <input type="number" id="conf-pecas" placeholder="Qtd" class="swal2-input" style="width: 100%; margin-top: 8px;">
-                    </div>
-                </div>
-
-                <label style="margin-top: 20px; display: block;">Status da Conferência</label>
-                <select id="conf-status" class="swal2-select" style="width: 100%; margin: 8px 0 20px 0;">
-                    <option value="Conforme">Conforme (100% OK)</option>
-                    <option value="Divergente">Divergente (Falta/Sobra)</option>
-                    <option value="Avaria">Avaria (Danificado)</option>
-                </select>
-
-                <label>Observações</label>
-                <textarea id="conf-obs" placeholder="Detalhes da tratativa..." class="swal2-textarea" style="width: 100%; margin-top: 8px;"></textarea>
-            </div>
-        `,
-        showCancelButton: true,
-        confirmButtonText: 'Finalizar e Alocar',
-        cancelButtonText: 'Cancelar',
-        confirmButtonColor: '#3b82f6',
-        background: '#151722',
-        color: '#fff',
-        preConfirm: () => {
-            const casulo = document.getElementById('conf-casulo').value;
-            if (!casulo) {
-                Swal.showValidationMessage('O Casulo de Destino é obrigatório');
-                return false;
-            }
-            return {
-                id: itemId,
-                casulo: casulo,
-                qtd_volumes: document.getElementById('conf-vol').value,
-                qtd_pecas: document.getElementById('conf-pecas').value,
-                status_conferencia: document.getElementById('conf-status').value,
-                observacao: document.getElementById('conf-obs').value
-            };
-        }
-    }).then((result) => {
-        if (result.isConfirmed) {
-            confirmarRecebimentoBackend(result.value);
-        }
-    });
-}
-
-/**
- * Envia o payload da conferência para a rota do app.py
- */
-async function confirmarRecebimentoBackend(payload) {
-    try {
-        const response = await fetch('/api/goat/confirm-receiving', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        });
-        
-        const data = await response.json();
-        
-        if (data.success) {
-            Swal.fire({
-                icon: 'success',
-                title: 'Alocado!',
-                text: data.message,
-                background: '#151722',
-                color: '#fff',
-                confirmButtonColor: '#10b981'
-            });
-            // Recarrega os painéis para atualizar capacidades e fila
-            renderRecebimentoPanel();
-        } else {
-            Swal.fire('Erro', data.detail || data.error || 'Falha ao confirmar.', 'error');
-        }
-    } catch (error) {
-        console.error('Erro na requisição:', error);
-        Swal.fire('Erro', 'Erro de comunicação com o servidor.', 'error');
-    }
-}
-
-
-
 /* V10 — endereçamento por referência + mapa visual */
 function allocationItemRows(){
   const ctx=window.allocCtx;
@@ -2824,6 +2785,20 @@ function filterPositionMap(){
   renderPositionMap();
 }
 
+async function loadReturnAllocationStep(cardId) {
+  window.qaSampleAllocationRequired = false;
+  window.qaSampleAllocationComplete = true;
+  const box = $("posAllocBox");
+  if (!box) return;
+  const receiving = cardData?.receiving || {};
+  const volumes = Number(receiving.volumes || 0);
+  if (!Number.isFinite(volumes) || volumes <= 0) {
+    box.innerHTML = '<div class="notice warn">Informe e salve uma quantidade de volumes maior que zero para liberar o endereçamento completo do retorno.</div>';
+    return;
+  }
+  await loadPositionAllocator(cardId, "RM");
+}
+
 async function loadReceivingAllocationStep(cardId) {
   window.qaSampleAllocationRequired = true;
   window.qaSampleAllocationComplete = false;
@@ -2875,6 +2850,7 @@ async function loadPositionAllocator(cardId,setor,tenPercentSample=false,tenPerc
   const isPieceSector=["ET","EC"].includes(setor);
   const isVolumeOnlyRM=setor==="RM";
   const isTenPercentSample=Boolean(tenPercentSample)&&setor==="QA";
+  const isReturnVolumeAllocation=rcv.receiving_type==="RETORNO"&&!isTenPercentSample;
   const isVolumeOnly=isVolumeOnlyRM||isTenPercentSample;
   if(isTenPercentSample)tenPercentTarget=Number(tenPercentTarget)||(Number(rcv.volumes||0)>0?1:0);
 
@@ -2907,7 +2883,7 @@ async function loadPositionAllocator(cardId,setor,tenPercentSample=false,tenPerc
           (isTenPercentSample ? '<div class="position-dest"><b>Destino fixo: Qualidade (QA)</b><small>Os 10% são endereçados primeiro; o saldo global restante continua compartilhado entre RM, QA e PR.</small></div>' :
           '<div class="position-dest"><label for="positionDestSetor">Destino</label>' +
             '<select id="positionDestSetor" onchange="changeAllocDestination(this.value)">'+
-              [["RM","Recebimento (RM)"],["QA","Qualidade (QA)"],["PR","Processamento (PR)"],["ET","Etiquetagem (ET)"],["EC","Estocagem (EC)"]].map(function(o){
+              (isReturnVolumeAllocation ? [["RM","Recebimento (RM)"],["QA","Qualidade (QA)"],["PR","Processamento (PR)"]] : [["RM","Recebimento (RM)"],["QA","Qualidade (QA)"],["PR","Processamento (PR)"],["ET","Etiquetagem (ET)"],["EC","Estocagem (EC)"]]).map(function(o){
                 return '<option value="'+o[0]+'"'+(o[0]===setor?' selected':'')+'>'+o[1]+'</option>';
               }).join("")+
             '</select><small>'+(isPieceSector?"Saldo em peças nesta área.":"Saldo em volumes compartilhado entre RM, QA e PR.")+'</small></div>') +

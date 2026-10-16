@@ -83,7 +83,6 @@ def pg_connect():
         import db
 
         db.ensure_schema(url)
-
         pool = ConnectionPool(
             url,
             min_size=1,
@@ -117,8 +116,9 @@ def verificar_senha(senha_texto_puro: str, hash_armazenado: str) -> bool:
 def verificar_login_supabase(usuario: str, senha_texto_puro: str) -> dict | None:
     """Confere usuário/senha no Postgres (Supabase). Se bater, devolve
     {"usuario": ..., "papel": ...} — quem chama essa função ainda precisa
-    casar isso com a tabela users (schema distrilog) pra pegar o id que o
-    resto do app usa (require_user, criado_por etc.)."""
+    casar isso com a tabela local de users (SQLite) pra pegar o id que o
+    resto do app usa (require_user, criado_por etc. continuam olhando pro
+    SQLite, sem mudança)."""
     with pg_connect() as con:
         with con.cursor() as cur:
             cur.execute(
