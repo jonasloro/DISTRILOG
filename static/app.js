@@ -667,7 +667,18 @@ async function openCard(cardId, tab = "receiving") {
   window.cardLocationRequestId = locationRequestId;
   window.qaSampleAllocationRequired = false;
   window.qaSampleAllocationComplete = true;
-  cardData = await api(`/api/cards/${cardId}`);
+  const modalWasHidden = $("modal").classList.contains("hidden");
+  if (modalWasHidden) {
+    // Abre o Card na hora, com aviso de carregamento, enquanto os dados chegam do Supabase.
+    $("modalBody").innerHTML = '<div class="loading-panel"><div class="loading-head"><span class="loading-spinner"></span><b>Carregando dados do card…</b></div><div class="skeleton-row"></div><div class="skeleton-row"></div><div class="skeleton-row"></div></div>';
+    $("modal").classList.remove("hidden");
+  }
+  try {
+    cardData = await api(`/api/cards/${cardId}`);
+  } catch (error) {
+    if (modalWasHidden) $("modal").classList.add("hidden");
+    throw error;
+  }
   const currentReceiving = cardData.receiving || {};
   window.qaSampleAllocationRequired = Boolean(
     !cardData.source_snapshot_at &&

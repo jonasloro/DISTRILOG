@@ -303,7 +303,7 @@ def _get_pool() -> ConnectionPool:
             pool = ConnectionPool(
                 url,
                 min_size=1,
-                max_size=int(os.getenv("DB_POOL_MAX", "10")),
+                max_size=int(os.getenv("DB_POOL_MAX", "14")),
                 kwargs={
                     "autocommit": False,
                     "prepare_threshold": None,

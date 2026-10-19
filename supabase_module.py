@@ -86,7 +86,7 @@ def pg_connect():
         pool = ConnectionPool(
             url,
             min_size=1,
-            max_size=int(os.getenv("PG_POOL_MAX", "5")),
+            max_size=int(os.getenv("PG_POOL_MAX", "8")),
             kwargs={"row_factory": dict_row, "prepare_threshold": None, "connect_timeout": 10},
             timeout=20, max_idle=240, max_lifetime=1800, open=False,
         )

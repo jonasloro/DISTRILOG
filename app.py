@@ -26,6 +26,7 @@ from positions_module import init_positions_db, register_positions_routes, total
 from collab_module import init_collab_db, register_collab_routes
 from unified_module import init_unified_db, register_unified_routes
 import db
+from concurrent.futures import ThreadPoolExecutor
 from supabase_module import verificar_login_supabase, seed_usuarios_supabase
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -1894,44 +1895,63 @@ def repair_stored_reference_items(con: "db.Connection", card_id: int) -> bool:
     return changed
 
 
+def _run_section(fn, needs_connection: bool):
+    """Executa uma parte da tela do Card com conexão própria (ou sem banco do app)."""
+    if not needs_connection:
+        return fn()
+    section_con = db_connect()
+    try:
+        return fn(section_con)
+    finally:
+        section_con.close()
+
+
+_CARD_SECTION_POOL = ThreadPoolExecutor(max_workers=6, thread_name_prefix="card-section")
+
+
 @app.get("/api/cards/{card_id}")
 def get_card(card_id: int):
     con = db_connect()
-    initial_card = con.execute("SELECT current_sector FROM cards WHERE id=?", (card_id,)).fetchone()
-    if not initial_card:
+    try:
+        repaired = repair_stored_reference_items(con, card_id)
+        if repaired:
+            con.commit()
+        row = con.execute("SELECT * FROM cards WHERE id=?", (card_id,)).fetchone()
+        if not row:
+            raise HTTPException(404, "Card não encontrado.")
+        if ensure_pending_receiving(con, card_id):
+            con.commit()
+        card = dict(row)
+        card["status_label"] = STATUS_LABELS.get(card["status"], card["status"])
+        card["manual_reference"] = manual_card_reference(card.get("source_notes"))
+        card["items"] = [dict(r) for r in con.execute("SELECT * FROM items WHERE card_id=? ORDER BY product,color,size,id", (card_id,)).fetchall()]
+    finally:
         con.close()
-        raise HTTPException(404, "Card não encontrado.")
-    repaired = repair_stored_reference_items(con, card_id)
-    if repaired:
-        con.commit()
-    row = con.execute("SELECT * FROM cards WHERE id=?", (card_id,)).fetchone()
-    if not row:
-        con.close()
-        raise HTTPException(404, "Card não encontrado.")
-    if ensure_pending_receiving(con, card_id):
-        con.commit()
-    card = dict(row)
-    card["status_label"] = STATUS_LABELS.get(card["status"], card["status"])
-    card["manual_reference"] = manual_card_reference(card.get("source_notes"))
-    card["items"] = [dict(r) for r in con.execute("SELECT * FROM items WHERE card_id=? ORDER BY product,color,size,id", (card_id,)).fetchall()]
     card["expected_total"] = sum(item["expected_qty"] for item in card["items"])
-    card["rm_item_volumes"] = {str(item_id): qty for item_id, qty in item_allocation_totals(card_id, "RM").items()}
-    card["global_allocated_volume_total"] = total_allocated("RM", card_id)
+
+    # As demais partes não dependem umas das outras: buscam ao mesmo tempo, cada uma com a
+    # sua conexão, em vez de esperar 15+ idas ao banco em fila.
+    sections = {
+        "rm_item_volumes": (lambda: {str(k): v for k, v in item_allocation_totals(card_id, "RM").items()}, False),
+        "global_allocated_volume_total": (lambda: total_allocated("RM", card_id), False),
+        "receiving": (lambda c: current_receiving(c, card_id), True),
+        "in_transit": (lambda c: awaiting_arrival(c, card_id), True),
+        "dispatch": (lambda c: current_dispatch(c, card_id), True),
+        "quality": (lambda c: quality_card_data(c, card_id), True),
+        "processing": (lambda c: processing_card_data(c, card_id), True),
+        "labeling": (lambda c: downstream_card_data(c, card_id, "ETIQUETAGEM"), True),
+        "storage": (lambda c: downstream_card_data(c, card_id, "ESTOCAGEM"), True),
+        "casulo_history": (lambda c: [dict(r) for r in c.execute(
+            """SELECT ch.*,u.name user_name FROM casulo_history ch JOIN users u ON u.id=ch.user_id
+               WHERE ch.card_id=? ORDER BY ch.id DESC""", (card_id,)).fetchall()], True),
+        "history": (lambda c: [dict(r) for r in c.execute(
+            """SELECT h.*,u.name user_name FROM history h LEFT JOIN users u ON u.id=h.user_id
+               WHERE h.card_id=? ORDER BY h.id DESC""", (card_id,)).fetchall()], True),
+    }
+    futures = {name: _CARD_SECTION_POOL.submit(_run_section, fn, needs) for name, (fn, needs) in sections.items()}
+    for name, future in futures.items():
+        card[name] = future.result()
     card["rm_volume_only"] = card["global_allocated_volume_total"] > sum(card["rm_item_volumes"].values())
-    card["receiving"] = current_receiving(con, card_id)
-    card["in_transit"] = awaiting_arrival(con, card_id)
-    card["dispatch"] = current_dispatch(con, card_id)
-    card["quality"] = quality_card_data(con, card_id)
-    card["processing"] = processing_card_data(con, card_id)
-    card["labeling"] = downstream_card_data(con, card_id, "ETIQUETAGEM")
-    card["storage"] = downstream_card_data(con, card_id, "ESTOCAGEM")
-    card["casulo_history"] = [dict(r) for r in con.execute(
-        """SELECT ch.*,u.name user_name FROM casulo_history ch JOIN users u ON u.id=ch.user_id
-           WHERE ch.card_id=? ORDER BY ch.id DESC""", (card_id,)).fetchall()]
-    card["history"] = [dict(r) for r in con.execute(
-        """SELECT h.*,u.name user_name FROM history h LEFT JOIN users u ON u.id=h.user_id
-           WHERE h.card_id=? ORDER BY h.id DESC""", (card_id,)).fetchall()]
-    con.close()
     return card
 
 
