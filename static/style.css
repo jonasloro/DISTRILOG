@@ -1223,3 +1223,11 @@ input:disabled,select:disabled,textarea:disabled{
   .address-map-legend small{width:100%;margin-left:0}
   .address-map-grid .address-map-casulos{grid-template-columns:1fr}
 }
+
+/* Estado de carregamento ao trocar de tela */
+.loading-panel{padding:8px 2px}
+.loading-head{display:flex;align-items:center;gap:10px;margin:6px 0 18px;color:var(--muted,#9aa6b8)}
+.loading-spinner{width:16px;height:16px;border-radius:50%;border:2px solid rgba(255,255,255,.18);border-top-color:#ff8a3d;animation:dl-spin .8s linear infinite}
+.skeleton-row{height:46px;margin:10px 0;border-radius:10px;background:linear-gradient(90deg,rgba(255,255,255,.04) 25%,rgba(255,255,255,.09) 37%,rgba(255,255,255,.04) 63%);background-size:400% 100%;animation:dl-shimmer 1.3s ease infinite}
+@keyframes dl-spin{to{transform:rotate(360deg)}}
+@keyframes dl-shimmer{0%{background-position:100% 50%}100%{background-position:0 50%}}

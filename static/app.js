@@ -118,9 +118,19 @@ function activeNav(view) {
   });
 }
 
+function showLoading(label) {
+  const rows = Array.from({length: 5}, () => '<div class="skeleton-row"></div>').join("");
+  $("mainContent").innerHTML = `<div class="loading-panel"><div class="loading-head"><span class="loading-spinner"></span><b>Carregando ${esc(label || "")}…</b></div>${rows}</div>`;
+}
+
 async function goTo(view) {
+  const previousView = currentView;
   currentView = view;
   activeNav(view);
+  if (previousView !== view || !$("mainContent").children.length) {
+    const navButton = document.querySelector(`.nav-item[data-view="${view}"]`);
+    showLoading(navButton ? navButton.textContent.trim() : "");
+  }
   try {
     if (view === "dashboard") await renderDashboard();
     if (view === "receiving") await renderCards("receiving");
@@ -373,9 +383,11 @@ async function renderCards(scope) {
   const title = quality ? "Qualidade" : processing ? "Processamento" : labeling ? "Etiquetagem" : storage ? "Estocagem" : "Recebimento";
   const subtitle = quality ? "Inspeção ágil e preenchimento guiado" : processing ? "Seleção compacta de materiais" : labeling ? "Grade por tamanho; Saldo por quantidade" : storage ? "Entrada em estoque por tamanho ou saldo geral" : "Controle geral da produção e posição real de cada item";
   setPage(title, subtitle);
-  const cards = await api(`/api/cards?scope=${scope}`);
-  const metrics = ["receiving","quality","processing"].includes(scope)
-    ? metricCardsHtml(scope, (await api("/api/dashboard")).totals) : "";
+  const [cards, dashboardData] = await Promise.all([
+    api(`/api/cards?scope=${scope}`),
+    ["receiving","quality","processing"].includes(scope) ? api("/api/dashboard") : Promise.resolve(null),
+  ]);
+  const metrics = dashboardData ? metricCardsHtml(scope, dashboardData.totals) : "";
   if (["receiving","quality","processing","labeling","storage"].includes(scope)) {
     const tabs = storage ? moduleTabs([["Visão geral","storage-hub"],["Fila operacional","storage"]],"storage") : "";
     $("mainContent").innerHTML = tabs + metrics + processingQueueHtml(cards, scope);
