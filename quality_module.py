@@ -4,6 +4,7 @@ import json
 import math
 import os
 import db
+from sample_math import proportional_allocation
 import uuid
 import mimetypes
 from datetime import datetime, time, timedelta
@@ -474,30 +475,12 @@ def distribute_grade_sample(items: list[db.Row], requested_total: int) -> tuple[
     if not valid:
         raise HTTPException(400, "Não existem itens com quantidade válida para compor a amostra da Grade.")
     total_capacity = sum(int(item["expected_qty"] or 0) for item in valid)
-    target = max(int(requested_total or 0), len(valid))
+    target = int(requested_total or 0)
     if target > total_capacity:
         raise HTTPException(400, f"A amostra calculada ({target}) ultrapassa a quantidade total disponível ({total_capacity}).")
-
-    allocations = {int(item["id"]): 1 for item in valid}
-    capacities = {int(item["id"]): int(item["expected_qty"] or 0) - 1 for item in valid}
-    remaining = target - len(valid)
-    active = [int(item["id"]) for item in valid if capacities[int(item["id"])] > 0]
-    while remaining > 0 and active:
-        share = max(1, remaining // len(active))
-        next_active: list[int] = []
-        for item_id in active:
-            if remaining <= 0:
-                break
-            add = min(share, capacities[item_id], remaining)
-            allocations[item_id] += add
-            capacities[item_id] -= add
-            remaining -= add
-            if capacities[item_id] > 0:
-                next_active.append(item_id)
-        active = next_active
-    if remaining > 0:
-        raise HTTPException(400, "Não foi possível distribuir toda a amostra entre os itens da Grade.")
-    return target, [(int(item["id"]), allocations[int(item["id"])]) for item in valid]
+    # Proporção exata da grade (ex.: 40 G Azul → 4 G Azul), fechando exatamente o total.
+    allocations = proportional_allocation({int(item["id"]): int(item["expected_qty"] or 0) for item in valid}, target)
+    return target, [(int(item["id"]), allocations[int(item["id"])]) for item in valid if allocations[int(item["id"])] > 0]
 
 
 def create_automatic_sample(

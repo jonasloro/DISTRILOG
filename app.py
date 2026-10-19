@@ -26,6 +26,7 @@ from positions_module import init_positions_db, register_positions_routes, total
 from collab_module import init_collab_db, register_collab_routes
 from unified_module import init_unified_db, register_unified_routes
 import db
+from sample_math import proportional_allocation, volume_plan
 from concurrent.futures import ThreadPoolExecutor
 from supabase_module import verificar_login_supabase, seed_usuarios_supabase
 
@@ -848,7 +849,7 @@ def ensure_receiving(
     requires_sample = receiving_type != "RETORNO"
     required = 1 if requires_sample else 0
     mode = con.execute("SELECT purchase_mode FROM cards WHERE id=?", (card_id,)).fetchone()["purchase_mode"]
-    minimum = max(math.ceil(total * 0.10), item_count if mode == "GRADE" else 0) if requires_sample else 0
+    minimum = math.ceil(total * 0.10) if requires_sample else 0
     if row:
         receiving_id = int(row["id"])
         if not requires_sample:
@@ -1041,23 +1042,10 @@ def current_receiving(con: "db.Connection", card_id: int) -> Optional[dict[str, 
     target = int(data.get("ten_percent_min") or 0)
     mode = con.execute("SELECT purchase_mode FROM cards WHERE id=?", (card_id,)).fetchone()["purchase_mode"]
     if str(mode or "").upper() == "GRADE" and plan_items:
-        allocations = {int(item["id"]): 1 for item in plan_items}
-        capacities = {int(item["id"]): max(0, int(item["expected_qty"] or 0) - 1) for item in plan_items}
-        remaining = max(0, target - len(plan_items))
-        active = [int(item["id"]) for item in plan_items if capacities[int(item["id"])] > 0]
-        while remaining > 0 and active:
-            share = max(1, remaining // len(active))
-            next_active: list[int] = []
-            for item_id in active:
-                if remaining <= 0:
-                    break
-                added = min(share, capacities[item_id], remaining)
-                allocations[item_id] += added
-                capacities[item_id] -= added
-                remaining -= added
-                if capacities[item_id] > 0:
-                    next_active.append(item_id)
-            active = next_active
+        # Fiel à grade: cada cor/tamanho entrega a mesma proporção (ex.: 40 G Azul → 4 G Azul).
+        allocations = proportional_allocation(
+            {int(item["id"]): int(item["expected_qty"] or 0) for item in plan_items}, target
+        )
         data["sample_plan"] = [item | {"sample_qty": allocations[int(item["id"])]} for item in plan_items]
     else:
         data["sample_plan"] = [{
@@ -1066,6 +1054,7 @@ def current_receiving(con: "db.Connection", card_id: int) -> Optional[dict[str, 
             "expected_qty": sum(int(item["expected_qty"] or 0) for item in plan_items),
             "sample_qty": target,
         }] if target > 0 else []
+    data["sample_volume_plan"] = volume_plan(data["sample_plan"], data.get("volumes"))
     return data
 
 
@@ -2012,7 +2001,7 @@ async def save_receiving(receiving_id: int, request: Request):
             item_count = con.execute(
                 "SELECT COUNT(*) n FROM items WHERE card_id=? AND expected_qty>0", (rec["card_id"],)
             ).fetchone()["n"]
-        minimum = max(math.ceil(int(received_qty) * 0.10), item_count if card["purchase_mode"] == "GRADE" else 0)
+        minimum = math.ceil(int(received_qty) * 0.10)
         con.execute(
             "UPDATE receivings SET ten_percent_required=1,ten_percent_min=? WHERE id=?",
             (minimum, receiving_id),
@@ -2208,7 +2197,7 @@ async def set_purchase_mode(card_id: int, request: Request):
                 (rec["id"],),
             )
         else:
-            minimum = max(math.ceil(qty * 0.10), int(base["n"] or 0) if mode == "GRADE" else 0)
+            minimum = math.ceil(qty * 0.10)
             con.execute(
                 "UPDATE receivings SET ten_percent_required=1,ten_percent_min=? WHERE id=?",
                 (minimum, rec["id"]),

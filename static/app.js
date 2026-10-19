@@ -960,10 +960,20 @@ function samplePlanTable(r, title) {
   const rows = r.sample_plan || [];
   if (!rows.length) return "";
   return `<h3 class="section-heading">${esc(title)}</h3>
-    <div class="notice"><b>Distribuição automática por cor e tamanho.</b><br>O total de peças é dividido com a mesma regra da Qualidade. Para Grade, cada combinação recebe pelo menos uma peça e a soma fecha exatamente a meta prevista de 10%.</div>
+    <div class="notice"><b>Distribuição automática por cor e tamanho.</b><br>Cada cor e tamanho entrega a mesma proporção da sua quantidade (ex.: 40 peças → 4), e a soma fecha exatamente a meta de 10%.</div>
     <div class="table-wrap compact-picker"><table class="compact-table"><thead><tr><th>Produto</th><th>Referência</th><th>Cor</th><th>Tamanho</th><th>Qtd. total</th><th>Retirar nos 10%</th></tr></thead><tbody>
       ${rows.map((item)=>`<tr><td><b>${esc(item.product||"—")}</b></td><td>${esc(item.reference||item.sku||"—")}</td><td>${esc(item.color||"Geral")}</td><td><span class="size-token">${esc(item.size||"Geral")}</span></td><td>${item.expected_qty}</td><td><b>${item.sample_qty}</b></td></tr>`).join("")}
-    </tbody><tfoot><tr><td colspan="5"><b>Total previsto da tiragem</b></td><td><b>${rows.reduce((sum,item)=>sum+Number(item.sample_qty||0),0)}</b></td></tr></tfoot></table></div>`;
+    </tbody><tfoot><tr><td colspan="5"><b>Total previsto da tiragem</b></td><td><b>${rows.reduce((sum,item)=>sum+Number(item.sample_qty||0),0)}</b></td></tr></tfoot></table></div>${samplePerVolumeHtml(r)}`;
+}
+
+function samplePerVolumeHtml(r) {
+  const plan = (r.sample_volume_plan || []).filter((v) => v.qty > 0);
+  if (!plan.length) return "";
+  return `<h3 class="section-heading">Retirada por volume</h3>
+    <div class="notice">Para nenhum volume sair inteiro no saco dos 10%, retire de cada volume só a parte indicada abaixo (distribuição equilibrada, supondo volumes de tamanho parecido).</div>
+    <div class="table-wrap compact-picker"><table class="compact-table"><thead><tr><th>Volume</th><th>Retirar (peças)</th><th>Itens a retirar neste volume</th></tr></thead><tbody>
+    ${plan.map((v) => `<tr><td><b>Volume ${v.volume}</b></td><td><b>${v.qty}</b></td><td>${v.items.map((it) => `${esc(it.color || "Geral")} ${esc(it.size || "")}: <b>${it.qty}</b>`).join(" · ")}</td></tr>`).join("")}
+    </tbody></table></div>`;
 }
 
 function costuraProductionHtml(r, productionDone, operate) {
@@ -985,6 +995,8 @@ function receivingFormHtml(isReturn) {
   const readOnly = operate && !physicalDone ? "" : "readonly";
   const disabled = operate && !physicalDone ? "" : "disabled";
   const operationItems = r.operation_items || [];
+  const dataSaved = Number(r.volumes || 0) > 0 && r.received_qty !== null && r.received_qty !== undefined && r.has_damage !== null && r.has_damage !== undefined;
+  const canConclude = operate && !physicalDone && dataSaved && (isReturn || sampleDone);
   return `
     <div class="panel-body">
       <div class="notice ${isReturn ? "success-box" : ""}"><b>${isReturn ? "Recebimento do retorno CD01" : "Recebimento de mercadoria em trânsito"}</b><br>${isReturn ? "Faça a conferência física e informe volumes e quantidade retornada. Não existe tiragem de 10% no Recebimento da volta da Costura. Aloque todo o saldo retornado entre RM, QA e PR antes de concluir; depois o Card seguirá para a Inspeção 2 na Qualidade." : "Conclua a tiragem dos 10% antes de liberar a alocação dos volumes no RM. O Card só segue para a Qualidade quando o recebimento físico e a amostra terminarem."}</div>
@@ -999,13 +1011,16 @@ function receivingFormHtml(isReturn) {
         <div class="field full"><label>Observações</label><textarea id="recNotes" ${readOnly}>${esc(r.notes||"")}</textarea></div>
       </div>
       <div class="actions">
-        ${operate && !physicalDone ? `<button class="secondary" onclick="saveReceiving()">Salvar dados</button><button class="success" onclick="completePhysical()">Concluir recebimento físico</button><label class="primary small-btn" style="cursor:pointer">Adicionar fotos<input id="receivingFiles" type="file" multiple hidden onchange="uploadReceivingPhotos()"></label>` : ""}
+        ${operate && !physicalDone ? `<button class="secondary" onclick="saveReceiving()">Salvar dados</button><label class="primary small-btn" style="cursor:pointer">Adicionar fotos<input id="receivingFiles" type="file" multiple hidden onchange="uploadReceivingPhotos()"></label>` : ""}
         ${isReturn && physicalDone && operate && cardData.current_sector === "RECEBIMENTO" ? '<button class="success" onclick="completePhysical()">Concluir retorno e encaminhar à Qualidade</button>' : (physicalDone ? '<span class="badge green">Recebimento físico concluído</span>' : '<span class="badge gray">Recebimento físico pendente</span>')}
       </div>
-      ${isReturn
+      ${!dataSaved && !physicalDone
+        ? `<div class="notice warn"><b>Salve os dados do recebimento para continuar.</b><br>Informe volumes, quantidade e avarias e clique em <b>Salvar dados</b>. ${isReturn ? "O endereçamento do retorno" : "O plano da tiragem de 10%"} aparece depois disso.</div>`
+        : `${isReturn
         ? `<h3 class="section-heading">Endereçamento do retorno</h3><div id="posAllocBox" class="notice">${Number(r.volumes||0)>0 ? "Carregando mapa para alocar todo o saldo retornado…" : "Informe e salve os volumes retornados para liberar o endereçamento completo."}</div>`
-        : `${samplePlanTable(r,"Plano exato da tiragem de 10%")}${sampleHtml(r, sampleDone, operate, false)}${sampleDone ? `<h3 class="section-heading">Endereçamento obrigatório da amostra na Qualidade</h3><div id="posAllocBox" class="notice">Carregando etapa obrigatória de alocação…</div>` : `<h3 class="section-heading">Endereçamento da amostra</h3><div class="notice warn">Conclua a tiragem dos 10% para liberar primeiro a alocação obrigatória na Qualidade.</div>`}`}
+        : `${samplePlanTable(r,"Plano exato da tiragem de 10%")}${sampleHtml(r, sampleDone, operate, false)}${sampleDone ? `<h3 class="section-heading">Endereçamento obrigatório da amostra na Qualidade</h3><div id="posAllocBox" class="notice">Carregando etapa obrigatória de alocação…</div>` : `<h3 class="section-heading">Endereçamento da amostra</h3><div class="notice warn">Conclua a tiragem dos 10% para liberar primeiro a alocação obrigatória na Qualidade.</div>`}`}`}
       <div class="photos">${receivingPhotos.map((p,i)=>`<a class="photo-link" target="_blank" href="${p}">Arquivo ${i+1}</a>`).join("")}</div>
+      ${canConclude ? '<div class="actions"><button class="success" onclick="completePhysical()">Concluir recebimento físico</button></div>' : ""}
     </div>`;
 }
 
