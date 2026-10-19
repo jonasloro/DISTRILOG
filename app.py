@@ -1658,7 +1658,8 @@ def dashboard():
     counts = {r["status"]: r["n"] for r in status_rows}
     recent = con.execute(
         """SELECT c.id,c.purchase_id,c.supplier,c.brand,c.purchase_mode,c.current_sector,c.status,c.casulo_current,c.updated_at,
-           COALESCE(SUM(i.expected_qty),0) expected_total
+           COALESCE(SUM(i.expected_qty),0) expected_total,
+           GROUP_CONCAT(DISTINCT NULLIF(TRIM(i.reference),'')) reference_list
            FROM cards c LEFT JOIN items i ON i.card_id=c.id
            GROUP BY c.id ORDER BY c.updated_at DESC LIMIT 12"""
     ).fetchall()
