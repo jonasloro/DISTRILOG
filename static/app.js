@@ -124,6 +124,7 @@ function showLoading(label) {
 }
 
 async function goTo(view) {
+  clearInterval(cleaningTick);
   const previousView = currentView;
   currentView = view;
   activeNav(view);
@@ -157,6 +158,7 @@ async function goTo(view) {
     if (view === "history") await renderGlobalHistory();
     if (view === "chat") await renderChat();
     if (view === "calendar") await renderCalendar();
+    if (view === "cleaning") await renderCleaning();
   } catch (error) {
     console.error(error);
     $("mainContent").innerHTML = `<div class="state-panel error-state"><b>Não foi possível carregar esta visão.</b><span>${esc(error.message)}</span><button class="primary" onclick="refreshCurrentView()">Tentar novamente</button></div>`;
@@ -3128,4 +3130,105 @@ async function submitAllocation(cardId,setor){
     toast((isVolumeOnlyRM?"Volumes":"Referência "+referenceLabel(item))+" alocados em "+address+" com "+qty.toLocaleString("pt-BR")+" "+unit+".");
     renderAllocationItemPicker();renderCurrentItemAllocations();updateReferenceRemaining();renderPositionMap();
   }catch(e){toast(e.message);}
+}
+
+// ---------- Renata Ingrata: controle de tempo das limpezas ----------
+let cleaningTick = null;
+let cleaningDays = 30;
+
+function fmtDurationShort(seconds) {
+  const s = Math.max(0, Math.round(Number(seconds || 0)));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (s < 3600) return `${m} min ${String(s % 60).padStart(2, "0")}s`;
+  return `${Math.floor(s / 3600)} h ${String(m % 60).padStart(2, "0")} min`;
+}
+
+function cleaningTimerHtml(task, fetchedAt) {
+  const running = task.status === "EM_ANDAMENTO";
+  return `<span class="clean-clock" data-clean-timer data-base="${Number(task.worked_seconds || 0)}" data-running="${running ? 1 : 0}" data-fetched="${fetchedAt}">${fmtSeconds(task.worked_seconds)}</span>`;
+}
+
+function cleaningActionButtons(task) {
+  const id = Number(task.id);
+  const pauseOrResume = task.status === "EM_ANDAMENTO"
+    ? `<button class="secondary" onclick="cleaningAction(${id},'pause')">Pausar</button>`
+    : `<button class="primary" onclick="cleaningAction(${id},'resume')">Retomar</button>`;
+  return `${pauseOrResume}<button class="success" onclick="cleaningAction(${id},'finish')">Concluir limpeza</button>`;
+}
+
+async function renderCleaning() {
+  setPage("Renata Ingrata", "Controle de tempo das limpezas por área");
+  clearInterval(cleaningTick);
+  const data = await api(`/api/cleaning/overview?user_id=${currentUser.id}&days=${cleaningDays}`);
+  const fetchedAt = Date.now();
+  const mine = data.active.find((t) => Number(t.user_id) === Number(currentUser.id));
+  const others = data.active.filter((t) => t !== mine);
+  const canDelete = ["admin", "supervisor"].includes(currentUser.role);
+  const maxAvg = Math.max(1, ...data.by_area.map((a) => a.avg_seconds));
+  const when = (iso) => (iso ? new Date(iso).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—");
+  const startPanel = mine
+    ? `<div class="clean-active"><div><span class="clean-area-tag">${esc(mine.area)}</span><div class="muted">${mine.status === "PAUSADA" ? "Pausada" : "Em andamento"} · iniciada às ${when(mine.started_at)}</div></div>
+         ${cleaningTimerHtml(mine, fetchedAt)}<div class="actions">${cleaningActionButtons(mine)}</div></div>`
+    : `<div class="field"><label>Observação (opcional)</label><input id="cleaningNotes" maxlength="120" placeholder="Ex.: limpeza geral, vidros…"></div>
+       <div class="clean-areas">${data.areas.map((a) => `<button class="clean-area-btn" data-area="${esc(a)}" onclick="startCleaning(this.dataset.area)">${esc(a)}<small>Iniciar limpeza</small></button>`).join("")}</div>`;
+  const othersPanel = others.length
+    ? `<section class="panel"><div class="panel-body"><h3 class="section-heading">Em andamento agora</h3>${others.map((t) => `<div class="clean-row"><b>${esc(t.area)}</b><span>${esc(t.user_name)}</span><span>${t.status === "PAUSADA" ? "Pausada" : "Em andamento"}</span>${cleaningTimerHtml(t, fetchedAt)}${canDelete || Number(t.user_id) === Number(currentUser.id) ? `<span class="actions">${cleaningActionButtons(t)}</span>` : ""}</div>`).join("")}</div></section>`
+    : "";
+  const bars = data.by_area.map((a) => `<div class="clean-bar-row"><div class="clean-bar-label"><b>${esc(a.area)}</b><span>${a.tasks ? `${a.tasks} limpeza(s)` : "sem registros"}</span></div>
+      <div class="clean-bar-track"><div class="clean-bar-fill" style="width:${a.tasks ? Math.max(3, (a.avg_seconds / maxAvg) * 100) : 0}%"></div></div>
+      <div class="clean-bar-value">${a.tasks ? fmtDurationShort(a.avg_seconds) : "—"}</div></div>`).join("");
+  const areaRows = data.by_area.map((a) => `<tr><td><b>${esc(a.area)}</b></td><td>${a.tasks}</td><td>${a.tasks ? fmtDurationShort(a.avg_seconds) : "—"}</td><td>${a.tasks ? fmtDurationShort(a.min_seconds) : "—"}</td><td>${a.tasks ? fmtDurationShort(a.max_seconds) : "—"}</td><td>${a.tasks ? fmtDurationShort(a.total_seconds) : "—"}</td><td>${when(a.last_finished_at)}</td></tr>`).join("");
+  const recentRows = data.recent.length
+    ? data.recent.map((t) => `<tr><td>${when(t.finished_at)}</td><td><b>${esc(t.area)}</b></td><td>${esc(t.user_name)}</td><td><b>${fmtDurationShort(t.worked_seconds)}</b></td><td>${t.paused_seconds ? fmtDurationShort(t.paused_seconds) : "—"}</td><td>${esc(t.notes || "")}</td>${canDelete ? `<td><button class="secondary" onclick="deleteCleaning(${Number(t.id)})">Excluir</button></td>` : ""}</tr>`).join("")
+    : `<tr><td colspan="${canDelete ? 7 : 6}" class="muted">Nenhuma limpeza concluída ainda.</td></tr>`;
+  $("mainContent").innerHTML = `
+    <section class="panel"><div class="panel-body"><h3 class="section-heading">${mine ? "Minha limpeza" : "Iniciar uma limpeza"}</h3>${startPanel}</div></section>
+    ${othersPanel}
+    <section class="panel"><div class="panel-body">
+      <div class="clean-dash-head"><h3 class="section-heading">Média de tempo por área</h3>
+        <select onchange="setCleaningDays(this.value)">${[[7, "Últimos 7 dias"], [30, "Últimos 30 dias"], [90, "Últimos 90 dias"], [0, "Todo o período"]].map(([v, l]) => `<option value="${v}" ${Number(cleaningDays) === v ? "selected" : ""}>${l}</option>`).join("")}</select></div>
+      <div class="clean-kpis"><div><span>Limpezas concluídas</span><b>${data.totals.tasks}</b></div><div><span>Tempo total</span><b>${fmtDurationShort(data.totals.total_seconds)}</b></div><div><span>Média geral</span><b>${data.totals.tasks ? fmtDurationShort(data.totals.avg_seconds) : "—"}</b></div></div>
+      <div class="clean-bars">${bars}</div>
+      <div class="table-wrap"><table class="compact-table"><thead><tr><th>Área</th><th>Limpezas</th><th>Média</th><th>Mais rápida</th><th>Mais demorada</th><th>Tempo total</th><th>Última</th></tr></thead><tbody>${areaRows}</tbody></table></div>
+    </div></section>
+    <section class="panel"><div class="panel-body"><h3 class="section-heading">Últimas limpezas</h3>
+      <div class="table-wrap"><table class="compact-table"><thead><tr><th>Concluída</th><th>Área</th><th>Responsável</th><th>Tempo</th><th>Pausas</th><th>Observação</th>${canDelete ? "<th></th>" : ""}</tr></thead><tbody>${recentRows}</tbody></table></div></div></section>`;
+  if (data.active.some((t) => t.status === "EM_ANDAMENTO")) {
+    cleaningTick = setInterval(() => {
+      document.querySelectorAll("[data-clean-timer]").forEach((el) => {
+        if (el.dataset.running !== "1") return;
+        el.textContent = fmtSeconds(Number(el.dataset.base) + (Date.now() - Number(el.dataset.fetched)) / 1000);
+      });
+    }, 1000);
+  }
+}
+
+async function startCleaning(area) {
+  try {
+    await api("/api/cleaning/tasks", { method: "POST", body: JSON.stringify({ user_id: currentUser.id, area, notes: $("cleaningNotes")?.value || "" }) });
+    toast(`Limpeza de ${area} iniciada.`);
+    await renderCleaning();
+  } catch (error) { toast(error.message); }
+}
+
+async function cleaningAction(id, action) {
+  try {
+    await api(`/api/cleaning/tasks/${id}/${action}`, { method: "POST", body: JSON.stringify({ user_id: currentUser.id }) });
+    toast(action === "finish" ? "Limpeza concluída." : action === "pause" ? "Limpeza pausada." : "Limpeza retomada.");
+    await renderCleaning();
+  } catch (error) { toast(error.message); }
+}
+
+async function deleteCleaning(id) {
+  if (!confirm("Excluir este registro de limpeza?")) return;
+  try {
+    await api(`/api/cleaning/tasks/${id}?user_id=${currentUser.id}`, { method: "DELETE" });
+    await renderCleaning();
+  } catch (error) { toast(error.message); }
+}
+
+async function setCleaningDays(value) {
+  cleaningDays = Number(value);
+  await renderCleaning();
 }

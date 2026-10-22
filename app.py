@@ -25,6 +25,7 @@ from goat_module import init_goat_db, register_goat_routes
 from positions_module import init_positions_db, register_positions_routes, total_allocated, item_allocation_totals
 from collab_module import init_collab_db, register_collab_routes
 from unified_module import init_unified_db, register_unified_routes
+from cleaning_module import init_cleaning_db, register_cleaning_routes
 import db
 from sample_math import proportional_allocation
 from concurrent.futures import ThreadPoolExecutor
@@ -1242,6 +1243,7 @@ def startup() -> None:
     init_positions_db()
     init_collab_db()
     init_unified_db()
+    init_cleaning_db()
 
     # Traz uma única vez os cards e dados antigos (tabelas outlog_*) para o schema distrilog.
     try:
@@ -2516,6 +2518,7 @@ register_production_routes(app)
 register_goat_routes(app)
 register_positions_routes(app)
 register_unified_routes(app)
+register_cleaning_routes(app)
 register_collab_routes(app)
 
 @app.post("/api/test/cards/{card_id}/send-processing")

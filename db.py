@@ -36,7 +36,7 @@ TABLES = {
     "receiving_operation_items", "receivings", "return_items", "returns",
     "sector_positions", "sgo_entries", "sgo_imports", "shipment_items", "shipments",
     "stock_group_snapshots", "stock_report_imports", "timer_events", "unified_movements",
-    "users", "quality_files",
+    "users", "quality_files", "cleaning_tasks", "cleaning_task_events",
 }
 
 IntegrityError = psycopg.errors.IntegrityError
