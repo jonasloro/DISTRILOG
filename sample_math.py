@@ -29,30 +29,3 @@ def proportional_allocation(quantities: dict[int, int], total: int) -> dict[int,
             base[key] += 1
             left -= 1
     return base
-
-
-def volume_plan(rows: list[dict[str, Any]], volumes: Any) -> list[dict[str, Any]]:
-    """Reparte a retirada de cada item entre os volumes de forma equilibrada, para que
-    cada volume ceda uma parte parecida e nenhum seja esvaziado para fechar os 10%."""
-    count = max(0, int(volumes or 0))
-    if count <= 0:
-        return []
-    totals = [0] * count
-    per_volume: list[list[dict[str, Any]]] = [[] for _ in range(count)]
-    ordered = sorted(rows, key=lambda r: -int(r.get("sample_qty") or 0))
-    for row in ordered:
-        sample = int(row.get("sample_qty") or 0)
-        if sample <= 0:
-            continue
-        base, extra = divmod(sample, count)
-        amounts = [base] * count
-        for index in sorted(range(count), key=lambda v: (totals[v], v))[:extra]:
-            amounts[index] += 1
-        for index, amount in enumerate(amounts):
-            if amount:
-                totals[index] += amount
-                per_volume[index].append({
-                    "product": row.get("product"), "reference": row.get("reference") or row.get("sku"),
-                    "color": row.get("color"), "size": row.get("size"), "qty": amount,
-                })
-    return [{"volume": i + 1, "qty": totals[i], "items": per_volume[i]} for i in range(count)]

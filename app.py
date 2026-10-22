@@ -26,7 +26,7 @@ from positions_module import init_positions_db, register_positions_routes, total
 from collab_module import init_collab_db, register_collab_routes
 from unified_module import init_unified_db, register_unified_routes
 import db
-from sample_math import proportional_allocation, volume_plan
+from sample_math import proportional_allocation
 from concurrent.futures import ThreadPoolExecutor
 from supabase_module import verificar_login_supabase, seed_usuarios_supabase
 
@@ -677,6 +677,8 @@ def init_db() -> None:
         )"""
     )
 
+    con.execute("ALTER TABLE receivings ADD COLUMN IF NOT EXISTS volumes_after_sample INTEGER")
+    con.commit()
     for username, password, name, role in [
         ("admin", "1234", "Administrador", "admin"),
         ("recebimento", "1234", "Operador do Recebimento", "recebimento"),
@@ -1054,7 +1056,6 @@ def current_receiving(con: "db.Connection", card_id: int) -> Optional[dict[str, 
             "expected_qty": sum(int(item["expected_qty"] or 0) for item in plan_items),
             "sample_qty": target,
         }] if target > 0 else []
-    data["sample_volume_plan"] = volume_plan(data["sample_plan"], data.get("volumes"))
     return data
 
 
@@ -2023,6 +2024,37 @@ async def save_receiving(receiving_id: int, request: Request):
     return {"ok": True}
 
 
+@app.post("/api/receivings/{receiving_id}/volumes-after-sample")
+async def save_volumes_after_sample(receiving_id: int, request: Request):
+    """Registra quantos volumes sobraram depois da retirada dos 10%; vale para o endereçamento."""
+    data = await request.json()
+    user_id = int(data.get("user_id") or 0)
+    try:
+        volumes = int(data.get("volumes"))
+    except (TypeError, ValueError):
+        raise HTTPException(400, "Informe a quantidade de volumes após a retirada dos 10%.")
+    if volumes <= 0:
+        raise HTTPException(400, "A quantidade de volumes após a retirada dos 10% deve ser maior que zero.")
+    con = db_connect()
+    try:
+        require_role(con, user_id, {"recebimento"})
+        rec = load_receiving_operation(con, receiving_id)
+        if rec["receiving_type"] in ("RETORNO", "COSTURA") or not rec["ten_percent_required"]:
+            raise HTTPException(400, "Este recebimento não possui retirada de 10%.")
+        if rec["ten_percent_status"] != "CONCLUIDA":
+            raise HTTPException(400, "Conclua a tiragem dos 10% antes de informar os volumes restantes.")
+        if rec["physical_status"] == "CONCLUIDO":
+            raise HTTPException(400, "O recebimento físico já foi concluído.")
+        current = total_allocated("RM", rec["card_id"])
+        if current > volumes:
+            raise HTTPException(400, f"Já existem {current} volumes endereçados no RM; libere o excedente antes de reduzir a quantidade.")
+        con.execute("UPDATE receivings SET volumes_after_sample=? WHERE id=?", (volumes, int(rec["id"])))
+        con.commit()
+    finally:
+        con.close()
+    return {"ok": True, "volumes_after_sample": volumes}
+
+
 @app.post("/api/receivings/{receiving_id}/physical-complete")
 async def complete_physical(receiving_id: int, request: Request):
     data = await request.json()
@@ -2058,12 +2090,17 @@ async def complete_physical(receiving_id: int, request: Request):
     if rec["has_damage"] and not (rec["damage_description"] or "").strip():
         con.close()
         raise HTTPException(400, "Descreva os danos ou avarias.")
+    needs_after_sample = (not is_return and rec["receiving_type"] != "COSTURA" and bool(rec["ten_percent_required"]))
+    if needs_after_sample and rec["volumes_after_sample"] is None:
+        con.close()
+        raise HTTPException(400, "Informe a quantidade de volumes após a retirada dos 10% antes de concluir.")
+    target_volumes = int(rec["volumes_after_sample"] if rec["volumes_after_sample"] is not None else rec["volumes"])
     alocado = total_allocated("RM", rec["card_id"])
-    if alocado < rec["volumes"]:
+    if alocado < target_volumes:
         con.close()
         raise HTTPException(
             400,
-            f"Aloque o endereço físico (casulo) antes de concluir — {alocado}/{rec['volumes']} volumes alocados (RM + Qualidade + Processamento).",
+            f"Aloque o endereço físico (casulo) antes de concluir — {alocado}/{target_volumes} volumes alocados (RM + Qualidade + Processamento).",
         )
     if not already_physical_done:
         con.execute(

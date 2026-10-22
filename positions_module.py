@@ -195,12 +195,12 @@ def _card_total_volumes(cur, card_id: int, receiving_id: Optional[int] = None) -
     """Volumes do recebimento atual, preferindo seu ID quando a requisição o informa."""
     if receiving_id:
         cur.execute(
-            "SELECT volumes FROM distrilog.receivings WHERE id=%s AND card_id=%s",
+            "SELECT COALESCE(volumes_after_sample, volumes) AS volumes FROM distrilog.receivings WHERE id=%s AND card_id=%s",
             (receiving_id, card_id),
         )
     else:
         cur.execute(
-            """SELECT r.volumes FROM distrilog.receivings r
+            """SELECT COALESCE(r.volumes_after_sample, r.volumes) AS volumes FROM distrilog.receivings r
                LEFT JOIN distrilog.cards c ON c.id=r.card_id
                WHERE r.card_id=%s
                ORDER BY (r.closed_at IS NULL) DESC,
