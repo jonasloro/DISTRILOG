@@ -57,6 +57,11 @@ function fmtDateTime(value) {
   return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString("pt-BR");
 }
 
+// Estado de módulos novos: declarado no topo porque o app já inicia (enterApp) antes do fim do arquivo.
+let cleaningTick = null;
+let cleaningDays = 30;
+const PROCESSING_TABS = [["Visão geral", "processing-hub"], ["Fila operacional", "processing"], ["Cadastro", "processing-register"], ["Triagem", "processing-triage"], ["Entrada", "processing-entry"]];
+
 function fmtSeconds(value) {
   let seconds = Math.max(0, Number(value || 0));
   const h = Math.floor(seconds / 3600);
@@ -112,7 +117,7 @@ function setPage(title, subtitle) {
 }
 
 function activeNav(view) {
-  const parent = ({storage:"storage-hub",returns:"returns-hub","return-indicators":"returns-hub","return-history":"returns-hub",sgo:"settings",tasks:"settings",import:"settings",test:"settings"})[view] || view;
+  const parent = ({"processing-hub":"processing","processing-register":"processing","processing-triage":"processing","processing-entry":"processing",storage:"storage-hub",returns:"returns-hub","return-indicators":"returns-hub","return-history":"returns-hub",sgo:"settings",tasks:"settings",import:"settings",test:"settings"})[view] || view;
   document.querySelectorAll(".nav-item").forEach((button) => {
     button.classList.toggle("active", button.dataset.view === parent);
   });
@@ -159,6 +164,10 @@ async function goTo(view) {
     if (view === "chat") await renderChat();
     if (view === "calendar") await renderCalendar();
     if (view === "cleaning") await renderCleaning();
+    if (view === "processing-hub") await renderProcessingHub();
+    if (view === "processing-register") await renderProcessingRegister();
+    if (view === "processing-triage") await renderProcessingTriage();
+    if (view === "processing-entry") await renderProcessingEntry();
   } catch (error) {
     console.error(error);
     $("mainContent").innerHTML = `<div class="state-panel error-state"><b>Não foi possível carregar esta visão.</b><span>${esc(error.message)}</span><button class="primary" onclick="refreshCurrentView()">Tentar novamente</button></div>`;
@@ -391,7 +400,7 @@ async function renderCards(scope) {
   ]);
   const metrics = dashboardData ? metricCardsHtml(scope, dashboardData.totals) : "";
   if (["receiving","quality","processing","labeling","storage"].includes(scope)) {
-    const tabs = storage ? moduleTabs([["Visão geral","storage-hub"],["Fila operacional","storage"]],"storage") : "";
+    const tabs = storage ? moduleTabs([["Visão geral","storage-hub"],["Fila operacional","storage"]],"storage") : processing ? processingTabs("processing") : "";
     $("mainContent").innerHTML = tabs + metrics + processingQueueHtml(cards, scope);
     filterProductionQueue();
     return;
@@ -3133,8 +3142,6 @@ async function submitAllocation(cardId,setor){
 }
 
 // ---------- Renata Ingrata: controle de tempo das limpezas ----------
-let cleaningTick = null;
-let cleaningDays = 30;
 
 function fmtDurationShort(seconds) {
   const s = Math.max(0, Math.round(Number(seconds || 0)));
@@ -3232,3 +3239,59 @@ async function setCleaningDays(value) {
   cleaningDays = Number(value);
   await renderCleaning();
 }
+
+// ---------- Processamento: abas (Visão geral, Fila operacional, Cadastro, Triagem, Entrada) ----------
+function processingTabs(current) { return moduleTabs(PROCESSING_TABS, current); }
+
+function processingSoonNotice() {
+  return '<div class="notice"><b>Tela pronta para uso.</b> O salvamento e o controle das tarefas serão ligados ao Supabase na próxima etapa; por enquanto os campos abaixo ficam desativados.</div>';
+}
+
+async function renderProcessingHub() {
+  setPage("Processamento", "");
+  const cards = await safeApi("/api/cards?scope=processing", []);
+  const panel = (icon, title, view, text) => dashboardPanel(icon, title, `<button class="panel-action" onclick="goTo('${view}')">Abrir</button>`, `<p class="empty-cell">${text}</p>`);
+  $("mainContent").innerHTML = `${processingTabs("processing-hub")}
+    <div class="hero-kpis storage-kpis">${heroKpi("Aguardando processamento", cards.length, "Cards", "⚙", "blue", "processing")}</div>
+    <div class="dash-row">
+      ${panel("▤", "Cadastro", "processing-register", "Nenhum cadastro registrado ainda.")}
+      ${panel("⇄", "Triagem", "processing-triage", "Nenhuma triagem registrada ainda.")}
+      ${panel("⇩", "Entrada na estocagem", "processing-entry", "Nenhuma entrada registrada ainda.")}
+    </div>`;
+}
+
+async function renderProcessingStage(view, title, timed) {
+  setPage("Processamento", "");
+  const cards = await safeApi("/api/cards?scope=processing", []);
+  const queueRows = cards.length
+    ? cards.map((c) => `<tr><td><b>${esc(refLabel(c))}</b></td><td>${esc(c.supplier || "—")}</td><td>${c.expected_total ?? "—"}</td><td>${esc(c.status_label || c.status || "")}</td></tr>`).join("")
+    : emptyRows(4, "Nenhum Card aguardando processamento.");
+  const clock = timed
+    ? `<div class="clean-active"><div><span class="clean-area-tag">${esc(title)}</span><div class="muted">Cronômetro desativado nesta etapa de preparação</div></div>
+         <span class="clean-clock">00:00:00</span>
+         <div class="actions"><button class="primary" disabled>Iniciar</button><button class="secondary" disabled>Pausar</button><button class="success" disabled>Concluir</button></div></div>`
+    : `<div class="notice">Esta tela <b>não tem cronômetro</b>: serve só para controlar os dados da estocagem.</div>`;
+  const fields = timed
+    ? ""
+    : `<div class="form-grid">
+         <div class="field"><label>Card / Compra</label><input disabled placeholder="Selecione o Card"></div>
+         <div class="field"><label>Referência</label><input disabled></div>
+         <div class="field"><label>Quantidade</label><input disabled type="number"></div>
+         <div class="field"><label>Local / Endereço</label><input disabled></div>
+         <div class="field"><label>Observação</label><input disabled></div>
+       </div><div class="actions"><button class="primary" disabled>Registrar entrada</button></div>`;
+  const historyCols = timed
+    ? ["Data", "Card", "Responsável", "Tempo", "Quantidade"]
+    : ["Data", "Card", "Referência", "Quantidade", "Local", "Responsável"];
+  $("mainContent").innerHTML = `${processingTabs(view)}
+    ${processingSoonNotice()}
+    <section class="panel"><div class="panel-body"><h3 class="section-heading">${esc(title)}</h3>${clock}${fields}</div></section>
+    ${timed ? `<section class="panel"><div class="panel-body"><h3 class="section-heading">Cards para ${esc(title.toLowerCase())}</h3>
+      <div class="table-wrap"><table class="compact-table"><thead><tr><th>Compra / SGO</th><th>Fornecedor</th><th>Peças</th><th>Status</th></tr></thead><tbody>${queueRows}</tbody></table></div></div></section>` : ""}
+    <section class="panel"><div class="panel-body"><h3 class="section-heading">${timed ? "Registros" : "Entradas registradas"}</h3>
+      <div class="table-wrap"><table class="compact-table"><thead><tr>${historyCols.map((h) => `<th>${h}</th>`).join("")}</tr></thead><tbody>${emptyRows(historyCols.length, "Nenhum registro ainda.")}</tbody></table></div></div></section>`;
+}
+
+const renderProcessingRegister = () => renderProcessingStage("processing-register", "Cadastro", true);
+const renderProcessingTriage = () => renderProcessingStage("processing-triage", "Triagem", true);
+const renderProcessingEntry = () => renderProcessingStage("processing-entry", "Entrada", false);
