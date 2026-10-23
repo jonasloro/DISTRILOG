@@ -3323,7 +3323,7 @@ async function renderProcessingRegister() {
       api("/api/processing/cadastro/queue?user_id=" + currentUser.id),
       api("/api/processing/intake/queue?user_id=" + currentUser.id)
     ]);
-    const normalCadastro=(intake.cadastro||[]).map(card=>'<tr><td><b>'+esc(card.purchase_id||("Card "+card.id))+'</b><small>'+esc(refLabel(card))+'</small></td><td>'+esc(card.supplier||"—")+'</td><td><span class="badge">Aguardando Cadastro</span></td><td>'+esc(card.assigned_by_name||"—")+'</td></tr>').join("");
+    const normalCadastro=(intake.cadastro||[]).map(card=>'<tr><td><b>'+esc(refLabel(card))+'</b></td><td>'+esc(card.supplier||"—")+'</td><td><span class="badge">Triagem concluída</span></td><td>'+esc(card.current_sector||"—")+'</td></tr>').join("");
     const rows = tasks.map(t => {
       const manager = ["admin","supervisor"].includes(currentUser.role);
       const owner = !t.user_id || Number(t.user_id) === Number(currentUser.id) || manager;
@@ -3333,13 +3333,13 @@ async function renderProcessingRegister() {
       else if (owner && t.status === "PAUSADA") actions = '<button class="primary small-btn" onclick="processingCadastroAction(' + t.id + ',\'resume\')">Retomar</button><button class="success small-btn" onclick="processingCadastroAction(' + t.id + ',\'finish\')">Concluir</button>';
       else if (["EM_ANDAMENTO","PAUSADA"].includes(t.status)) actions = '<small>Em posse de ' + esc(t.user_name || "outra operadora") + '</small>';
       const timer = ["EM_ANDAMENTO","PAUSADA","CONCLUIDO"].includes(t.status) ? processingTimerHtml(t) : "—";
-      return '<tr><td><b>' + esc(t.reference) + '</b></td><td><button class="ghost small-btn" onclick="openCard(' + t.card_id + ',\'quality\')">' + esc(t.purchase_id || ("Card " + t.card_id)) + '</button><small>' + esc(t.supplier || "—") + '</small></td><td>' +
+      return '<tr><td><b>' + esc(t.reference) + '</b></td><td><button class="ghost small-btn" onclick="openCard(' + t.card_id + ',\'quality\')">Abrir Card</button><small>' + esc(t.supplier || "—") + '</small></td><td>' +
         Number(t.reference_qty || 0).toLocaleString("pt-BR") + '</td><td><span class="badge">' + esc(processingStatusLabel(t.status)) + '</span><small>Card está em: ' + esc(t.card_sector_label) + '</small></td><td>' +
         esc(t.user_name || "—") + '</td><td>' + timer + '</td><td><div class="actions">' + actions + '</div></td></tr>';
     }).join("");
     $("mainContent").innerHTML = processingTabs("processing-register") +
       '<section class="panel"><div class="panel-body"><h3 class="section-heading">Cadastro normal</h3><p class="muted">Cards destinados ao Cadastro pelo responsável do Processamento.</p>' +
-      '<div class="table-wrap"><table class="compact-table"><thead><tr><th>Card / Referência</th><th>Fornecedor</th><th>Estado</th><th>Definido por</th></tr></thead><tbody>' +
+      '<div class="table-wrap"><table class="compact-table"><thead><tr><th>Referência</th><th>Fornecedor</th><th>Etapa</th><th>Setor atual</th></tr></thead><tbody>' +
       (normalCadastro || emptyRows(4,"Nenhum Card destinado ao Cadastro normal.")) + '</tbody></table></div></div></section>' +
       '<section class="panel"><div class="panel-body"><h3 class="section-heading">Cadastro para Costura</h3><p class="muted">Fluxo independente iniciado pela opção “Vai para a Costura?” na Qualidade. Não altera o setor do Card nem cria um segundo Card.</p>' +
       '<div class="table-wrap"><table class="compact-table"><thead><tr><th>Referência</th><th>Compra / Card</th><th>Peças</th><th>Status / setor real</th><th>Responsável</th><th>Tempo</th><th>Ações</th></tr></thead><tbody>' +
