@@ -8,6 +8,8 @@ from fastapi.testclient import TestClient
 
 import db
 import processing_flow_module as flow
+import processing_module
+import downstream_module
 
 
 def setup_db():
@@ -39,8 +41,10 @@ def setup_db():
         );
         CREATE TABLE downstream_operations (
           id INTEGER PRIMARY KEY AUTOINCREMENT, card_id INTEGER NOT NULL, sector TEXT NOT NULL,
-          status TEXT NOT NULL, source_subset INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL,
-          UNIQUE(card_id,sector)
+          purchase_mode TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'ABERTO', created_at TEXT NOT NULL,
+          completed_at TEXT, completed_by INTEGER, source_subset INTEGER NOT NULL DEFAULT 0,
+          UNIQUE(card_id,sector), FOREIGN KEY(card_id) REFERENCES cards(id),
+          FOREIGN KEY(completed_by) REFERENCES users(id)
         );
         CREATE TABLE downstream_operation_items (
           operation_id INTEGER NOT NULL, item_id INTEGER NOT NULL, PRIMARY KEY(operation_id,item_id)
@@ -49,6 +53,8 @@ def setup_db():
         con.commit()
     finally:
         con.close()
+    processing_module.init_processing_db()
+    downstream_module.init_downstream_db()
     flow.init_processing_flow_db()
 
 
@@ -71,6 +77,10 @@ def test_cadastro_triage_and_entry_round_trip(monkeypatch):
             "INSERT INTO users(username,password,name,role) VALUES(?,?,?,?)",
             ("processamento_teste", "", "Operadora teste", "processamento"),
         ).lastrowid)
+        storage_user_id = int(con.execute(
+            "INSERT INTO users(username,password,name,role) VALUES(?,?,?,?)",
+            ("estocagem_teste", "", "Operador de estocagem", "estocagem"),
+        ).lastrowid)
 
         # Cadastro is a projection and is idempotent per card/reference.
         sewing_card = insert_card(con, "COMPRA-CADASTRO", "QUALIDADE", "AGUARDANDO_DESPACHO_COSTURA")
@@ -92,6 +102,7 @@ def test_cadastro_triage_and_entry_round_trip(monkeypatch):
 
         test_app = FastAPI()
         flow.register_processing_flow_routes(test_app)
+        downstream_module.register_downstream_routes(test_app)
         client = TestClient(test_app)
 
         def post(path, payload):
@@ -112,8 +123,8 @@ def test_cadastro_triage_and_entry_round_trip(monkeypatch):
              triage_card,"REF-GAMA","Produto gama",20,"Branco","M"),
         )
         op = con.execute(
-            "INSERT INTO downstream_operations(card_id,sector,status,source_subset,created_at) VALUES(?,?,?,?,?)",
-            (triage_card,"ESTOCAGEM","CONCLUIDO",0,"2026-10-23T12:00:00-03:00"),
+            "INSERT INTO downstream_operations(card_id,sector,purchase_mode,status,source_subset,created_at) VALUES(?,?,?,?,?,?)",
+            (triage_card,"ESTOCAGEM","GRADE","ABERTO",0,"2026-10-23T12:00:00-03:00"),
         )
         downstream_id = int(op.lastrowid)
         con.commit()
@@ -139,10 +150,21 @@ def test_cadastro_triage_and_entry_round_trip(monkeypatch):
         assert [(int(x["expected_qty"]),int(x["real_qty"])) for x in actual] == [(10,8),(20,19)]
         assert int(con.execute("SELECT COUNT(*) n FROM processing_triage_counts WHERE triage_id=? AND is_extra=1",(triage_id,)).fetchone()["n"]) == 1
 
-        entry_id = flow.ensure_storage_entry(con, triage_card, downstream_id)
+        # Completing Estocagem must create the pending Entrada in the same transaction.
+        storage_rows = con.execute("SELECT id,real_qty FROM items WHERE card_id=? ORDER BY id", (triage_card,)).fetchall()
+        assignments = [
+            (downstream_id,int(storage_rows[0]["id"]),user_id,8,8,"CONCLUIDA","FINALIZADA","2026-10-23T12:01:00-03:00","2026-10-23T12:02:00-03:00"),
+            (downstream_id,int(storage_rows[1]["id"]),user_id,19,19,"CONCLUIDA","FINALIZADA","2026-10-23T12:01:00-03:00","2026-10-23T12:02:00-03:00"),
+        ]
+        con.executemany(
+            """INSERT INTO downstream_assignments(operation_id,item_id,worker_user_id,assigned_qty,completed_qty,status,timer_state,created_at,completed_at)
+               VALUES(?,?,?,?,?,?,?,?,?)""",
+            assignments,
+        )
         con.commit()
-        assert flow.ensure_storage_entry(con, triage_card, downstream_id) == entry_id
-        con.commit()
+        storage_complete = client.post(f"/api/downstream/{downstream_id}/complete", json={"user_id":storage_user_id})
+        assert storage_complete.status_code == 200, storage_complete.text
+        assert con.execute("SELECT status FROM downstream_operations WHERE id=?", (downstream_id,)).fetchone()["status"] == "CONCLUIDO"
 
         queued = client.get(f"/api/processing/entry/queue?user_id={user_id}")
         assert queued.status_code == 200, queued.text
