@@ -270,6 +270,18 @@ def create_manual_card(payload: dict[str, Any]) -> dict[str, Any]:
     supplier = str(payload.get("supplier") or "").strip()
     nf = str(payload.get("nf") or "").strip()
     lot = str(payload.get("lot") or "").strip()
+    target_sector = str(payload.get("target_sector") or "RECEBIMENTO").strip().upper()
+    sector_config = {
+        "RECEBIMENTO": ("RECEBIMENTO", "EM_TRANSITO", "TRANSITO"),
+        "QUALIDADE": ("QUALIDADE", "AGUARDANDO_INSPECAO", "QUALIDADE"),
+        "PROCESSAMENTO": ("PROCESSAMENTO", "AGUARDANDO_TRIAGEM", "PROCESSAMENTO"),
+        "ETIQUETAGEM": ("ETIQUETAGEM", "AGUARDANDO_ETIQUETAGEM", "ETIQUETAGEM"),
+        "ESTOCAGEM": ("ESTOCAGEM", "AGUARDANDO_ESTOCAGEM", "ESTOCAGEM"),
+        "COSTURA": ("COSTURA", "AGUARDANDO_COSTURA", "COSTURA"),
+    }
+    if target_sector not in sector_config:
+        raise HTTPException(400, "Setor de teste inválido.")
+    current_sector, initial_status, source_stage = sector_config[target_sector]
     grade = payload.get("grade") or []
 
     if not reference:
@@ -317,8 +329,10 @@ def create_manual_card(payload: dict[str, Any]) -> dict[str, Any]:
                 qtd_itens,source_notes,current_sector,status,receiving_type,created_at,updated_at
             ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
-                purchase_id, now[:10], supplier, "Grade", "GRADE", "Em Trânsito",
-                total, source_notes, "RECEBIMENTO", "EM_TRANSITO", "NOVA", now, now
+                purchase_id, now[:10], supplier, "Grade", "GRADE",
+                "Em Trânsito" if target_sector == "RECEBIMENTO" else "Teste",
+                total, source_notes + f" | CARD DE TESTE | Setor inicial: {target_sector}",
+                current_sector, initial_status, "NOVA", now, now
             ),
         )
         card_id = cur.lastrowid
@@ -332,7 +346,8 @@ def create_manual_card(payload: dict[str, Any]) -> dict[str, Any]:
                 (
                     card_id, f"{purchase_id}|{reference}|{color}|{size}",
                     reference, reference, "", color, size, lot, nf, quantity,
-                    "1.3 Compras - Em Trânsito", "TRANSITO", "Em Trânsito",
+                    "1.3 Compras - Em Trânsito" if target_sector == "RECEBIMENTO" else "TESTE - " + target_sector,
+                    source_stage, "Teste" if target_sector != "RECEBIMENTO" else "Em Trânsito",
                 ),
             )
 
@@ -340,7 +355,7 @@ def create_manual_card(payload: dict[str, Any]) -> dict[str, Any]:
             "INSERT INTO history(card_id,user_id,event_type,description,created_at) VALUES(?,?,?,?,?)",
             (
                 card_id, None, "CRIACAO_MANUAL",
-                f"Card criado manualmente para a referência {reference}, com {total} peças. Fornecedor {supplier}."
+                f"Card de teste criado diretamente em {target_sector} para a referência {reference}, com {total} peças. Fornecedor {supplier}."
                 + (f" NF {nf}." if nf else "")
                 + (f" Lote {lot}." if lot else ""),
                 now,
@@ -353,6 +368,7 @@ def create_manual_card(payload: dict[str, Any]) -> dict[str, Any]:
     return {
         "card_id": card_id,
         "purchase_id": purchase_id,
+        "target_sector": target_sector,
         "reference": reference,
         "supplier": supplier,
         "nf": nf,
