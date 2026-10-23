@@ -148,6 +148,23 @@ def init_processing_flow_db():
           FOREIGN KEY(triage_id) REFERENCES processing_triages(id) ON DELETE CASCADE,
           FOREIGN KEY(item_id) REFERENCES items(id) ON DELETE SET NULL
         );
+        CREATE TABLE IF NOT EXISTS processing_intake_routes (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          card_id INTEGER NOT NULL UNIQUE,
+          destination TEXT,
+          status TEXT NOT NULL DEFAULT 'AGUARDANDO_DESTINO',
+          needs_labeling INTEGER,
+          assigned_by_user_id INTEGER,
+          assigned_by_name TEXT,
+          assigned_at TEXT,
+          completed_at TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY(card_id) REFERENCES cards(id) ON DELETE CASCADE,
+          FOREIGN KEY(assigned_by_user_id) REFERENCES users(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_processing_intake_status
+          ON processing_intake_routes(status,destination,updated_at);
         CREATE TABLE IF NOT EXISTS storage_entries (
           id INTEGER PRIMARY KEY AUTOINCREMENT, card_id INTEGER NOT NULL, downstream_operation_id INTEGER NOT NULL,
           status TEXT NOT NULL DEFAULT 'PENDENTE', concluded_by_user_id INTEGER, concluded_by_name TEXT,
@@ -226,6 +243,85 @@ def backfill_cadastro_tasks():
             checked += 1
         con.commit()
         return checked
+    finally:
+        con.close()
+
+
+@router.get("/intake/queue")
+def processing_intake_queue(user_id: int):
+    con = db.connect()
+    try:
+        _operator(con, user_id)
+        pending = con.execute("""
+          SELECT c.id,c.purchase_id,c.supplier,c.brand,c.status,c.current_sector,c.updated_at,
+                 COALESCE((SELECT i.reference FROM items i WHERE i.card_id=c.id ORDER BY i.id LIMIT 1),c.purchase_id) AS reference_list,
+                 COALESCE((SELECT SUM(i.expected_qty) FROM items i WHERE i.card_id=c.id),0) AS expected_total
+          FROM cards c
+          LEFT JOIN processing_intake_routes r ON r.card_id=c.id
+          WHERE c.current_sector='PROCESSAMENTO'
+            AND (r.id IS NULL OR r.status='AGUARDANDO_DESTINO')
+          ORDER BY c.updated_at DESC,c.id DESC
+        """).fetchall()
+        cadastro = con.execute("""
+          SELECT c.id,c.purchase_id,c.supplier,c.brand,c.status,c.current_sector,c.updated_at,
+                 r.destination,r.status AS routing_status,r.assigned_by_name,r.assigned_at,
+                 COALESCE((SELECT i.reference FROM items i WHERE i.card_id=c.id ORDER BY i.id LIMIT 1),c.purchase_id) AS reference_list,
+                 COALESCE((SELECT SUM(i.expected_qty) FROM items i WHERE i.card_id=c.id),0) AS expected_total
+          FROM cards c JOIN processing_intake_routes r ON r.card_id=c.id
+          WHERE c.current_sector='PROCESSAMENTO'
+            AND r.destination='CADASTRO' AND r.status='AGUARDANDO_CADASTRO'
+          ORDER BY r.assigned_at,c.id
+        """).fetchall()
+        return {"pending":[dict(row) for row in pending],"cadastro":[dict(row) for row in cadastro]}
+    finally:
+        con.close()
+
+
+@router.post("/intake/cards/{card_id}/destination")
+async def processing_intake_set_destination(card_id: int, request: Request):
+    body = await request.json()
+    destination = str(body.get("destination") or "").strip().upper()
+    if destination not in {"CADASTRO","TRIAGEM","ETIQUETAGEM"}:
+        raise HTTPException(400,"Selecione Cadastro, Triagem ou Etiquetagem.")
+    con = db.connect()
+    try:
+        con.execute("BEGIN")
+        actor = _operator(con, body.get("user_id"))
+        card = con.execute("SELECT * FROM cards WHERE id=?",(card_id,)).fetchone()
+        if not card:
+            raise HTTPException(404,"Card não encontrado.")
+        if card["current_sector"] != "PROCESSAMENTO":
+            raise HTTPException(409,"Este Card não está aguardando destinação no Processamento.")
+        previous = con.execute("SELECT * FROM processing_intake_routes WHERE card_id=?",(card_id,)).fetchone()
+        if previous and previous["status"] != "AGUARDANDO_DESTINO":
+            raise HTTPException(409,"A destinação deste Card já foi definida.")
+        if con.execute("SELECT 1 FROM processing_triages WHERE card_id=? LIMIT 1",(card_id,)).fetchone():
+            raise HTTPException(409,"Este Card já possui uma Triagem; não é possível alterar sua destinação inicial.")
+        stamp = _iso()
+        route_status = "AGUARDANDO_CADASTRO" if destination=="CADASTRO" else (
+            "AGUARDANDO_TRIAGEM" if destination=="TRIAGEM" else "ENCAMINHADO")
+        if previous:
+            changed = con.execute("""
+              UPDATE processing_intake_routes
+              SET destination=?,status=?,assigned_by_user_id=?,assigned_by_name=?,assigned_at=?,updated_at=?
+              WHERE card_id=? AND status='AGUARDANDO_DESTINO'
+            """,(destination,route_status,int(actor["id"]),actor["name"],stamp,stamp,card_id))
+            if changed.rowcount != 1:
+                raise HTTPException(409,"Outro operador já definiu a destinação deste Card.")
+        else:
+            con.execute("""
+              INSERT INTO processing_intake_routes(
+                card_id,destination,status,assigned_by_user_id,assigned_by_name,assigned_at,created_at,updated_at
+              ) VALUES(?,?,?,?,?,?,?,?)
+            """,(card_id,destination,route_status,int(actor["id"]),actor["name"],stamp,stamp,stamp))
+        if destination == "ETIQUETAGEM":
+            changed = con.execute("UPDATE cards SET current_sector='ETIQUETAGEM',status='AGUARDANDO_ETIQUETAGEM',updated_at=? WHERE id=? AND current_sector='PROCESSAMENTO'",(stamp,card_id))
+            if changed.rowcount != 1:
+                raise HTTPException(409,"O Card mudou de setor enquanto a destinação era definida. Atualize a fila.")
+        _history(con,card_id,"DESTINO_PROCESSAMENTO_DEFINIDO",
+          f"{actor['name']} definiu o destino do Processamento como {destination.title()}.",int(actor["id"]))
+        con.commit()
+        return {"ok":True,"card_id":card_id,"destination":destination,"status":route_status}
     finally:
         con.close()
 
@@ -344,7 +440,10 @@ def triage_queue(user_id: int):
           SELECT c.id,c.purchase_id,c.supplier,c.brand,c.status,c.current_sector,c.purchase_mode,c.updated_at,
                  COALESCE((SELECT i.reference FROM items i WHERE i.card_id=c.id ORDER BY i.id LIMIT 1),c.purchase_id) AS reference_list,
                  COALESCE((SELECT SUM(i.expected_qty) FROM items i WHERE i.card_id=c.id),0) AS expected_total
-          FROM cards c WHERE c.current_sector='PROCESSAMENTO' ORDER BY c.updated_at DESC,c.id DESC
+          FROM cards c JOIN processing_intake_routes r ON r.card_id=c.id
+          WHERE c.current_sector='PROCESSAMENTO' AND r.destination='TRIAGEM'
+            AND r.status IN ('AGUARDANDO_TRIAGEM','EM_TRIAGEM')
+          ORDER BY c.updated_at DESC,c.id DESC
         """).fetchall()
         if not cards:
             return []
@@ -392,6 +491,9 @@ async def triage_start(card_id: int,request: Request):
         if not card: raise HTTPException(404,"Card não encontrado.")
         if card["current_sector"]!="PROCESSAMENTO":
             raise HTTPException(409,"A Triagem só pode iniciar para Cards no setor Processamento.")
+        route = con.execute("SELECT * FROM processing_intake_routes WHERE card_id=?",(card_id,)).fetchone()
+        if not route or route["destination"]!="TRIAGEM" or route["status"]!="AGUARDANDO_TRIAGEM":
+            raise HTTPException(409,"O Card precisa estar destinado à Triagem antes de iniciar.")
         previous=con.execute("SELECT * FROM processing_triages WHERE card_id=? ORDER BY id DESC LIMIT 1",(card_id,)).fetchone()
         if previous:
             raise HTTPException(409,"Este Card já possui uma Triagem iniciada.")
@@ -405,6 +507,9 @@ async def triage_start(card_id: int,request: Request):
              VALUES(?,'EM_ANDAMENTO',?,?,?,?,?)""",(card_id,int(actor["id"]),actor["name"],stamp,total,stamp))
         tid=int(cur.lastrowid or 0)
         con.execute("INSERT INTO processing_triage_events(triage_id,event,occurred_at,user_id) VALUES(?,?,?,?)",(tid,"START",stamp,int(actor["id"])))
+        changed = con.execute("UPDATE processing_intake_routes SET status='EM_TRIAGEM',updated_at=? WHERE card_id=? AND status='AGUARDANDO_TRIAGEM'",(stamp,card_id))
+        if changed.rowcount != 1:
+            raise HTTPException(409,"A destinação do Card mudou; atualize a fila.")
         con.commit()
         return {"ok":True,"id":tid,"status":"EM_ANDAMENTO"}
     finally:
@@ -450,6 +555,13 @@ async def triage_action(triage_id: int,action: str,request: Request):
             if changed.rowcount!=1: raise HTTPException(409,"A Triagem foi alterada por outra pessoa. Atualize a fila.")
             con.commit(); return {"ok":True,"id":triage_id,"status":next_status,**summary}
 
+        needs_labeling_raw = body.get("needs_labeling")
+        if not isinstance(needs_labeling_raw,bool):
+            raise HTTPException(400,"Informe se o Card precisa de Etiquetagem.")
+        needs_labeling = 1 if needs_labeling_raw else 0
+        route = con.execute("SELECT * FROM processing_intake_routes WHERE card_id=?",(int(triage["card_id"]),)).fetchone()
+        if not route or route["destination"]!="TRIAGEM" or route["status"]!="EM_TRIAGEM":
+            raise HTTPException(409,"A destinação do Card mudou; atualize a fila antes de concluir a Triagem.")
         raw=body.get("counts")
         if not isinstance(raw,list): raise HTTPException(400,"Envie a contagem de todas as linhas e das combinações extras.")
         source=_items(con,int(triage["card_id"])); expected={int(item["item_id"]):item for item in source}
@@ -487,11 +599,27 @@ async def triage_action(triage_id: int,action: str,request: Request):
         con.execute("""UPDATE processing_triages SET status='CONCLUIDA',finished_at=?,worked_seconds=?,paused_seconds=?,expected_total=?,counted_total=?
           WHERE id=? AND status IN ('EM_ANDAMENTO','PAUSADA')""",
           (stamp,summary["worked_seconds"],summary["paused_seconds"],expected_total,counted_total,triage_id))
+        target_sector = "ETIQUETAGEM" if needs_labeling else "ESTOCAGEM"
+        target_status = "AGUARDANDO_ETIQUETAGEM" if needs_labeling else "AGUARDANDO_ESTOCAGEM"
+        changed = con.execute("""
+          UPDATE processing_intake_routes
+          SET destination=?,status='ENCAMINHADO',needs_labeling=?,completed_at=?,updated_at=?
+          WHERE card_id=? AND status='EM_TRIAGEM'
+        """,(target_sector,needs_labeling,stamp,stamp,int(triage["card_id"])))
+        if changed.rowcount != 1:
+            raise HTTPException(409,"Não foi possível concluir o encaminhamento após a Triagem.")
+        changed = con.execute("UPDATE cards SET current_sector=?,status=?,updated_at=? WHERE id=? AND current_sector='PROCESSAMENTO'",
+                    (target_sector,target_status,stamp,int(triage["card_id"])))
+        if changed.rowcount != 1:
+            raise HTTPException(409,"O Card mudou de setor durante a conclusão da Triagem; nenhuma alteração foi confirmada.")
         _history(con,int(triage["card_id"]),"TRIAGEM_CONCLUIDA",
-          f"{actor['name']} concluiu a Triagem: previsto {expected_total}, contado {counted_total}, {diff_lines} combinação(ões) divergente(s), {extra_lines} extra(s).",int(actor["id"]))
+          f"{actor['name']} concluiu a Triagem: previsto {expected_total}, contado {counted_total}, {diff_lines} combinação(ões) divergente(s), {extra_lines} extra(s). Destino: {target_sector}.",int(actor["id"]))
+        _history(con,int(triage["card_id"]),"DESTINO_POS_TRIAGEM_DEFINIDO",
+          f"Após a Triagem, o Card foi encaminhado para {target_sector} (precisa etiquetar: {'sim' if needs_labeling else 'não'}).",int(actor["id"]))
         con.commit()
         return {"ok":True,"id":triage_id,"status":"CONCLUIDA","expected_total":expected_total,"counted_total":counted_total,
-          "worked_seconds":summary["worked_seconds"],"paused_seconds":summary["paused_seconds"],"differences":diff_lines,"extras":extra_lines}
+          "worked_seconds":summary["worked_seconds"],"paused_seconds":summary["paused_seconds"],"differences":diff_lines,"extras":extra_lines,
+          "needs_labeling":bool(needs_labeling),"destination":target_sector}
     finally:
         con.close()
 

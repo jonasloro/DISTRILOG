@@ -3277,22 +3277,53 @@ async function renderQualityCadastroStatusBadge() {
   } catch(error) { console.warn("Falha ao consultar Cadastro para Costura:",error); }
 }
 async function renderProcessingHub() {
-  clearInterval(processingFlowTick); setPage("Processamento","Cadastro, contagem física e conferência final da Estocagem");
+  clearInterval(processingFlowTick);
+  setPage("Processamento","Defina o destino de cada Card recebido da Qualidade. O Cadastro para Costura permanece em fluxo separado.");
   try {
-    const data = await api("/api/processing/overview?user_id=" + currentUser.id), c = data.counts || {}, a = data.averages || {};
+    const [data,intake,cadastroTasks] = await Promise.all([
+      api("/api/processing/overview?user_id=" + currentUser.id),
+      api("/api/processing/intake/queue?user_id=" + currentUser.id),
+      api("/api/processing/cadastro/queue?user_id=" + currentUser.id)
+    ]);
+    const c=data.counts||{},a=data.averages||{};
+    const pending=(intake.pending||[]).map(card=>'<tr><td><b>'+esc(card.purchase_id||("Card "+card.id))+'</b><small>'+esc(refLabel(card))+'</small></td><td>'+esc(card.supplier||"—")+'</td><td>'+Number(card.expected_total||0).toLocaleString("pt-BR")+'</td><td><div class="actions processing-destination-actions"><button class="primary small-btn" onclick="setProcessingDestination('+card.id+',\'CADASTRO\')">Cadastro</button><button class="secondary small-btn" onclick="setProcessingDestination('+card.id+',\'TRIAGEM\')">Triagem</button><button class="secondary small-btn" onclick="setProcessingDestination('+card.id+',\'ETIQUETAGEM\')">Etiquetagem</button></div></td></tr>').join("");
+    const normalCadastro=(intake.cadastro||[]).map(card=>'<tr><td><b>'+esc(card.purchase_id||("Card "+card.id))+'</b><small>'+esc(refLabel(card))+'</small></td><td>'+esc(card.supplier||"—")+'</td><td><span class="badge">Cadastro selecionado</span></td><td>'+esc(card.assigned_by_name||"—")+'</td></tr>').join("");
+    const costuraTasks=(cadastroTasks||[]).filter(t=>(t.card_status==="AGUARDANDO_DESPACHO_COSTURA"||t.card_status==="EM_COSTURA_CD01")&&t.status!=="CONCLUIDO");
+    const costuraRows=costuraTasks.map(t=>'<tr><td><b>'+esc(t.purchase_id||("Card "+t.card_id))+'</b><small>'+esc(t.reference||"—")+'</small></td><td>'+esc(t.supplier||"—")+'</td><td>'+esc(processingStatusLabel(t.status))+'</td><td><button class="secondary small-btn" onclick="goTo(\'processing-register\')">Abrir Cadastro para Costura</button></td></tr>').join("");
     $("mainContent").innerHTML = processingTabs("processing-hub") +
       '<div class="hero-kpis storage-kpis">' +
-      heroKpi("Cadastros pendentes",c.cadastro_pendentes || 0,(c.cadastro_em_andamento || 0) + " em andamento","▤","teal","processing-register") +
-      heroKpi("Triagens em andamento",c.triagens_em_andamento || 0,(c.triagens_concluidas || 0) + " concluídas","⇄","teal","processing-triage") +
-      heroKpi("Entradas pendentes",c.entradas_pendentes || 0,"Conferências de Estocagem","⇩","teal","processing-entry") +
-      heroKpi("Entradas divergentes",c.entradas_divergentes || 0,"Precisam de acompanhamento","≠","orange","processing-entry") +
-      '</div><section class="panel"><div class="panel-body"><h3 class="section-heading">Tempo médio por etapa</h3><div class="clean-kpis">' +
-      '<div><span>Cadastro</span><b>' + fmtDurationShort(a.cadastro_seconds || 0) + '</b></div><div><span>Triagem</span><b>' + fmtDurationShort(a.triage_seconds || 0) + '</b></div><div><span>Entrada</span><b>Sem cronômetro</b></div></div></div></section>' +
+      heroKpi("Cards aguardando destino",(intake.pending||[]).length,"Decisão do responsável","⇢","teal","processing-hub") +
+      heroKpi("Cadastros para Costura",costuraTasks.length,"Fluxo independente","▤","teal","processing-register") +
+      heroKpi("Triagens em andamento",c.triagens_em_andamento||0,(c.triagens_concluidas||0)+" concluídas","⇄","teal","processing-triage") +
+      heroKpi("Entradas pendentes",c.entradas_pendentes||0,"Conferências de Estocagem","⇩","teal","processing-entry") +
+      '</div><section class="panel"><div class="panel-body"><h3 class="section-heading">Cards recebidos da Qualidade — definir destino</h3><p class="muted">Escolha uma única destinação para cada Card. Essa decisão não inicia nem cria o Cadastro específico para Costura.</p>'+
+      '<div class="table-wrap"><table class="compact-table"><thead><tr><th>Card / Referência</th><th>Fornecedor</th><th>Qtd. prevista</th><th>Destinação</th></tr></thead><tbody>'+pending+'</tbody></table></div>'+
+      ((intake.pending||[]).length?'':'<div class="notice">Não há Cards aguardando destinação.</div>')+'</div></section>'+
+      '<section class="panel"><div class="panel-body"><h3 class="section-heading">Cadastro normal — destino já definido</h3><p class="muted">Esta fila é separada do Cadastro para Costura. A etapa operacional detalhada do Cadastro normal será tratada separadamente.</p>'+
+      '<div class="table-wrap"><table class="compact-table"><thead><tr><th>Card / Referência</th><th>Fornecedor</th><th>Estado</th><th>Definido por</th></tr></thead><tbody>'+normalCadastro+'</tbody></table></div>'+
+      ((intake.cadastro||[]).length?'':'<div class="notice">Nenhum Card destinado ao Cadastro normal.</div>')+'</div></section>'+
+      '<section class="panel"><div class="panel-body"><h3 class="section-heading">Cadastro para Costura — fluxo independente</h3><p class="muted">Quando a Qualidade marca “Vai para a Costura?”, as tarefas específicas aparecem aqui sem misturar a destinação normal do Processamento.</p>'+
+      '<div class="table-wrap"><table class="compact-table"><thead><tr><th>Card / Referência</th><th>Fornecedor</th><th>Cadastro</th><th>Ação</th></tr></thead><tbody>'+costuraRows+'</tbody></table></div>'+
+      (costuraTasks.length?'':'<div class="notice">Não há tarefas de Cadastro para Costura pendentes nesta fila.</div>')+'</div></section>'+
       '<div class="dash-row">' +
-      dashboardPanel("▤","Cadastro",'<button class="panel-action" onclick="goTo(\'processing-register\')">Abrir</button>','<p>Cadastro por referência para Costura, sem mover o Card.</p>') +
-      dashboardPanel("⇄","Triagem",'<button class="panel-action" onclick="goTo(\'processing-triage\')">Abrir</button>','<p>Contagem real por referência, cor e tamanho.</p>') +
+      dashboardPanel("▤","Cadastro para Costura",'<button class="panel-action" onclick="goTo(\'processing-register\')">Abrir</button>','<p>Fluxo independente vinculado à decisão da Qualidade.</p>') +
+      dashboardPanel("⇄","Triagem",'<button class="panel-action" onclick="goTo(\'processing-triage\')">Abrir</button>','<p>Somente Cards destinados à Triagem aparecem nesta fila.</p>') +
       dashboardPanel("⇩","Entrada na Estocagem",'<button class="panel-action" onclick="goTo(\'processing-entry\')">Abrir</button>','<p>Conferência do que foi efetivamente guardado.</p>') + '</div>';
-  } catch(error) { $("mainContent").innerHTML = processingTabs("processing-hub") + '<div class="notice error">' + esc(error.message) + '</div>'; toast(error.message); }
+  } catch(error) {
+    $("mainContent").innerHTML = processingTabs("processing-hub") + '<div class="notice error">' + esc(error.message) + '</div>';
+    toast(error.message);
+  }
+}
+async function setProcessingDestination(cardId,destination) {
+  const labels={CADASTRO:"Cadastro",TRIAGEM:"Triagem",ETIQUETAGEM:"Etiquetagem"};
+  if(!labels[destination]) { toast("Destinação inválida."); return; }
+  try {
+    await api("/api/processing/intake/cards/"+cardId+"/destination",{
+      method:"POST",body:JSON.stringify({user_id:currentUser.id,destination})
+    });
+    toast("Card destinado a "+labels[destination]+".");
+    await renderProcessingHub();
+  } catch(error) { toast(error.message); }
 }
 async function renderProcessingRegister() {
   clearInterval(processingFlowTick); setPage("Processamento · Cadastro","Uma tarefa por referência; o Card permanece na etapa logística real.");
@@ -3377,7 +3408,7 @@ async function openTriageCountModal(id,cardId,readOnly) {
     $("modalBody").innerHTML = '<div class="card-title"><div><h2>Contagem da Triagem</h2><div class="card-subtitle">' + esc(t.user_name || "") + ' · ' + fmtSeconds(t.worked_seconds || 0) + ' trabalhados</div></div></div>' +
       '<div class="notice">Zero é válido; campo vazio não.</div><div class="table-wrap"><table class="compact-table"><thead><tr><th>Referência</th><th>Cor</th><th>Tamanho</th><th>Previsto</th><th>Contado</th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
       (readOnly ? '<h3 class="section-heading">Combinações extras</h3><div class="table-wrap"><table class="compact-table"><tbody>' + extras + '</tbody></table></div>' :
-       '<h3 class="section-heading">Combinações extras fora da grade</h3><div class="notice">Extras ficam em auditoria, sem criar itens automaticamente.</div><div class="table-wrap"><table class="compact-table"><thead><tr><th>Referência</th><th>Cor</th><th>Tamanho</th><th>Qtd.</th><th></th></tr></thead><tbody id="triageExtraRows"></tbody></table></div><div class="actions"><button class="secondary" onclick="addTriageExtraRow()">Adicionar combinação extra</button><button class="success" onclick="finishProcessingTriage(' + id + ')">Concluir triagem</button></div>');
+       '<h3 class="section-heading">Combinações extras fora da grade</h3><div class="notice">Extras ficam em auditoria, sem criar itens automaticamente.</div><div class="table-wrap"><table class="compact-table"><thead><tr><th>Referência</th><th>Cor</th><th>Tamanho</th><th>Qtd.</th><th></th></tr></thead><tbody id="triageExtraRows"></tbody></table></div><div class="field full"><label for="triageNeedsLabeling">Precisa etiquetar?</label><select id="triageNeedsLabeling" required><option value="">Selecione uma opção</option><option value="1">Sim — encaminhar para Etiquetagem</option><option value="0">Não — encaminhar diretamente para Estocagem</option></select></div><div class="actions"><button class="secondary" onclick="addTriageExtraRow()">Adicionar combinação extra</button><button class="success" onclick="finishProcessingTriage(' + id + ')">Concluir triagem e encaminhar</button></div>');
     $("modal").classList.remove("hidden"); window.processingTriageCardId=cardId;
   } catch(error) { toast(error.message); }
 }
@@ -3398,8 +3429,12 @@ async function finishProcessingTriage(id) {
       if(!reference||!color||!size||value===""||!Number.isSafeInteger(Number(value))||Number(value)<0)throw new Error("Preencha referência, cor, tamanho e quantidade de cada combinação extra.");
       counts.push({item_id:null,is_extra:1,reference,color,size,counted_qty:Number(value)});
     });
-    const result=await api("/api/processing/triage/"+id+"/finish",{method:"POST",body:JSON.stringify({user_id:currentUser.id,counts})});
-    closeModal();toast("Triagem concluída: "+Number(result.counted_total||0).toLocaleString("pt-BR")+" peças contadas.");await renderProcessingTriage();
+    const labelingValue=$("triageNeedsLabeling")?.value;
+    if(labelingValue!=="0"&&labelingValue!=="1")throw new Error("Informe se o Card precisa de Etiquetagem.");
+    const result=await api("/api/processing/triage/"+id+"/finish",{method:"POST",body:JSON.stringify({user_id:currentUser.id,counts,needs_labeling:labelingValue==="1"})});
+    closeModal();
+    toast("Triagem concluída. Card encaminhado para "+(result.destination==="ETIQUETAGEM"?"Etiquetagem":"Estocagem")+".");
+    await renderProcessingTriage();
   } catch(error) { toast(error.message); }
 }
 async function renderProcessingEntry() {
