@@ -259,7 +259,7 @@ def processing_intake_queue(user_id: int):
           FROM cards c
           LEFT JOIN processing_intake_routes r ON r.card_id=c.id
           WHERE c.current_sector='PROCESSAMENTO'
-            AND (r.id IS NULL OR r.status='AGUARDANDO_DESTINO')
+            AND r.status='AGUARDANDO_DESTINO'
           ORDER BY c.updated_at DESC,c.id DESC
         """).fetchall()
         cadastro = con.execute("""
@@ -441,8 +441,11 @@ def triage_queue(user_id: int):
                  COALESCE((SELECT i.reference FROM items i WHERE i.card_id=c.id ORDER BY i.id LIMIT 1),c.purchase_id) AS reference_list,
                  COALESCE((SELECT SUM(i.expected_qty) FROM items i WHERE i.card_id=c.id),0) AS expected_total
           FROM cards c JOIN processing_intake_routes r ON r.card_id=c.id
-          WHERE c.current_sector='PROCESSAMENTO' AND r.destination='TRIAGEM'
-            AND r.status IN ('AGUARDANDO_TRIAGEM','EM_TRIAGEM')
+          WHERE c.current_sector='PROCESSAMENTO'
+            AND (
+              (r.destination='TRIAGEM' AND r.status IN ('AGUARDANDO_TRIAGEM','EM_TRIAGEM'))
+              OR r.id IS NULL
+            )
           ORDER BY c.updated_at DESC,c.id DESC
         """).fetchall()
         if not cards:
@@ -492,8 +495,16 @@ async def triage_start(card_id: int,request: Request):
         if card["current_sector"]!="PROCESSAMENTO":
             raise HTTPException(409,"A Triagem só pode iniciar para Cards no setor Processamento.")
         route = con.execute("SELECT * FROM processing_intake_routes WHERE card_id=?",(card_id,)).fetchone()
+        if route is None:
+            stamp = _iso()
+            con.execute("""
+              INSERT INTO processing_intake_routes(
+                card_id,destination,status,assigned_by_user_id,assigned_by_name,assigned_at,created_at,updated_at
+              ) VALUES(?,'TRIAGEM','AGUARDANDO_TRIAGEM',?,?,?,?,?)
+            """,(card_id,int(actor["id"]),actor["name"],stamp,stamp,stamp))
+            route = con.execute("SELECT * FROM processing_intake_routes WHERE card_id=?",(card_id,)).fetchone()
         if not route or route["destination"]!="TRIAGEM" or route["status"]!="AGUARDANDO_TRIAGEM":
-            raise HTTPException(409,"O Card precisa estar destinado à Triagem antes de iniciar.")
+            raise HTTPException(409,"Este Card não está aguardando início da Triagem.")
         previous=con.execute("SELECT * FROM processing_triages WHERE card_id=? ORDER BY id DESC LIMIT 1",(card_id,)).fetchone()
         if previous:
             raise HTTPException(409,"Este Card já possui uma Triagem iniciada.")
