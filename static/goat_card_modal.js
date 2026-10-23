@@ -17,6 +17,12 @@ function newManualGradeColor(name = "") {
 }
 
 function openGoatCardModal(isTest = false) {
+  // Nunca manter os dois formulários montados: eles compartilham IDs dos campos
+  // e getElementById poderia ler a referência/grade do modal oculto.
+  ["goatModal", "goatTestModal"].forEach((id) => {
+    const existing = document.getElementById(id);
+    if (existing) existing.remove();
+  });
   const modalId = isTest ? "goatTestModal" : "goatModal";
   let modal = document.getElementById(modalId);
   if (!modal) {
