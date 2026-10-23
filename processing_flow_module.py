@@ -171,12 +171,10 @@ def init_processing_flow_db() -> None:
         con.close()
 
 def _ensure_cadastro_pairs(con, pairs: list[tuple[int, str]]) -> int:
-    """Cria várias tarefas e eventos em lote, idempotentemente, na transação atual."""
-    normalized = []
-    seen = set()
+    """Insere tarefas/eventos por lotes, garantindo idempotência e evitando N+1."""
+    normalized, seen = [], set()
     for card_id, reference in pairs:
-        card_id = int(card_id)
-        reference = str(reference or "").strip()
+        card_id, reference = int(card_id), str(reference or "").strip()
         key = (card_id, reference)
         if card_id > 0 and reference and key not in seen:
             seen.add(key)
@@ -185,42 +183,38 @@ def _ensure_cadastro_pairs(con, pairs: list[tuple[int, str]]) -> int:
         return 0
     stamp = _iso()
     values_sql = ",".join("(?,?,'PENDENTE',?)" for _ in normalized)
-    insert_params = []
-    for card_id, reference in normalized:
-        insert_params.extend((card_id, reference, stamp))
+    insert_params = [v for card_id, ref in normalized for v in (card_id, ref, stamp)]
     inserted = con.execute(
         "INSERT OR IGNORE INTO processing_cadastro_tasks(card_id,reference,status,created_at) VALUES " + values_sql,
         insert_params,
     )
-    pairs_sql = ",".join("(?,?)" for _ in normalized)
-    pair_params = [value for pair in normalized for value in pair]
-    task_rows = con.execute(
-        "SELECT id,card_id,reference FROM processing_cadastro_tasks WHERE (card_id,reference) IN (" + pairs_sql + ")",
+    pair_sql = ",".join("(?,?)" for _ in normalized)
+    pair_params = [v for pair in normalized for v in pair]
+    tasks = con.execute(
+        "SELECT id,card_id,reference FROM processing_cadastro_tasks WHERE (card_id,reference) IN (" + pair_sql + ")",
         pair_params,
     ).fetchall()
-    if len(task_rows) < len(normalized):
+    if len(tasks) < len(normalized):
         raise HTTPException(500, "Não foi possível garantir todas as tarefas de Cadastro.")
-    task_ids = [int(row["id"]) for row in task_rows]
+    task_ids = [int(row["id"]) for row in tasks]
     marks = ",".join("?" for _ in task_ids)
-    already_created = {
-        int(row["task_id"]) for row in con.execute(
-            "SELECT task_id FROM processing_cadastro_events WHERE event='CREATED' AND task_id IN (" + marks + ")",
-            task_ids,
-        ).fetchall()
-    }
-    missing = [task_id for task_id in task_ids if task_id not in already_created]
-    if missing:
-        event_values = ",".join("(?, 'CREATED', ?, NULL)" for _ in missing)
-        event_params = [value for task_id in missing for value in (task_id, stamp)]
+    existing_events = {int(row["task_id"]) for row in con.execute(
+        "SELECT task_id FROM processing_cadastro_events WHERE event='CREATED' AND task_id IN (" + marks + ")",
+        task_ids,
+    ).fetchall()}
+    missing_events = [task_id for task_id in task_ids if task_id not in existing_events]
+    if missing_events:
+        event_sql = ",".join("(?, 'CREATED', ?, NULL)" for _ in missing_events)
+        event_params = [v for task_id in missing_events for v in (task_id, stamp)]
         con.execute(
-            "INSERT INTO processing_cadastro_events(task_id,event,occurred_at,user_id) VALUES " + event_values,
+            "INSERT INTO processing_cadastro_events(task_id,event,occurred_at,user_id) VALUES " + event_sql,
             event_params,
         )
     return max(0, int(inserted.rowcount or 0))
 
 
 def ensure_cadastro_tasks(con, card_id: int, item_ids: list[int] | None = None) -> int:
-    """Gera uma tarefa por referência, em lote, dentro da transação de origem."""
+    """Cria uma tarefa por referência, em lote, dentro da transação da ação de Qualidade."""
     sql = "SELECT id,COALESCE(NULLIF(TRIM(reference),''),TRIM(product)) AS ref FROM items WHERE card_id=?"
     params: list[Any] = [int(card_id)]
     if item_ids is not None:
@@ -229,17 +223,16 @@ def ensure_cadastro_tasks(con, card_id: int, item_ids: list[int] | None = None) 
             return 0
         sql += " AND id IN (" + ",".join("?" for _ in ids) + ")"
         params.extend(ids)
-    rows = con.execute(sql + " ORDER BY id", params).fetchall()
     refs = []
-    for row in rows:
-        ref = str(row["ref"] or "").strip()
-        if ref and ref not in refs:
-            refs.append(ref)
-    return _ensure_cadastro_pairs(con, [(int(card_id), ref) for ref in refs])
+    for row in con.execute(sql + " ORDER BY id", params).fetchall():
+        reference = str(row["ref"] or "").strip()
+        if reference and reference not in refs:
+            refs.append(reference)
+    return _ensure_cadastro_pairs(con, [(int(card_id), reference) for reference in refs])
 
 
 def backfill_cadastro_tasks() -> int:
-    """Backfill idempotente dos Cards já enviados à Costura, sem consultas N+1."""
+    """Backfill idempotente dos Cards enviados à Costura, agrupado por lote."""
     con = db.connect()
     try:
         con.execute("BEGIN")
@@ -263,18 +256,18 @@ def backfill_cadastro_tasks() -> int:
         for card_id in card_ids:
             items = items_by_card[card_id]
             subset = [row for row in items if row["source_stage"] == "AGUARDANDO_COSTURA"]
-            scoped = subset if subset else items
-            refs = []
-            for row in scoped:
+            for row in (subset if subset else items):
                 reference = str(row["ref"] or "").strip()
-                if reference and reference not in refs:
-                    refs.append(reference)
-            pairs.extend((card_id, reference) for reference in refs)
+                pair = (card_id, reference)
+                if reference and pair not in pairs:
+                    pairs.append(pair)
         created = _ensure_cadastro_pairs(con, pairs)
         con.commit()
         return created
     finally:
         con.close()
+
+
 @router.get("/cadastro/queue")
 def cadastro_queue(user_id: int):
     con = db.connect()
@@ -498,6 +491,7 @@ async def triage_action(triage_id: int, action: str, request: Request):
         expected = {int(item["item_id"]): item for item in original}
         seen: set[int] = set()
         counts = []
+        extra_keys = set()
         for value in raw:
             if not isinstance(value, dict):
                 raise HTTPException(400, "Formato de linha de contagem inválido.")
@@ -520,6 +514,15 @@ async def triage_action(triage_id: int, action: str, request: Request):
                 ref, color, size = (str(value.get(k) or "").strip() for k in ("reference", "color", "size"))
                 if not ref or not color or not size:
                     raise HTTPException(400, "Preencha referência, cor e tamanho de cada combinação extra.")
+                extra_key = (ref.casefold(), color.casefold(), size.casefold())
+                if extra_key in extra_keys or any(
+                    extra_key == (str(item["reference"] or "").strip().casefold(),
+                                  str(item["color"] or "").strip().casefold(),
+                                  str(item["size"] or "").strip().casefold())
+                    for item in original
+                ):
+                    raise HTTPException(400, "A combinação extra está duplicada ou já existe na grade original.")
+                extra_keys.add(extra_key)
                 counts.append({"item_id": None, "reference": ref, "color": color, "size": size, "expected_qty": 0, "counted_qty": counted, "is_extra": 1})
         missing = set(expected) - seen
         if missing:
@@ -528,16 +531,15 @@ async def triage_action(triage_id: int, action: str, request: Request):
             raise HTTPException(400, "A contagem não pode ficar vazia.")
         con.execute("INSERT INTO processing_triage_events(triage_id,event,occurred_at,user_id) VALUES(?,?,?,?)", (triage_id, "FINISH", stamp, int(actor["id"])))
         summary = _events_summary(con, "processing_triage_events", "triage_id", triage_id, datetime.fromisoformat(stamp))
-        if counts:
-            count_values = ",".join("(?,?,?,?,?,?,?,?)" for _ in counts)
-            count_params = [value for item in counts for value in (
-                triage_id, item["item_id"], item["reference"], item["color"], item["size"],
-                item["expected_qty"], item["counted_qty"], item["is_extra"]
-            )]
-            con.execute(
-                "INSERT INTO processing_triage_counts(triage_id,item_id,reference,color,size,expected_qty,counted_qty,is_extra) VALUES " + count_values,
-                count_params,
-            )
+        count_values = ",".join("(?,?,?,?,?,?,?,?)" for _ in counts)
+        count_params = [value for item in counts for value in (
+            triage_id, item["item_id"], item["reference"], item["color"], item["size"],
+            item["expected_qty"], item["counted_qty"], item["is_extra"]
+        )]
+        con.execute(
+            "INSERT INTO processing_triage_counts(triage_id,item_id,reference,color,size,expected_qty,counted_qty,is_extra) VALUES " + count_values,
+            count_params,
+        )
         item_counts = [item for item in counts if item["item_id"] is not None]
         if item_counts:
             case_sql = " ".join("WHEN ? THEN ?" for _ in item_counts)
@@ -565,7 +567,7 @@ async def triage_action(triage_id: int, action: str, request: Request):
         con.close()
 
 def ensure_storage_entry(con, card_id: int, operation_id: int) -> int:
-    """Cria a conferência e suas linhas em lote, atomicamente com a Estocagem."""
+    """Cria a conferência e todas as linhas em lote, na transação da Estocagem."""
     op = con.execute("SELECT * FROM downstream_operations WHERE id=? AND card_id=?", (operation_id, card_id)).fetchone()
     if not op or op["sector"] != "ESTOCAGEM" or op["status"] != "CONCLUIDO":
         raise HTTPException(409, "A Entrada só pode ser criada após a conclusão da Estocagem.")
@@ -583,8 +585,7 @@ def ensure_storage_entry(con, card_id: int, operation_id: int) -> int:
             if not row:
                 raise HTTPException(500, "Não foi possível criar a conferência de Entrada.")
             entry_id = int(row["id"])
-    count = int(con.execute("SELECT COUNT(*) n FROM storage_entry_items WHERE entry_id=?", (entry_id,)).fetchone()["n"] or 0)
-    if count:
+    if int(con.execute("SELECT COUNT(*) n FROM storage_entry_items WHERE entry_id=?", (entry_id,)).fetchone()["n"] or 0):
         return entry_id
     params: list[Any] = [card_id]
     sql = """SELECT i.id,i.reference,i.product,i.color,i.size,COALESCE(i.real_qty,i.expected_qty,0) AS qty
@@ -600,10 +601,10 @@ def ensure_storage_entry(con, card_id: int, operation_id: int) -> int:
     items = con.execute(sql + " ORDER BY i.reference,i.color,i.size,i.id", params).fetchall()
     if not items:
         raise HTTPException(409, "A Estocagem não possui itens para gerar a conferência de Entrada.")
-    rows_to_insert = []
+    insert_rows = []
     for item in items:
         qty = int(item["qty"] or 0)
-        rows_to_insert.append((
+        insert_rows.append((
             entry_id, int(item["id"]), str(item["reference"] or item["product"] or ""),
             str(item["color"] or ""), str(item["size"] or ""), qty, qty, 0
         ))
@@ -618,15 +619,13 @@ def ensure_storage_entry(con, card_id: int, operation_id: int) -> int:
             ).fetchall()
             for extra in extras:
                 qty = int(extra["counted_qty"] or 0)
-                rows_to_insert.append((
-                    entry_id, None, str(extra["reference"] or ""), str(extra["color"] or ""),
-                    str(extra["size"] or ""), qty, qty, 1
-                ))
-    value_sql = ",".join("(?,?,?,?,?,?,?,0,?)" for _ in rows_to_insert)
-    insert_params = [value for row in rows_to_insert for value in row]
+                insert_rows.append((entry_id, None, str(extra["reference"] or ""), str(extra["color"] or ""),
+                                    str(extra["size"] or ""), qty, qty, 1))
+    values_sql = ",".join("(?,?,?,?,?,?,?,0,?)" for _ in insert_rows)
+    values_params = [value for row in insert_rows for value in row]
     con.execute(
-        "INSERT OR IGNORE INTO storage_entry_items(entry_id,item_id,reference,color,size,triage_qty,stored_qty,diff,is_extra) VALUES " + value_sql,
-        insert_params,
+        "INSERT OR IGNORE INTO storage_entry_items(entry_id,item_id,reference,color,size,triage_qty,stored_qty,diff,is_extra) VALUES " + values_sql,
+        values_params,
     )
     return entry_id
 
@@ -677,6 +676,7 @@ async def entry_confirm(entry_id: int, request: Request):
         divergent = 0
         grade_changed = False
         updates = []
+        updates = []
         for value in supplied:
             if not isinstance(value, dict):
                 raise HTTPException(400, "Formato de linha de Entrada inválido.")
@@ -706,14 +706,16 @@ async def entry_confirm(entry_id: int, request: Request):
             raise HTTPException(409, "Esta Entrada não contém itens para conferir.")
         if updates:
             values_sql = ",".join("(?,?,?,?)" for _ in updates)
-            params = [value for row in updates for value in row]
-            params.append(entry_id)
-            con.execute(
+            update_params = [value for row in updates for value in row]
+            update_params.append(entry_id)
+            cur = con.execute(
                 "UPDATE storage_entry_items AS target SET stored_qty=src.stored_qty,diff=src.diff,reason=src.reason "
                 "FROM (VALUES " + values_sql + ") AS src(id,stored_qty,diff,reason) "
                 "WHERE target.id=src.id AND target.entry_id=?",
-                params,
+                update_params,
             )
+            if int(cur.rowcount or 0) != len(updates):
+                raise HTTPException(409, "As linhas da Entrada mudaram durante a conferência. Atualize a tela.")
         stamp = _iso()
         changed = con.execute("""UPDATE storage_entries SET status='CONFIRMADA',concluded_by_user_id=?,concluded_by_name=?,
                  concluded_at=?,has_divergence=?,grade_changed=?,notes=? WHERE id=? AND status='PENDENTE'""",
