@@ -105,6 +105,11 @@ function enterApp() {
   $("loginScreen").classList.add("hidden");
   $("appShell").classList.remove("hidden");
   $("currentUser").innerHTML = `<strong>${esc(currentUser.name)}</strong><br>${esc(currentUser.role)}`;
+  const testToolsNav = $("testToolsNav");
+  if (testToolsNav) {
+    const isAdmin = String(currentUser.role || "").toLowerCase() === "admin";
+    testToolsNav.classList.toggle("hidden", !isAdmin);
+  }
   goTo("dashboard");
 }
 
