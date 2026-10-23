@@ -16,16 +16,17 @@ function newManualGradeColor(name = "") {
   return { id: "c" + (++manualGradeColorSeq), name };
 }
 
-function openGoatCardModal() {
-  let modal = document.getElementById("goatModal");
+function openGoatCardModal(isTest = false) {
+  const modalId = isTest ? "goatTestModal" : "goatModal";
+  let modal = document.getElementById(modalId);
   if (!modal) {
     modal = document.createElement("div");
-    modal.id = "goatModal";
+    modal.id = modalId;
     modal.className = "modal hidden";
     modal.innerHTML = `
       <div class="modal-content" style="max-width:980px;background:#1e1e2d;color:#fff;padding:20px;border-radius:8px;margin:3% auto;border:1px solid #323248;box-shadow:0 10px 30px rgba(0,0,0,.5);">
         <div class="modal-header" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:15px;border-bottom:1px solid #323248;padding-bottom:10px;">
-          <h2 style="margin:0;font-size:1.25rem;color:#fff;">Criar Card</h2>
+          <h2 style="margin:0;font-size:1.25rem;color:#fff;">${isTest ? "Criar Card de teste" : "Criar Card"}</h2>
           <button class="close-btn" onclick="closeGoatModal()" style="background:none;border:none;color:#a1a5b7;font-size:24px;cursor:pointer;">&times;</button>
         </div>
         <div class="modal-body">
@@ -42,7 +43,7 @@ function openGoatCardModal() {
               <input id="manualCardSupplier" type="text" style="width:100%;box-sizing:border-box;padding:10px;background:#151521;color:#fff;border:1px solid #323248;border-radius:4px;" placeholder="Nome do fornecedor">
             </div>
           </div>
-          <div style="margin-top:12px;padding:12px;border:1px solid #323248;border-radius:6px;background:#151521;">
+${isTest ? `          <div style="margin-top:12px;padding:12px;border:1px solid #323248;border-radius:6px;background:#151521;">
             <label for="manualCardTargetSector" style="display:block;font-weight:bold;margin-bottom:5px;font-size:.85rem;color:#a1a5b7;">SETOR INICIAL DO CARD DE TESTE</label>
             <select id="manualCardTargetSector" style="width:100%;box-sizing:border-box;padding:10px;background:#1e1e2d;color:#fff;border:1px solid #323248;border-radius:4px;">
               <option value="RECEBIMENTO">Recebimento</option>
@@ -53,7 +54,7 @@ function openGoatCardModal() {
               <option value="COSTURA">Costura</option>
             </select>
             <div style="font-size:.8rem;color:#92929f;margin-top:5px;">Uso exclusivo para testes. O Card será criado diretamente no setor selecionado, sem percorrer as etapas anteriores.</div>
-          </div>
+          </div>` : ""}
           <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-top:12px;">
             <div>
               <label style="display:block;font-weight:bold;margin-bottom:5px;font-size:.85rem;color:#a1a5b7;">NF <span style="font-weight:400;color:#777789;">(opcional)</span></label>
@@ -76,12 +77,13 @@ function openGoatCardModal() {
         </div>
         <div class="modal-footer actions" style="margin-top:15px;display:flex;justify-content:flex-end;gap:10px;">
           <button class="secondary" onclick="closeGoatModal()" style="padding:8px 16px;border-radius:4px;border:1px solid #323248;background:transparent;color:#fff;cursor:pointer;">Cancelar</button>
-          <button class="primary" onclick="processManualCard()" style="padding:8px 16px;border-radius:4px;border:none;background:#3699ff;color:#fff;cursor:pointer;font-weight:600;">Criar Card</button>
+          <button class="primary" onclick="processManualCard(${isTest})" style="padding:8px 16px;border-radius:4px;border:none;background:#3699ff;color:#fff;cursor:pointer;font-weight:600;">Criar Card</button>
         </div>
       </div>
     `;
     document.body.appendChild(modal);
   }
+  modal.dataset.testMode = isTest ? "true" : "false";
   document.getElementById("manualCardReference").value = "";
   document.getElementById("manualCardSupplier").value = "";
   document.getElementById("manualCardNf").value = "";
@@ -91,8 +93,7 @@ function openGoatCardModal() {
 }
 
 function closeGoatModal() {
-  const modal = document.getElementById("goatModal");
-  if (modal) modal.classList.add("hidden");
+  ["goatModal","goatTestModal"].forEach(id => { const modal = document.getElementById(id); if (modal) modal.classList.add("hidden"); });
 }
 
 function initManualGrade() {
@@ -248,13 +249,13 @@ function collectManualGrade() {
   return rows;
 }
 
-async function processManualCard() {
+async function processManualCard(isTest = false) {
   const say = (m) => (typeof toast === "function" ? toast(m) : alert(m));
   const reference = (document.getElementById("manualCardReference")?.value || "").trim();
   const supplier = (document.getElementById("manualCardSupplier")?.value || "").trim();
   const nf = (document.getElementById("manualCardNf")?.value || "").trim();
   const lot = (document.getElementById("manualCardLot")?.value || "").trim();
-  const target_sector = (document.getElementById("manualCardTargetSector")?.value || "RECEBIMENTO").trim().toUpperCase();
+  const target_sector = isTest ? (document.getElementById("manualCardTargetSector")?.value || "RECEBIMENTO").trim().toUpperCase() : "RECEBIMENTO";
   const grade = collectManualGrade();
   const total = grade.reduce((sum, row) => sum + row.quantity, 0);
 
@@ -267,11 +268,11 @@ async function processManualCard() {
   if (!grade.length || total <= 0) return say("Informe pelo menos uma quantidade maior que zero na grade.");
 
   try {
-    const d = await api("/api/goat/create-card", {
+    const d = await api(isTest ? "/api/goat/create-test-card" : "/api/goat/create-card", {
       method: "POST",
-      body: JSON.stringify({ reference, supplier, nf, lot, grade, target_sector })
+      body: JSON.stringify({ reference, supplier, nf, lot, grade, ...(isTest ? { target_sector } : {}) })
     });
-    say("Card de teste criado em " + target_sector + " para a referência " + d.reference + " (" + Number(d.expected_total || 0).toLocaleString("pt-BR") + " peças).");
+    say((isTest ? "Card de teste criado em " + target_sector : "Card criado no fluxo normal de Recebimento") + " para a referência " + d.reference + " (" + Number(d.expected_total || 0).toLocaleString("pt-BR") + " peças).");
     closeGoatModal();
     const destinationPage = ({
       RECEBIMENTO: "receiving",
