@@ -42,6 +42,18 @@ function openGoatCardModal() {
               <input id="manualCardSupplier" type="text" style="width:100%;box-sizing:border-box;padding:10px;background:#151521;color:#fff;border:1px solid #323248;border-radius:4px;" placeholder="Nome do fornecedor">
             </div>
           </div>
+          <div style="margin-top:12px;padding:12px;border:1px solid #323248;border-radius:6px;background:#151521;">
+            <label for="manualCardTargetSector" style="display:block;font-weight:bold;margin-bottom:5px;font-size:.85rem;color:#a1a5b7;">SETOR INICIAL DO CARD DE TESTE</label>
+            <select id="manualCardTargetSector" style="width:100%;box-sizing:border-box;padding:10px;background:#1e1e2d;color:#fff;border:1px solid #323248;border-radius:4px;">
+              <option value="RECEBIMENTO">Recebimento</option>
+              <option value="QUALIDADE">Qualidade</option>
+              <option value="PROCESSAMENTO">Processamento</option>
+              <option value="ETIQUETAGEM">Etiquetagem</option>
+              <option value="ESTOCAGEM">Estocagem</option>
+              <option value="COSTURA">Costura</option>
+            </select>
+            <div style="font-size:.8rem;color:#92929f;margin-top:5px;">Uso exclusivo para testes. O Card será criado diretamente no setor selecionado, sem percorrer as etapas anteriores.</div>
+          </div>
           <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-top:12px;">
             <div>
               <label style="display:block;font-weight:bold;margin-bottom:5px;font-size:.85rem;color:#a1a5b7;">NF <span style="font-weight:400;color:#777789;">(opcional)</span></label>
@@ -242,6 +254,7 @@ async function processManualCard() {
   const supplier = (document.getElementById("manualCardSupplier")?.value || "").trim();
   const nf = (document.getElementById("manualCardNf")?.value || "").trim();
   const lot = (document.getElementById("manualCardLot")?.value || "").trim();
+  const target_sector = (document.getElementById("manualCardTargetSector")?.value || "RECEBIMENTO").trim().toUpperCase();
   const grade = collectManualGrade();
   const total = grade.reduce((sum, row) => sum + row.quantity, 0);
 
@@ -256,11 +269,18 @@ async function processManualCard() {
   try {
     const d = await api("/api/goat/create-card", {
       method: "POST",
-      body: JSON.stringify({ reference, supplier, nf, lot, grade })
+      body: JSON.stringify({ reference, supplier, nf, lot, grade, target_sector })
     });
-    say("Card criado para a referência " + d.reference + " (" + Number(d.expected_total || 0).toLocaleString("pt-BR") + " peças).");
+    say("Card de teste criado em " + target_sector + " para a referência " + d.reference + " (" + Number(d.expected_total || 0).toLocaleString("pt-BR") + " peças).");
     closeGoatModal();
-    if (typeof goTo === "function") goTo("receiving"); else location.reload();
+    const destinationPage = ({
+      RECEBIMENTO: "receiving",
+      QUALIDADE: "quality",
+      PROCESSAMENTO: "processing-hub",
+      ETIQUETAGEM: "labeling",
+      ESTOCAGEM: "storage"
+    })[target_sector];
+    if (typeof goTo === "function" && destinationPage) goTo(destinationPage); else if (typeof goTo === "function") goTo("admin"); else location.reload();
   } catch (err) {
     say("Erro ao criar card: " + (err.message || err));
   }
