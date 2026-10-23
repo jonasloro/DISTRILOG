@@ -1253,3 +1253,27 @@ input:disabled,select:disabled,textarea:disabled{
 .clean-bar-fill{height:100%;border-radius:999px;background:linear-gradient(90deg,#ff8a3d,#ffb36b)}
 .clean-bar-value{text-align:right;font-weight:700}
 @media (max-width:700px){.clean-bar-row{grid-template-columns:1fr}.clean-row{grid-template-columns:1fr 1fr}.clean-clock{font-size:34px}}
+
+
+/* Cadastro do Processamento: lista compacta, legível e orientada à referência. */
+.processing-cadastro-panel{margin-top:16px;border:1px solid var(--border-color,rgba(255,255,255,.09));border-radius:14px;overflow:hidden}
+.processing-cadastro-heading{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:14px}
+.processing-cadastro-heading .section-heading{margin:0 0 5px}
+.processing-cadastro-heading .muted{margin:0;max-width:720px}
+.processing-cadastro-count{display:inline-flex;align-items:center;justify-content:center;min-width:34px;height:34px;padding:0 10px;border-radius:10px;background:rgba(255,255,255,.06);font-weight:700;font-size:14px}
+.processing-cadastro-list{display:flex;flex-direction:column;gap:8px}
+.processing-cadastro-card{display:grid;grid-template-columns:minmax(200px,1.5fr) minmax(140px,1fr) minmax(90px,auto) minmax(140px,auto);align-items:center;gap:16px;padding:15px 16px;border:1px solid rgba(255,255,255,.08);border-radius:11px;background:rgba(255,255,255,.025);transition:border-color .15s ease,background .15s ease}
+.processing-cadastro-card:hover{border-color:rgba(255,255,255,.17);background:rgba(255,255,255,.045)}
+.processing-cadastro-main{min-width:0}
+.processing-cadastro-reference{font-size:15px;font-weight:700;line-height:1.4;overflow-wrap:anywhere}
+.processing-cadastro-meta{margin-top:5px;font-size:12px;opacity:.68}
+.processing-cadastro-state{display:flex;flex-direction:column;align-items:flex-start;gap:5px;min-width:0}
+.processing-cadastro-state small{font-size:11px;opacity:.68;overflow-wrap:anywhere}
+.processing-cadastro-timer{font-variant-numeric:tabular-nums;white-space:nowrap;font-size:13px}
+.processing-cadastro-actions{display:flex;justify-content:flex-end;gap:7px;flex-wrap:wrap}
+.processing-cadastro-actions .small-btn{white-space:nowrap}
+.processing-cadastro-empty{display:flex;flex-direction:column;align-items:flex-start;gap:5px;padding:20px;border:1px dashed rgba(255,255,255,.13);border-radius:10px}
+.processing-cadastro-empty strong{font-size:13px}
+.processing-cadastro-empty span{font-size:12px;opacity:.68}
+@media(max-width:900px){.processing-cadastro-card{grid-template-columns:minmax(0,1fr) auto;gap:10px}.processing-cadastro-state{grid-column:1}.processing-cadastro-timer{grid-column:2;grid-row:1}.processing-cadastro-actions{grid-column:1/-1;justify-content:flex-start}}
+@media(max-width:520px){.processing-cadastro-card{grid-template-columns:1fr}.processing-cadastro-state,.processing-cadastro-timer,.processing-cadastro-actions{grid-column:1;grid-row:auto}.processing-cadastro-heading{align-items:flex-start}}
