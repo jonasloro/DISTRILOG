@@ -1,0 +1,39 @@
+name: Validate Processamento flow
+
+on:
+  push:
+    branches:
+      - validate/processing-flow
+
+jobs:
+  syntax-and-sql-adapter:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install runtime dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
+      - name: Compile Python modules
+        run: python -m compileall -q app.py db.py cleaning_module.py quality_module.py processing_module.py processing_flow_module.py downstream_module.py positions_module.py
+      - name: Validate frontend syntax
+        run: node --check static/app.js
+      - name: Verify SQL translation used by new flow
+        run: |
+          python - <<'PY'
+          import db
+          statements = [
+              "CREATE TABLE IF NOT EXISTS processing_triages (id INTEGER PRIMARY KEY AUTOINCREMENT, card_id INTEGER NOT NULL)",
+              "INSERT OR IGNORE INTO processing_cadastro_tasks(card_id,reference,status,created_at) VALUES(?,?,?,?),(?,?,?,?)",
+              "INSERT INTO processing_triage_counts(triage_id,item_id,reference,color,size,expected_qty,counted_qty,is_extra) VALUES(?,?,?,?,?,?,?,?),(?,?,?,?,?,?,?,?)",
+              "UPDATE storage_entry_items AS target SET stored_qty=src.stored_qty,diff=src.diff,reason=src.reason FROM (VALUES (?,?,?,?),(?,?,?,?)) AS src(id,stored_qty,diff,reason) WHERE target.id=src.id AND target.entry_id=?",
+          ]
+          for source in statements:
+              translated, _ = db.translate(source)
+              assert "distrilog." in translated, translated
+          print("Python compilation and SQL adapter smoke checks passed.")
+          PY
