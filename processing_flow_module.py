@@ -264,13 +264,18 @@ def processing_intake_queue(user_id: int):
         """).fetchall()
         cadastro = con.execute("""
           SELECT c.id,c.purchase_id,c.supplier,c.brand,c.status,c.current_sector,c.updated_at,
-                 r.destination,r.status AS routing_status,r.assigned_by_name,r.assigned_at,
+                 r.destination,r.status AS routing_status,
+                 (SELECT u.name FROM users u WHERE u.id=r.assigned_by_user_id) AS assigned_by_name,
+                 r.assigned_at,
                  COALESCE((SELECT i.reference FROM items i WHERE i.card_id=c.id ORDER BY i.id LIMIT 1),c.purchase_id) AS reference_list,
                  COALESCE((SELECT SUM(i.expected_qty) FROM items i WHERE i.card_id=c.id),0) AS expected_total
-          FROM cards c JOIN processing_intake_routes r ON r.card_id=c.id
-          WHERE c.current_sector='PROCESSAMENTO'
-            AND r.destination='CADASTRO' AND r.status='AGUARDANDO_CADASTRO'
-          ORDER BY r.assigned_at,c.id
+          FROM cards c
+          JOIN processing_intake_routes r ON r.card_id=c.id
+          JOIN processing_triages t ON t.card_id=c.id AND t.status='CONCLUIDA'
+          WHERE c.current_sector IN ('ETIQUETAGEM','ESTOCAGEM')
+            AND r.status='ENCAMINHADO'
+            AND t.id=(SELECT MAX(t2.id) FROM processing_triages t2 WHERE t2.card_id=c.id)
+          ORDER BY t.finished_at,c.id
         """).fetchall()
         return {"pending":[dict(row) for row in pending],"cadastro":[dict(row) for row in cadastro]}
     finally:
