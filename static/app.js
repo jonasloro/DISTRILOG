@@ -536,7 +536,8 @@ async function renderTestTools() {
   const allCards = [...receiving, ...quality, ...processing, ...outside];
   const processingCandidates = allCards.filter((card) => card.status !== "DESPACHO_CD02" && card.current_sector !== "PROCESSAMENTO");
   $("mainContent").innerHTML = `
-    <div class="notice">As simulações não substituem os fluxos reais. Elas existem somente para permitir o teste isolado dos módulos ainda em construção.</div>
+    <div class="actions" style="justify-content:flex-end;margin-bottom:12px"><button class="primary" onclick="openGoatCardModal()">+ Criar Card de teste</button></div>
+    <div class="notice">Crie um Card de teste diretamente no setor desejado ou use as ferramentas abaixo para simular movimentações. Esses recursos são exclusivos do Administrador.</div>
     <div class="panel"><div class="panel-header">Retorno da Costura CD01</div><div class="table-wrap"><table>
       <thead><tr><th>Compra</th><th>Fornecedor</th><th>Status</th><th>Destino</th><th>Ações</th></tr></thead>
       <tbody>${costuraCards.map((card) => `
