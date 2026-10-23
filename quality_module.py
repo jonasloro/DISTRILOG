@@ -2009,6 +2009,8 @@ async def complete_inspection(inspection_id: int, request: Request):
         ).fetchone()["n"])
         if costura_ids:
             from app import ensure_receiving
+            from processing_flow_module import ensure_cadastro_tasks
+            ensure_cadastro_tasks(con, int(inspection["card_id"]), costura_ids)
             ensure_receiving(con, inspection["card_id"], "COSTURA", costura_ids)
             con.execute(
                 """UPDATE cards SET current_sector='RECEBIMENTO',status='AGUARDANDO_DESPACHO_COSTURA',
@@ -2036,6 +2038,8 @@ async def complete_inspection(inspection_id: int, request: Request):
         int(inspection["send_to_costura"] or 0) == 1
         or (inspection["send_to_costura"] is None and inspection["destination"] == "CD01")
     ):
+        from processing_flow_module import ensure_cadastro_tasks
+        ensure_cadastro_tasks(con, int(inspection["card_id"]))
         con.execute(
             """UPDATE cards SET current_sector='RECEBIMENTO',status='AGUARDANDO_DESPACHO_COSTURA',
                quality_destination='CD01',receiving_type='NOVA',updated_at=? WHERE id=?""",

@@ -120,7 +120,7 @@ def downstream_card_data(con: "db.Connection", card_id: int, sector: str) -> dic
       SELECT i.id item_id,i.product,i.reference,i.sku,i.color,i.size,
        COALESCE(NULLIF((SELECT piq.processed_qty FROM processing_item_quantities piq
          JOIN processing_records pr ON pr.id=piq.processing_id WHERE pr.card_id=i.card_id AND piq.item_id=i.id
-         ORDER BY pr.id DESC LIMIT 1),0),i.expected_qty) expected_qty,
+         ORDER BY pr.id DESC LIMIT 1),0),i.real_qty,i.expected_qty,0) expected_qty,
        COALESCE((SELECT SUM(a.assigned_qty) FROM downstream_assignments a WHERE a.operation_id=? AND a.item_id=i.id),0) assigned_qty,
        COALESCE((SELECT SUM(a.completed_qty) FROM downstream_assignments a WHERE a.operation_id=? AND a.item_id=i.id),0) completed_qty
       FROM items i WHERE i.card_id=? {subset_filter}
@@ -194,14 +194,14 @@ async def claim(operation_id: int, request: Request):
           JOIN processing_records pr ON pr.id=piq.processing_id WHERE pr.card_id=? AND piq.item_id=?
           ORDER BY pr.id DESC LIMIT 1""", (op["card_id"], item_id)).fetchone()
         expected = int(processed["processed_qty"] or 0) if processed else 0
-        if expected <= 0: expected = int(item["expected_qty"] or 0)
+        if expected <= 0: expected = int(item["real_qty"] if item["real_qty"] is not None else item["expected_qty"] or 0)
         if qty != expected: con.close(); raise HTTPException(400, f"Grade é assumida por tamanho completo ({expected} peças).")
     else:
         item_id = None
         processed = con.execute("SELECT processed_qty_general FROM processing_records WHERE card_id=? ORDER BY id DESC LIMIT 1", (op["card_id"],)).fetchone()
         expected = int(processed["processed_qty_general"] or 0) if processed else 0
         if expected <= 0:
-            expected = sum(int(r[0] or 0) for r in con.execute("SELECT expected_qty FROM items WHERE card_id=?", (op["card_id"],)))
+            expected = sum(int(r[0] or 0) for r in con.execute("SELECT COALESCE(real_qty,expected_qty,0) FROM items WHERE card_id=?", (op["card_id"],)))
         used = con.execute("SELECT COALESCE(SUM(assigned_qty),0) FROM downstream_assignments WHERE operation_id=? AND status!='LIBERADA'", (operation_id,)).fetchone()[0]
         if qty > expected-used: con.close(); raise HTTPException(400, f"Há somente {expected-used} peças disponíveis.")
     cur = con.execute("INSERT INTO downstream_assignments(operation_id,item_id,worker_user_id,assigned_qty,created_at) VALUES(?,?,?,?,?)", (operation_id,item_id,worker_id,qty,now()))
@@ -268,6 +268,9 @@ async def complete(operation_id: int, request: Request):
         con.execute("UPDATE cards SET updated_at=? WHERE id=?", (now(), op["card_id"]))
     else:
         con.execute("UPDATE cards SET current_sector=?,status=?,updated_at=? WHERE id=?",(nxt,status,now(),op["card_id"]))
+    if op["sector"] == "ESTOCAGEM":
+        from processing_flow_module import ensure_storage_entry
+        ensure_storage_entry(con, int(op["card_id"]), int(operation_id))
     history(con,op["card_id"],f"{op['sector']}_CONCLUIDA",f"{actor['name']} concluiu {op['sector'].title()}.",uid); con.commit(); con.close(); return {"status":status}
 
 

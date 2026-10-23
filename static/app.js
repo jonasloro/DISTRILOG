@@ -59,6 +59,8 @@ function fmtDateTime(value) {
 
 // Estado de módulos novos: declarado no topo porque o app já inicia (enterApp) antes do fim do arquivo.
 let cleaningTick = null;
+let processingFlowTick = null;
+let processingExtraIndex = 0;
 let cleaningDays = 30;
 const PROCESSING_TABS = [["Visão geral", "processing-hub"], ["Fila operacional", "processing"], ["Cadastro", "processing-register"], ["Triagem", "processing-triage"], ["Entrada", "processing-entry"]];
 
@@ -130,6 +132,7 @@ function showLoading(label) {
 
 async function goTo(view) {
   clearInterval(cleaningTick);
+  clearInterval(processingFlowTick);
   const previousView = currentView;
   currentView = view;
   activeNav(view);
@@ -740,6 +743,7 @@ async function openCard(cardId, tab = "receiving") {
       <div class="summary-box"><span>Volumes</span><strong>${cardData.receiving?.volumes ?? cardData.receiving?.volume_count ?? "Não informado"}</strong></div>
       <div class="summary-box"><span>Casulo atual</span><strong>${esc(cardData.casulo_current||"Não informado")}</strong></div>
     </div>
+    <div id="cardCadastroStatus"></div>
     <div class="tabs">
       <button id="tabReceivingBtn" onclick="renderReceivingTab()">Recebimento</button>
       <button id="tabQualityBtn" onclick="renderQualityTab()">Qualidade</button>
@@ -773,6 +777,7 @@ async function openCard(cardId, tab = "receiving") {
   else if (tab === "products") renderProductsTab();
   else if (tab === "history") renderCardHistory();
   else renderReceivingTab();
+  void renderQualityCadastroStatusBadge();
 }
 
 function activateTab(id) {
@@ -3240,58 +3245,99 @@ async function setCleaningDays(value) {
   await renderCleaning();
 }
 
-// ---------- Processamento: abas (Visão geral, Fila operacional, Cadastro, Triagem, Entrada) ----------
+// ---------- Processamento: Cadastro, Triagem e Entrada (Supabase) ----------
 function processingTabs(current) { return moduleTabs(PROCESSING_TABS, current); }
-
-function processingSoonNotice() {
-  return '<div class="notice"><b>Tela pronta para uso.</b> O salvamento e o controle das tarefas serão ligados ao Supabase na próxima etapa; por enquanto os campos abaixo ficam desativados.</div>';
+function processingStatusLabel(status) { return ({PENDENTE:"Pendente",EM_ANDAMENTO:"Em andamento",PAUSADA:"Pausada",CONCLUIDO:"Concluído",CONCLUIDA:"Concluída",CONFIRMADA:"Confirmada"})[status] || status || "—"; }
+function processingTimerHtml(record) { const seconds=Math.max(0,Number(record.worked_seconds||0)),running=record.status==="EM_ANDAMENTO"; return '<span class="clean-clock" data-flow-timer data-base="'+seconds+'" data-fetched="'+Date.now()+'" data-running="'+(running?"1":"0")+'">'+fmtSeconds(seconds)+'</span>'; }
+function startProcessingFlowTicker() {
+  clearInterval(processingFlowTick); const tick=()=>document.querySelectorAll("[data-flow-timer]").forEach((el)=>{if(el.dataset.running!=="1")return;el.textContent=fmtSeconds(Number(el.dataset.base||0)+(Date.now()-Number(el.dataset.fetched||Date.now()))/1000);});
+  tick(); if(document.querySelector('[data-flow-timer][data-running="1"]'))processingFlowTick=setInterval(tick,1000);
 }
-
+async function renderQualityCadastroStatusBadge() {
+  const cardId=Number(currentCardId||0),snapshot=cardData,host=$("cardCadastroStatus"); if(!snapshot||!cardId||!host)return;
+  if(!(snapshot.receiving_type==="COSTURA"||["AGUARDANDO_DESPACHO_COSTURA","EM_COSTURA_CD01"].includes(snapshot.status))){host.innerHTML="";return;}
+  try {const tasks=await api("/api/processing/cadastro/card/"+cardId+"?user_id="+currentUser.id);if(Number(currentCardId)!==cardId||!Array.isArray(tasks))return;
+    if(!tasks.length){host.innerHTML='<div class="notice">Cadastro para Costura ainda não foi registrado para esta referência.</div>';return;}
+    host.innerHTML='<div class="notice"><b>Status do Cadastro para Costura</b><ul>'+tasks.map((t)=>'<li><b>'+esc(t.reference)+'</b>: '+esc(processingStatusLabel(t.status))+(t.user_name?' por '+esc(t.user_name):'')+'</li>').join("")+'</ul><small>Esta tarefa não move nem duplica o Card e não bloqueia o despacho.</small></div>';
+  } catch(error){console.warn("Não foi possível consultar o Cadastro:",error);}
+}
 async function renderProcessingHub() {
-  setPage("Processamento", "");
-  const cards = await safeApi("/api/cards?scope=processing", []);
-  const panel = (icon, title, view, text) => dashboardPanel(icon, title, `<button class="panel-action" onclick="goTo('${view}')">Abrir</button>`, `<p class="empty-cell">${text}</p>`);
-  $("mainContent").innerHTML = `${processingTabs("processing-hub")}
-    <div class="hero-kpis storage-kpis">${heroKpi("Aguardando processamento", cards.length, "Cards", "⚙", "blue", "processing")}</div>
-    <div class="dash-row">
-      ${panel("▤", "Cadastro", "processing-register", "Nenhum cadastro registrado ainda.")}
-      ${panel("⇄", "Triagem", "processing-triage", "Nenhuma triagem registrada ainda.")}
-      ${panel("⇩", "Entrada na estocagem", "processing-entry", "Nenhuma entrada registrada ainda.")}
-    </div>`;
+  clearInterval(processingFlowTick);setPage("Processamento","Cadastro, contagem física e conferência final da Estocagem");
+  try {const data=await api("/api/processing/overview?user_id="+currentUser.id),c=data.counts||{},a=data.averages||{};
+    $("mainContent").innerHTML=processingTabs("processing-hub")+'<div class="hero-kpis storage-kpis">'+heroKpi("Cadastros pendentes",c.cadastro_pendentes||0,(c.cadastro_em_andamento||0)+" em andamento","▤","teal","processing-register")+heroKpi("Triagens em andamento",c.triagens_em_andamento||0,(c.triagens_concluidas||0)+" concluídas","⇄","teal","processing-triage")+heroKpi("Entradas pendentes",c.entradas_pendentes||0,"Conferências de Estocagem","⇩","teal","processing-entry")+heroKpi("Entradas divergentes",c.entradas_divergentes||0,"Precisam de acompanhamento","≠","orange","processing-entry")+'</div><section class="panel"><div class="panel-body"><h3 class="section-heading">Tempo médio por etapa</h3><div class="clean-kpis"><div><span>Cadastro</span><b>'+fmtDurationShort(a.cadastro_seconds||0)+'</b></div><div><span>Triagem</span><b>'+fmtDurationShort(a.triage_seconds||0)+'</b></div><div><span>Entrada</span><b>Sem cronômetro</b></div></div></div></section><div class="dash-row">'+dashboardPanel("▤","Cadastro",'<button class="panel-action" onclick="goTo(\'processing-register\')">Abrir</button>','<p>Cadastro por referência para a Costura, sem alterar o setor real do Card.</p>')+dashboardPanel("⇄","Triagem",'<button class="panel-action" onclick="goTo(\'processing-triage\')">Abrir</button>','<p>Contagem física por referência, cor e tamanho, com divergências auditáveis.</p>')+dashboardPanel("⇩","Entrada na Estocagem",'<button class="panel-action" onclick="goTo(\'processing-entry\')">Abrir</button>','<p>Confirmação do que foi guardado e justificativa das diferenças.</p>')+'</div>';
+  } catch(error){$("mainContent").innerHTML=processingTabs("processing-hub")+'<div class="notice error">'+esc(error.message)+'</div>';toast(error.message);}
 }
-
-async function renderProcessingStage(view, title, timed) {
-  setPage("Processamento", "");
-  const cards = await safeApi("/api/cards?scope=processing", []);
-  const queueRows = cards.length
-    ? cards.map((c) => `<tr><td><b>${esc(refLabel(c))}</b></td><td>${esc(c.supplier || "—")}</td><td>${c.expected_total ?? "—"}</td><td>${esc(c.status_label || c.status || "")}</td></tr>`).join("")
-    : emptyRows(4, "Nenhum Card aguardando processamento.");
-  const clock = timed
-    ? `<div class="clean-active"><div><span class="clean-area-tag">${esc(title)}</span><div class="muted">Cronômetro desativado nesta etapa de preparação</div></div>
-         <span class="clean-clock">00:00:00</span>
-         <div class="actions"><button class="primary" disabled>Iniciar</button><button class="secondary" disabled>Pausar</button><button class="success" disabled>Concluir</button></div></div>`
-    : `<div class="notice">Esta tela <b>não tem cronômetro</b>: serve só para controlar os dados da estocagem.</div>`;
-  const fields = timed
-    ? ""
-    : `<div class="form-grid">
-         <div class="field"><label>Card / Compra</label><input disabled placeholder="Selecione o Card"></div>
-         <div class="field"><label>Referência</label><input disabled></div>
-         <div class="field"><label>Quantidade</label><input disabled type="number"></div>
-         <div class="field"><label>Local / Endereço</label><input disabled></div>
-         <div class="field"><label>Observação</label><input disabled></div>
-       </div><div class="actions"><button class="primary" disabled>Registrar entrada</button></div>`;
-  const historyCols = timed
-    ? ["Data", "Card", "Responsável", "Tempo", "Quantidade"]
-    : ["Data", "Card", "Referência", "Quantidade", "Local", "Responsável"];
-  $("mainContent").innerHTML = `${processingTabs(view)}
-    ${processingSoonNotice()}
-    <section class="panel"><div class="panel-body"><h3 class="section-heading">${esc(title)}</h3>${clock}${fields}</div></section>
-    ${timed ? `<section class="panel"><div class="panel-body"><h3 class="section-heading">Cards para ${esc(title.toLowerCase())}</h3>
-      <div class="table-wrap"><table class="compact-table"><thead><tr><th>Compra / SGO</th><th>Fornecedor</th><th>Peças</th><th>Status</th></tr></thead><tbody>${queueRows}</tbody></table></div></div></section>` : ""}
-    <section class="panel"><div class="panel-body"><h3 class="section-heading">${timed ? "Registros" : "Entradas registradas"}</h3>
-      <div class="table-wrap"><table class="compact-table"><thead><tr>${historyCols.map((h) => `<th>${h}</th>`).join("")}</tr></thead><tbody>${emptyRows(historyCols.length, "Nenhum registro ainda.")}</tbody></table></div></div></section>`;
+async function renderProcessingRegister() {
+  clearInterval(processingFlowTick);setPage("Processamento · Cadastro","Uma tarefa por referência; o Card permanece na etapa logística real.");
+  try {const tasks=await api("/api/processing/cadastro/queue?user_id="+currentUser.id);
+    const rows=tasks.map((t)=>{const manager=["admin","supervisor"].includes(currentUser.role),owner=!t.user_id||Number(t.user_id)===Number(currentUser.id)||manager;let actions="";
+      if(t.status==="PENDENTE")actions='<button class="primary small-btn" onclick="processingCadastroAction('+t.id+',\'start\')">Iniciar</button>';
+      else if(owner&&t.status==="EM_ANDAMENTO")actions='<button class="secondary small-btn" onclick="processingCadastroAction('+t.id+',\'pause\')">Pausar</button><button class="success small-btn" onclick="processingCadastroAction('+t.id+',\'finish\')">Concluir</button>';
+      else if(owner&&t.status==="PAUSADA")actions='<button class="primary small-btn" onclick="processingCadastroAction('+t.id+',\'resume\')">Retomar</button><button class="success small-btn" onclick="processingCadastroAction('+t.id+',\'finish\')">Concluir</button>';
+      else if(["EM_ANDAMENTO","PAUSADA"].includes(t.status))actions='<small>Em posse de '+esc(t.user_name||"outra operadora")+'</small>';
+      const timer=["EM_ANDAMENTO","PAUSADA","CONCLUIDO"].includes(t.status)?processingTimerHtml(t):"—";
+      return '<tr><td><b>'+esc(t.reference)+'</b></td><td><button class="ghost small-btn" onclick="openCard('+t.card_id+',\'quality\')">'+esc(t.purchase_id||("Card "+t.card_id))+'</button><small>'+esc(t.supplier||"Fornecedor não informado")+'</small></td><td>'+Number(t.reference_qty||0).toLocaleString("pt-BR")+'</td><td><span class="badge">'+esc(processingStatusLabel(t.status))+'</span><small>Card está em: '+esc(t.card_sector_label)+'</small></td><td>'+esc(t.user_name||"—")+'</td><td>'+timer+'</td><td><div class="actions">'+actions+'</div></td></tr>';
+    }).join("");
+    $("mainContent").innerHTML=processingTabs("processing-register")+'<section class="panel"><div class="panel-body"><h3 class="section-heading">Fila de Cadastro para Costura</h3><div class="notice">O Cadastro aparece nesta fila como uma projeção: <b>não altera o setor e não cria um segundo Card</b>. O despacho à Costura não é bloqueado.</div><div class="table-wrap"><table class="compact-table"><thead><tr><th>Referência</th><th>Compra / Card</th><th>Peças</th><th>Status / setor real</th><th>Responsável</th><th>Tempo trabalhado</th><th>Ações</th></tr></thead><tbody>'+(rows||emptyRows(7,"Nenhum Cadastro gerado para a Costura."))+'</tbody></table></div></div></section>';
+    startProcessingFlowTicker();
+  } catch(error){$("mainContent").innerHTML=processingTabs("processing-register")+'<div class="notice error">'+esc(error.message)+'</div>';toast(error.message);}
 }
-
-const renderProcessingRegister = () => renderProcessingStage("processing-register", "Cadastro", true);
-const renderProcessingTriage = () => renderProcessingStage("processing-triage", "Triagem", true);
-const renderProcessingEntry = () => renderProcessingStage("processing-entry", "Entrada", false);
+async function processingCadastroAction(id,action) {try{await api("/api/processing/cadastro/"+id+"/"+action,{method:"POST",body:JSON.stringify({user_id:currentUser.id})});toast(action==="start"?"Cadastro iniciado.":action==="pause"?"Cadastro pausado.":action==="resume"?"Cadastro retomado.":"Cadastro concluído.");await renderProcessingRegister();}catch(error){toast(error.message);}}
+async function renderProcessingTriage() {
+  clearInterval(processingFlowTick);setPage("Processamento · Triagem","Contagem física da grade sem alterar a quantidade original para auditoria.");
+  try {const cards=await api("/api/processing/triage/queue?user_id="+currentUser.id);
+    const rows=cards.map((c)=>{const t=c.triage,manager=["admin","supervisor"].includes(currentUser.role);let actions="",status="Não iniciada",timer="—";
+      if(!t)actions='<button class="primary small-btn" onclick="startProcessingTriage('+c.id+')">Iniciar triagem</button>';
+      else{status=processingStatusLabel(t.status);timer=processingTimerHtml(t);const owner=Number(t.user_id)===Number(currentUser.id)||manager;
+        if(["EM_ANDAMENTO","PAUSADA"].includes(t.status)&&owner)actions=(t.status==="EM_ANDAMENTO"?'<button class="secondary small-btn" onclick="processingTriageAction('+t.id+',\'pause\')">Pausar</button>':'<button class="primary small-btn" onclick="processingTriageAction('+t.id+',\'resume\')">Retomar</button>')+'<button class="success small-btn" onclick="openTriageCountModal('+t.id+','+c.id+',false)">Contar e concluir</button>';
+        else if(["EM_ANDAMENTO","PAUSADA"].includes(t.status))actions='<small>Em posse de '+esc(t.user_name||"outra operadora")+'</small>';
+        else{actions='<button class="secondary small-btn" onclick="openTriageCountModal('+t.id+','+c.id+',true)">Ver contagem</button><button class="primary small-btn" onclick="startProcessingTriage('+c.id+')">Nova triagem</button>';if(Number(t.counted_total||0)!==Number(t.expected_total||0))status+=" · divergência";}
+      }
+      return '<tr><td><b>'+esc(refLabel(c))+'</b><small>'+esc(c.purchase_id||("Card "+c.id))+'</small></td><td>'+esc(c.supplier||"—")+'</td><td>'+Number(c.expected_total||0).toLocaleString("pt-BR")+'</td><td><span class="badge">'+esc(status)+'</span><small>'+(t?"Responsável: "+esc(t.user_name):"Aguardando início")+'</small></td><td>'+timer+'</td><td><div class="actions">'+actions+'</div></td></tr>';
+    }).join("");
+    $("mainContent").innerHTML=processingTabs("processing-triage")+'<section class="panel"><div class="panel-body"><h3 class="section-heading">Cards aguardando triagem</h3><div class="notice">Preencha toda a grade, inclusive quantidade zero. A contagem real será salva em <b>real_qty</b>; <b>expected_qty</b> permanece intacta para auditoria. Combinações extras são registradas sem criar itens automaticamente.</div><div class="table-wrap"><table class="compact-table"><thead><tr><th>Compra / referência</th><th>Fornecedor</th><th>Previsto na grade</th><th>Status</th><th>Tempo trabalhado</th><th>Ações</th></tr></thead><tbody>'+(rows||emptyRows(6,"Nenhum Card no setor Processamento."))+'</tbody></table></div></div></section>';
+    startProcessingFlowTicker();
+  } catch(error){$("mainContent").innerHTML=processingTabs("processing-triage")+'<div class="notice error">'+esc(error.message)+'</div>';toast(error.message);}
+}
+async function startProcessingTriage(cardId){try{await api("/api/processing/triage/cards/"+cardId+"/start",{method:"POST",body:JSON.stringify({user_id:currentUser.id})});toast("Triagem iniciada.");await renderProcessingTriage();}catch(error){toast(error.message);}}
+async function processingTriageAction(id,action){try{await api("/api/processing/triage/"+id+"/"+action,{method:"POST",body:JSON.stringify({user_id:currentUser.id})});toast(action==="pause"?"Triagem pausada.":"Triagem retomada.");await renderProcessingTriage();}catch(error){toast(error.message);}}
+async function openTriageCountModal(triageId,cardId,readOnly) {
+  try{const t=await api("/api/processing/triage/"+triageId+"/details?user_id="+currentUser.id);processingExtraIndex=0;
+    const saved=new Map((t.counts||[]).filter((x)=>x.item_id!=null).map((x)=>[Number(x.item_id),x]));
+    const rows=(t.items||[]).map((item)=>{const old=saved.get(Number(item.item_id)),value=old?Number(old.counted_qty):"";
+      return '<tr><td><b>'+esc(item.reference||"—")+'</b></td><td>'+esc(item.color||"—")+'</td><td>'+esc(item.size||"—")+'</td><td>'+Number(item.expected_qty||0).toLocaleString("pt-BR")+'</td><td><input class="triage-count-value" type="number" min="0" step="1" data-item-id="'+item.item_id+'" value="'+value+'" placeholder="Contado" '+(readOnly?"disabled":"required")+'></td></tr>';}).join("");
+    const extras=(t.counts||[]).filter((x)=>Number(x.is_extra)===1).map((x)=>'<tr><td>'+esc(x.reference)+'</td><td>'+esc(x.color)+'</td><td>'+esc(x.size)+'</td><td>'+Number(x.counted_qty||0)+'</td><td>Extra</td></tr>').join("");
+    $("modalBody").innerHTML='<div class="card-title"><div><h2>Contagem da Triagem</h2><div class="card-subtitle">'+esc(t.user_name||"")+' · '+fmtSeconds(t.worked_seconds||0)+' trabalhados</div></div></div><div class="notice">Informe a quantidade real em cada linha. <b>Zero é válido, campo vazio não.</b></div><div class="table-wrap"><table class="compact-table"><thead><tr><th>Referência</th><th>Cor</th><th>Tamanho</th><th>Previsto</th><th>Contado</th></tr></thead><tbody>'+rows+'</tbody></table></div>'+
+      (readOnly?'<h3 class="section-heading">Combinações extras</h3><div class="table-wrap"><table class="compact-table"><tbody>'+extras+'</tbody></table></div>':'<h3 class="section-heading">Combinações extras fora da grade</h3><div class="notice">Essas combinações são auditadas, sem criar itens automaticamente.</div><div class="table-wrap"><table class="compact-table"><thead><tr><th>Referência</th><th>Cor</th><th>Tamanho</th><th>Qtd.</th><th></th></tr></thead><tbody id="triageExtraRows"></tbody></table></div><div class="actions"><button class="secondary" onclick="addTriageExtraRow()">Adicionar combinação extra</button><button class="success" onclick="finishProcessingTriage('+triageId+')">Concluir triagem</button></div>');
+    $("modal").classList.remove("hidden");window.processingTriageCardId=cardId;
+  }catch(error){toast(error.message);}
+}
+function addTriageExtraRow(){const host=$("triageExtraRows");if(!host)return;const id=++processingExtraIndex;host.insertAdjacentHTML("beforeend",'<tr class="triage-extra-row" data-extra-index="'+id+'"><td><input data-extra-reference placeholder="Referência" required></td><td><input data-extra-color placeholder="Cor" required></td><td><input data-extra-size placeholder="Tamanho" required></td><td><input data-extra-count type="number" min="0" step="1" placeholder="Qtd." required></td><td><button class="ghost small-btn" onclick="this.closest(\'tr\').remove()">Remover</button></td></tr>');}
+async function finishProcessingTriage(triageId){
+  try{const counts=[];document.querySelectorAll(".triage-count-value").forEach((el)=>{if(el.value.trim()===""||!Number.isSafeInteger(Number(el.value))||Number(el.value)<0)throw new Error("Preencha todas as quantidades com inteiros iguais ou maiores que zero.");counts.push({item_id:Number(el.dataset.itemId),counted_qty:Number(el.value)});});
+    document.querySelectorAll(".triage-extra-row").forEach((row)=>{const reference=row.querySelector("[data-extra-reference]").value.trim(),color=row.querySelector("[data-extra-color]").value.trim(),size=row.querySelector("[data-extra-size]").value.trim(),value=row.querySelector("[data-extra-count]").value;if(!reference||!color||!size||value===""||!Number.isSafeInteger(Number(value))||Number(value)<0)throw new Error("Preencha referência, cor, tamanho e quantidade de cada combinação extra.");counts.push({item_id:null,is_extra:1,reference:reference,color:color,size:size,counted_qty:Number(value)});});
+    const result=await api("/api/processing/triage/"+triageId+"/finish",{method:"POST",body:JSON.stringify({user_id:currentUser.id,counts:counts})});closeModal();toast("Triagem concluída: "+Number(result.counted_total||0).toLocaleString("pt-BR")+" peças contadas.");await renderProcessingTriage();
+  }catch(error){toast(error.message);}
+}
+async function renderProcessingEntry(){
+  clearInterval(processingFlowTick);setPage("Processamento · Entrada","Confirme o que foi guardado após concluir a Estocagem.");
+  try{const data=await api("/api/processing/entry/queue?user_id="+currentUser.id);
+    const pending=(data.pending||[]).map((e)=>'<tr><td><b>'+esc(refLabel(e))+'</b><small>'+esc(e.purchase_id||("Card "+e.card_id))+'</small></td><td>'+esc(e.supplier||"—")+'</td><td>'+e.items.length+'</td><td>'+fmtDateTime(e.created_at)+'</td><td><button class="primary small-btn" onclick="openEntryConfirmation('+e.id+')">Conferir Entrada</button></td></tr>').join("");
+    const recent=(data.recent||[]).map((e)=>'<tr><td><b>'+esc(refLabel(e))+'</b><small>'+esc(e.purchase_id||("Card "+e.card_id))+'</small></td><td>'+esc(e.concluded_by_name||"—")+'</td><td>'+fmtDateTime(e.concluded_at)+'</td><td><span class="badge">'+esc(processingStatusLabel(e.status))+'</span></td><td>'+(e.has_divergence?'<span class="badge orange">Divergência</span>':"Sem divergência")+'</td><td>'+(e.grade_changed?"Sim":"Não")+'</td></tr>').join("");
+    $("mainContent").innerHTML=processingTabs("processing-entry")+'<section class="panel"><div class="panel-body"><h3 class="section-heading">Entradas pendentes</h3><div class="notice">Sem cronômetro. A comparação usa a quantidade da triagem (real_qty) ou a grade original. Diferenças exigem justificativa por linha.</div><div class="table-wrap"><table class="compact-table"><thead><tr><th>Compra / referência</th><th>Fornecedor</th><th>Linhas</th><th>Criada em</th><th>Ação</th></tr></thead><tbody>'+(pending||emptyRows(5,"Nenhuma Entrada pendente. Ela é criada ao concluir a Estocagem."))+'</tbody></table></div></div></section><section class="panel"><div class="panel-body"><h3 class="section-heading">Histórico de Entradas</h3><div class="table-wrap"><table class="compact-table"><thead><tr><th>Compra / referência</th><th>Concluída por</th><th>Data</th><th>Status</th><th>Diferenças</th><th>Grade alterada</th></tr></thead><tbody>'+(recent||emptyRows(6,"Nenhuma Entrada confirmada."))+'</tbody></table></div></div></section>';
+  }catch(error){$("mainContent").innerHTML=processingTabs("processing-entry")+'<div class="notice error">'+esc(error.message)+'</div>';toast(error.message);}
+}
+async function openEntryConfirmation(entryId){
+  try{const data=await api("/api/processing/entry/queue?user_id="+currentUser.id),entry=(data.pending||[]).find((e)=>Number(e.id)===Number(entryId));if(!entry)throw new Error("Entrada não encontrada ou já confirmada. Atualize a tela.");
+    const rows=entry.items.map((item)=>'<tr><td><b>'+esc(item.reference||"—")+'</b>'+(item.is_extra?'<small>Combinação extra da triagem</small>':"")+'</td><td>'+esc(item.color||"—")+'</td><td>'+esc(item.size||"—")+'</td><td>'+Number(item.triage_qty||0).toLocaleString("pt-BR")+'</td><td><input type="number" min="0" step="1" class="stored-entry-qty" data-row-id="'+item.id+'" data-base="'+Number(item.triage_qty||0)+'" value="'+Number(item.triage_qty||0)+'" required oninput="toggleEntryReason('+item.id+')"></td><td><input class="stored-entry-reason" data-reason-id="'+item.id+'" placeholder="Obrigatória se houver diferença" disabled></td></tr>').join("");
+    $("modalBody").innerHTML='<div class="card-title"><div><h2>Confirmar Entrada da Estocagem</h2><div class="card-subtitle">'+esc(refLabel(entry))+' · '+esc(entry.supplier||"Fornecedor não informado")+'</div></div></div><div class="notice">Confira cada linha. Quantidade divergente precisa de justificativa.</div><div class="table-wrap"><table class="compact-table"><thead><tr><th>Referência</th><th>Cor</th><th>Tamanho</th><th>Qtd. triagem</th><th>Qtd. guardada</th><th>Motivo</th></tr></thead><tbody>'+rows+'</tbody></table></div><div class="field"><label>Observação geral (opcional)</label><textarea id="entryNotes" rows="2" placeholder="Observações da estocagem"></textarea></div><div class="actions"><button class="success" onclick="confirmProcessingEntry('+entry.id+')">Confirmar Entrada</button></div>';
+    $("modal").classList.remove("hidden");
+  }catch(error){toast(error.message);}
+}
+function toggleEntryReason(itemId){const qty=document.querySelector('.stored-entry-qty[data-row-id="'+itemId+'"]'),reason=document.querySelector('.stored-entry-reason[data-reason-id="'+itemId+'"]');if(!qty||!reason)return;const diff=qty.value.trim()!==""&&Number(qty.value)!==Number(qty.dataset.base||0);reason.disabled=!diff;reason.required=diff;if(!diff)reason.value="";}
+async function confirmProcessingEntry(entryId){
+  try{const data=await api("/api/processing/entry/queue?user_id="+currentUser.id),entry=(data.pending||[]).find((e)=>Number(e.id)===Number(entryId));if(!entry)throw new Error("Entrada não encontrada ou já confirmada.");
+    const items=entry.items.map((item)=>{const qty=document.querySelector('.stored-entry-qty[data-row-id="'+item.id+'"]'),reason=document.querySelector('.stored-entry-reason[data-reason-id="'+item.id+'"]');if(!qty||qty.value.trim()===""||!Number.isSafeInteger(Number(qty.value))||Number(qty.value)<0)throw new Error("Preencha todas as quantidades guardadas com inteiros iguais ou maiores que zero.");const diff=Number(qty.value)-Number(item.triage_qty||0);if(diff&&(!reason||!reason.value.trim()))throw new Error("Informe o motivo da divergência em "+item.reference+" / "+item.color+" / "+item.size+".");return {id:Number(item.id),stored_qty:Number(qty.value),reason:reason?.value.trim()||""};});
+    const result=await api("/api/processing/entry/"+entryId+"/confirm",{method:"POST",body:JSON.stringify({user_id:currentUser.id,items:items,notes:$("entryNotes")?.value||""})});closeModal();toast(result.has_divergence?"Entrada confirmada com divergências registradas.":"Entrada confirmada sem divergências.");await renderProcessingEntry();
+  }catch(error){toast(error.message);}
+}
