@@ -3278,32 +3278,30 @@ async function renderQualityCadastroStatusBadge() {
 }
 async function renderProcessingHub() {
   clearInterval(processingFlowTick);
-  setPage("Processamento","Defina o destino dos Cards liberados pela Qualidade. As rotinas de Cadastro ficam reunidas na aba Cadastro.");
+  setPage("Processamento","Os Cards liberados pela Qualidade entram direto na Triagem. Após concluir, escolha se precisam de Etiquetagem.");
   try {
-    const [data,intake,cadastroTasks] = await Promise.all([
+    const [data,cards,cadastroTasks] = await Promise.all([
       api("/api/processing/overview?user_id=" + currentUser.id),
-      api("/api/processing/intake/queue?user_id=" + currentUser.id),
+      api("/api/processing/triage/queue?user_id=" + currentUser.id),
       api("/api/processing/cadastro/queue?user_id=" + currentUser.id)
     ]);
     const c=data.counts||{};
     const costuraTasks=(cadastroTasks||[]).filter(t=>(t.card_status==="AGUARDANDO_DESPACHO_COSTURA"||t.card_status==="EM_COSTURA_CD01")&&t.status!=="CONCLUIDO");
-    const pending=(intake.pending||[]).map(card=>'<tr><td><b>'+esc(card.purchase_id||("Card "+card.id))+'</b><small>'+esc(refLabel(card))+'</small></td><td>'+esc(card.supplier||"—")+'</td><td>'+Number(card.expected_total||0).toLocaleString("pt-BR")+'</td><td><div class="actions processing-destination-actions"><button class="primary small-btn" onclick="setProcessingDestination('+card.id+',\'CADASTRO\')">Cadastro</button><button class="secondary small-btn" onclick="setProcessingDestination('+card.id+',\'TRIAGEM\')">Triagem</button><button class="secondary small-btn" onclick="setProcessingDestination('+card.id+',\'ETIQUETAGEM\')">Etiquetagem</button></div></td></tr>').join("");
-    $("mainContent").innerHTML = processingTabs("processing-hub") +
-      '<div class="hero-kpis storage-kpis">' +
-      heroKpi("Aguardando destino",(intake.pending||[]).length,"Definir próxima etapa","⇢","teal","processing-hub") +
-      heroKpi("Cadastros para Costura",costuraTasks.length,"Acompanhar na aba Cadastro","▤","teal","processing-register") +
-      heroKpi("Triagens em andamento",c.triagens_em_andamento||0,(c.triagens_concluidas||0)+" concluídas","⇄","teal","processing-triage") +
-      heroKpi("Entradas pendentes",c.entradas_pendentes||0,"Conferências de Estocagem","⇩","teal","processing-entry") +
-      '</div><section class="panel"><div class="panel-body"><h3 class="section-heading">Definir destino</h3><p class="muted">Selecione a próxima etapa de cada Card. O Cadastro para Costura é acompanhado separadamente na aba Cadastro.</p>'+
-      '<div class="table-wrap"><table class="compact-table"><thead><tr><th>Card / Referência</th><th>Fornecedor</th><th>Qtd. prevista</th><th>Próxima etapa</th></tr></thead><tbody>'+pending+'</tbody></table></div>'+
-      ((intake.pending||[]).length?'':'<div class="notice">Nenhum Card aguarda definição de destino.</div>')+'</div></section>'+
-      '<div class="dash-row">' +
-      dashboardPanel("▤","Cadastro",'<button class="panel-action" onclick="goTo(\'processing-register\')">Abrir</button>','<p>Cadastros normais e fluxo independente para Costura.</p>') +
-      dashboardPanel("⇄","Triagem",'<button class="panel-action" onclick="goTo(\'processing-triage\')">Abrir</button>','<p>Cards destinados à Triagem.</p>') +
-      dashboardPanel("⇩","Entrada na Estocagem",'<button class="panel-action" onclick="goTo(\'processing-entry\')">Abrir</button>','<p>Conferência do que foi efetivamente guardado.</p>') + '</div>';
+    const pending=cards.filter(card=>!card.triage).map(card=>'<tr><td><b>'+esc(refLabel(card))+'</b><small>'+esc(card.supplier||"")+'</small></td><td><span class="badge">Aguardando triagem</span></td><td><button class="primary small-btn" onclick="startProcessingTriage('+card.id+')">Iniciar triagem</button></td></tr>').join("");
+    $("mainContent").innerHTML=processingTabs("processing-hub")+
+      '<div class="hero-kpis storage-kpis">'+
+      heroKpi("Aguardando triagem",cards.filter(card=>!card.triage).length,"Próxima etapa automática","⇢","teal","processing-triage")+
+      heroKpi("Triagens em andamento",c.triagens_em_andamento||0,(c.triagens_concluidas||0)+" concluídas","⇄","teal","processing-triage")+
+      heroKpi("Cadastro para Costura",costuraTasks.length,"Fluxo independente","▤","teal","processing-register")+
+      heroKpi("Entradas pendentes",c.entradas_pendentes||0,"Conferências de Estocagem","⇩","teal","processing-entry")+
+      '</div><section class="panel processing-queue-panel"><div class="panel-body"><div class="section-heading-row"><div><h3 class="section-heading">Fila de triagem</h3><p class="muted">Os Cards aparecem aqui automaticamente ao chegar ao Processamento.</p></div><button class="secondary small-btn" onclick="goTo(\'processing-triage\')">Ver todas</button></div>'+
+      '<div class="table-wrap"><table class="compact-table"><thead><tr><th>Referência</th><th>Etapa</th><th>Ação</th></tr></thead><tbody>'+(pending||emptyRows(3,"Nenhum Card aguardando início da triagem."))+'</tbody></table></div></div></section>'+
+      '<div class="dash-row">'+
+      dashboardPanel("▤","Cadastro",'<button class="panel-action" onclick="goTo(\'processing-register\')">Abrir</button>','<p>Cadastro normal após a Triagem e fluxo separado para Costura.</p>')+
+      dashboardPanel("⇄","Triagem",'<button class="panel-action" onclick="goTo(\'processing-triage\')">Abrir</button>','<p>Contagem e definição da próxima etapa.</p>')+
+      dashboardPanel("⇩","Estocagem",'<button class="panel-action" onclick="goTo(\'processing-entry\')">Abrir</button>','<p>Conferência do que foi efetivamente guardado.</p>')+'</div>';
   } catch(error) {
-    $("mainContent").innerHTML = processingTabs("processing-hub") + '<div class="notice error">' + esc(error.message) + '</div>';
-    toast(error.message);
+    $("mainContent").innerHTML=processingTabs("processing-hub")+'<div class="notice error">'+esc(error.message)+'</div>'; toast(error.message);
   }
 }
 async function setProcessingDestination(cardId,destination) {
