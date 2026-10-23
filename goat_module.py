@@ -263,14 +263,13 @@ def _iso_now() -> str:
     return datetime.now().replace(microsecond=0).isoformat()
 
 
-@router.post("/create-card")
-def create_manual_card(payload: dict[str, Any]) -> dict[str, Any]:
-    """Cria um Card manual: uma única referência com uma grade dinâmica."""
+def _create_manual_card(payload: dict[str, Any], *, allow_direct_sector: bool) -> dict[str, Any]:
+    """Cria um Card com uma referência e grade; testes podem escolher setor inicial."""
     reference = str(payload.get("reference") or "").strip()
     supplier = str(payload.get("supplier") or "").strip()
     nf = str(payload.get("nf") or "").strip()
     lot = str(payload.get("lot") or "").strip()
-    target_sector = str(payload.get("target_sector") or "RECEBIMENTO").strip().upper()
+    target_sector = (str(payload.get("target_sector") or "RECEBIMENTO").strip().upper() if allow_direct_sector else "RECEBIMENTO")
     sector_config = {
         "RECEBIMENTO": ("RECEBIMENTO", "EM_TRANSITO", "TRANSITO"),
         "QUALIDADE": ("QUALIDADE", "AGUARDANDO_INSPECAO", "QUALIDADE"),
@@ -331,7 +330,7 @@ def create_manual_card(payload: dict[str, Any]) -> dict[str, Any]:
             (
                 purchase_id, now[:10], supplier, "Grade", "GRADE",
                 "Em Trânsito" if target_sector == "RECEBIMENTO" else "Teste",
-                total, source_notes + f" | CARD DE TESTE | Setor inicial: {target_sector}",
+                total, source_notes + (f" | CARD DE TESTE | Setor inicial: {target_sector}" if allow_direct_sector else " | CRIAÇÃO OPERACIONAL | Fluxo normal de Recebimento"),
                 current_sector, initial_status, "NOVA", now, now
             ),
         )
@@ -355,7 +354,7 @@ def create_manual_card(payload: dict[str, Any]) -> dict[str, Any]:
             "INSERT INTO history(card_id,user_id,event_type,description,created_at) VALUES(?,?,?,?,?)",
             (
                 card_id, None, "CRIACAO_MANUAL",
-                f"Card de teste criado diretamente em {target_sector} para a referência {reference}, com {total} peças. Fornecedor {supplier}."
+                (f"Card de teste criado diretamente em {target_sector}" if allow_direct_sector else "Card operacional criado no fluxo normal de Recebimento") + f" para a referência {reference}, com {total} peças. Fornecedor {supplier}."
                 + (f" NF {nf}." if nf else "")
                 + (f" Lote {lot}." if lot else ""),
                 now,
@@ -376,6 +375,18 @@ def create_manual_card(payload: dict[str, Any]) -> dict[str, Any]:
         "grade": [{"color": c, "size": s, "quantity": q} for c, s, q in normalized],
         "expected_total": total,
     }
+
+ 
+@router.post("/create-card")
+def create_manual_card(payload: dict[str, Any]) -> dict[str, Any]:
+    """Criação operacional: sempre inicia no Recebimento, sem atalhos entre setores."""
+    return _create_manual_card(payload, allow_direct_sector=False)
+
+
+@router.post("/create-test-card")
+def create_test_card(payload: dict[str, Any]) -> dict[str, Any]:
+    """Ferramenta de teste separada; permite iniciar diretamente em um setor."""
+    return _create_manual_card(payload, allow_direct_sector=True)
 
 def register_goat_routes(app: FastAPI) -> None:
     init_goat_db()
