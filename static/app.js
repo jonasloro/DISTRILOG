@@ -3317,35 +3317,33 @@ async function setProcessingDestination(cardId,destination) {
 }
 async function renderProcessingRegister() {
   clearInterval(processingFlowTick);
-  setPage("Processamento · Cadastro","Acompanhe o Cadastro normal e as tarefas independentes ligadas à Costura.");
+  setPage("Cadastro","Inicie e acompanhe o Cadastro por referência. O fluxo normal só aparece após a conclusão da Triagem; o Cadastro para Costura continua independente.");
   try {
-    const [tasks,intake] = await Promise.all([
-      api("/api/processing/cadastro/queue?user_id=" + currentUser.id),
-      api("/api/processing/intake/queue?user_id=" + currentUser.id)
-    ]);
-    const normalCadastro=(intake.cadastro||[]).map(card=>'<tr><td><b>'+esc(refLabel(card))+'</b></td><td>'+esc(card.supplier||"—")+'</td><td><span class="badge">Triagem concluída</span></td><td>'+esc(card.current_sector||"—")+'</td></tr>').join("");
-    const rows = tasks.map(t => {
+    const tasks = await api("/api/processing/cadastro/queue?user_id=" + currentUser.id);
+    const costura = tasks.filter(t=>["AGUARDANDO_DESPACHO_COSTURA","EM_COSTURA_CD01"].includes(t.card_status));
+    const normal = tasks.filter(t=>!["AGUARDANDO_DESPACHO_COSTURA","EM_COSTURA_CD01"].includes(t.card_status));
+    const renderTask = t => {
       const manager = ["admin","supervisor"].includes(currentUser.role);
-      const owner = !t.user_id || Number(t.user_id) === Number(currentUser.id) || manager;
-      let actions = "";
-      if (t.status === "PENDENTE") actions = '<button class="primary small-btn" onclick="processingCadastroAction(' + t.id + ',\'start\')">Iniciar</button>';
-      else if (owner && t.status === "EM_ANDAMENTO") actions = '<button class="secondary small-btn" onclick="processingCadastroAction(' + t.id + ',\'pause\')">Pausar</button><button class="success small-btn" onclick="processingCadastroAction(' + t.id + ',\'finish\')">Concluir</button>';
-      else if (owner && t.status === "PAUSADA") actions = '<button class="primary small-btn" onclick="processingCadastroAction(' + t.id + ',\'resume\')">Retomar</button><button class="success small-btn" onclick="processingCadastroAction(' + t.id + ',\'finish\')">Concluir</button>';
-      else if (["EM_ANDAMENTO","PAUSADA"].includes(t.status)) actions = '<small>Em posse de ' + esc(t.user_name || "outra operadora") + '</small>';
-      const timer = ["EM_ANDAMENTO","PAUSADA","CONCLUIDO"].includes(t.status) ? processingTimerHtml(t) : "—";
-      return '<tr><td><b>' + esc(t.reference) + '</b></td><td><button class="ghost small-btn" onclick="openCard(' + t.card_id + ',\'quality\')">Abrir Card</button><small>' + esc(t.supplier || "—") + '</small></td><td>' +
-        Number(t.reference_qty || 0).toLocaleString("pt-BR") + '</td><td><span class="badge">' + esc(processingStatusLabel(t.status)) + '</span><small>Card está em: ' + esc(t.card_sector_label) + '</small></td><td>' +
-        esc(t.user_name || "—") + '</td><td>' + timer + '</td><td><div class="actions">' + actions + '</div></td></tr>';
-    }).join("");
-    $("mainContent").innerHTML = processingTabs("processing-register") +
-      '<section class="panel"><div class="panel-body"><h3 class="section-heading">Cadastro normal</h3><p class="muted">Cards destinados ao Cadastro pelo responsável do Processamento.</p>' +
-      '<div class="table-wrap"><table class="compact-table"><thead><tr><th>Referência</th><th>Fornecedor</th><th>Etapa</th><th>Setor atual</th></tr></thead><tbody>' +
-      (normalCadastro || emptyRows(4,"Nenhum Card destinado ao Cadastro normal.")) + '</tbody></table></div></div></section>' +
-      '<section class="panel"><div class="panel-body"><h3 class="section-heading">Cadastro para Costura</h3><p class="muted">Fluxo independente iniciado pela opção “Vai para a Costura?” na Qualidade. Não altera o setor do Card nem cria um segundo Card.</p>' +
-      '<div class="table-wrap"><table class="compact-table"><thead><tr><th>Referência</th><th>Compra / Card</th><th>Peças</th><th>Status / setor real</th><th>Responsável</th><th>Tempo</th><th>Ações</th></tr></thead><tbody>' +
-      (rows || emptyRows(7,"Nenhuma tarefa de Cadastro para Costura pendente.")) + '</tbody></table></div></div></section>';
+      const owner = !t.user_id || Number(t.user_id)===Number(currentUser.id) || manager;
+      let actions="";
+      if(t.status==="PENDENTE") actions='<button class="primary small-btn" onclick="processingCadastroAction('+t.id+',\'start\')">Iniciar cadastro</button>';
+      else if(owner&&t.status==="EM_ANDAMENTO") actions='<button class="secondary small-btn" onclick="processingCadastroAction('+t.id+',\'pause\')">Pausar</button><button class="success small-btn" onclick="processingCadastroAction('+t.id+',\'finish\')">Concluir</button>';
+      else if(owner&&t.status==="PAUSADA") actions='<button class="primary small-btn" onclick="processingCadastroAction('+t.id+',\'resume\')">Retomar</button><button class="success small-btn" onclick="processingCadastroAction('+t.id+',\'finish\')">Concluir</button>';
+      else if(["EM_ANDAMENTO","PAUSADA"].includes(t.status)) actions='<small>Em andamento com '+esc(t.user_name||"outra pessoa")+'</small>';
+      const status=processingStatusLabel(t.status);
+      return '<article class="processing-cadastro-card"><div class="processing-cadastro-main"><div class="processing-cadastro-reference">'+esc(t.reference||"Referência não informada")+'</div><div class="processing-cadastro-meta">'+esc(t.supplier||"Fornecedor não informado")+' · '+Number(t.reference_qty||0).toLocaleString("pt-BR")+' peças</div></div><div class="processing-cadastro-state"><span class="badge">'+esc(status)+'</span><small>'+esc(t.card_sector_label||"")+'</small>'+((t.user_name&&t.status!=="PENDENTE")?'<small>Responsável: '+esc(t.user_name)+'</small>':'')+'</div><div class="processing-cadastro-timer">'+(["EM_ANDAMENTO","PAUSADA","CONCLUIDO"].includes(t.status)?processingTimerHtml(t):"")+'</div><div class="processing-cadastro-actions">'+actions+'</div></article>';
+    };
+    $("mainContent").innerHTML=processingTabs("processing-register")+
+      '<section class="panel processing-cadastro-panel"><div class="panel-body"><div class="processing-cadastro-heading"><div><h3 class="section-heading">Cadastro normal</h3><p class="muted">Cada referência fica disponível aqui depois que a Triagem termina.</p></div><span class="processing-cadastro-count">'+normal.length+'</span></div>'+
+      (normal.length?'<div class="processing-cadastro-list">'+normal.map(renderTask).join("")+'</div>':'<div class="processing-cadastro-empty"><strong>Nenhum cadastro pendente</strong><span>As referências aparecerão aqui automaticamente após a Triagem.</span></div>')+
+      '</div></section>'+
+      '<section class="panel processing-cadastro-panel"><div class="panel-body"><div class="processing-cadastro-heading"><div><h3 class="section-heading">Cadastro para Costura</h3><p class="muted">Fluxo separado, iniciado pela opção “Vai para a Costura?” na Qualidade.</p></div><span class="processing-cadastro-count">'+costura.length+'</span></div>'+
+      (costura.length?'<div class="processing-cadastro-list">'+costura.map(renderTask).join("")+'</div>':'<div class="processing-cadastro-empty"><strong>Nenhuma tarefa de Costura pendente</strong><span>Quando a Qualidade marcar “Vai para a Costura?”, a tarefa aparecerá aqui.</span></div>')+
+      '</div></section>';
     startProcessingFlowTicker();
-  } catch(error) { $("mainContent").innerHTML = processingTabs("processing-register") + '<div class="notice error">' + esc(error.message) + '</div>'; toast(error.message); }
+  } catch(error) {
+    $("mainContent").innerHTML=processingTabs("processing-register")+'<div class="notice error">'+esc(error.message)+'</div>';toast(error.message);
+  }
 }
 async function processingCadastroAction(id,action) {
   try {
