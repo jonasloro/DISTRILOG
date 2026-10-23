@@ -3278,36 +3278,28 @@ async function renderQualityCadastroStatusBadge() {
 }
 async function renderProcessingHub() {
   clearInterval(processingFlowTick);
-  setPage("Processamento","Defina o destino de cada Card recebido da Qualidade. O Cadastro para Costura permanece em fluxo separado.");
+  setPage("Processamento","Defina o destino dos Cards liberados pela Qualidade. As rotinas de Cadastro ficam reunidas na aba Cadastro.");
   try {
     const [data,intake,cadastroTasks] = await Promise.all([
       api("/api/processing/overview?user_id=" + currentUser.id),
       api("/api/processing/intake/queue?user_id=" + currentUser.id),
       api("/api/processing/cadastro/queue?user_id=" + currentUser.id)
     ]);
-    const c=data.counts||{},a=data.averages||{};
-    const pending=(intake.pending||[]).map(card=>'<tr><td><b>'+esc(card.purchase_id||("Card "+card.id))+'</b><small>'+esc(refLabel(card))+'</small></td><td>'+esc(card.supplier||"—")+'</td><td>'+Number(card.expected_total||0).toLocaleString("pt-BR")+'</td><td><div class="actions processing-destination-actions"><button class="primary small-btn" onclick="setProcessingDestination('+card.id+',\'CADASTRO\')">Cadastro</button><button class="secondary small-btn" onclick="setProcessingDestination('+card.id+',\'TRIAGEM\')">Triagem</button><button class="secondary small-btn" onclick="setProcessingDestination('+card.id+',\'ETIQUETAGEM\')">Etiquetagem</button></div></td></tr>').join("");
-    const normalCadastro=(intake.cadastro||[]).map(card=>'<tr><td><b>'+esc(card.purchase_id||("Card "+card.id))+'</b><small>'+esc(refLabel(card))+'</small></td><td>'+esc(card.supplier||"—")+'</td><td><span class="badge">Cadastro selecionado</span></td><td>'+esc(card.assigned_by_name||"—")+'</td></tr>').join("");
+    const c=data.counts||{};
     const costuraTasks=(cadastroTasks||[]).filter(t=>(t.card_status==="AGUARDANDO_DESPACHO_COSTURA"||t.card_status==="EM_COSTURA_CD01")&&t.status!=="CONCLUIDO");
-    const costuraRows=costuraTasks.map(t=>'<tr><td><b>'+esc(t.purchase_id||("Card "+t.card_id))+'</b><small>'+esc(t.reference||"—")+'</small></td><td>'+esc(t.supplier||"—")+'</td><td>'+esc(processingStatusLabel(t.status))+'</td><td><button class="secondary small-btn" onclick="goTo(\'processing-register\')">Abrir Cadastro para Costura</button></td></tr>').join("");
+    const pending=(intake.pending||[]).map(card=>'<tr><td><b>'+esc(card.purchase_id||("Card "+card.id))+'</b><small>'+esc(refLabel(card))+'</small></td><td>'+esc(card.supplier||"—")+'</td><td>'+Number(card.expected_total||0).toLocaleString("pt-BR")+'</td><td><div class="actions processing-destination-actions"><button class="primary small-btn" onclick="setProcessingDestination('+card.id+',\'CADASTRO\')">Cadastro</button><button class="secondary small-btn" onclick="setProcessingDestination('+card.id+',\'TRIAGEM\')">Triagem</button><button class="secondary small-btn" onclick="setProcessingDestination('+card.id+',\'ETIQUETAGEM\')">Etiquetagem</button></div></td></tr>').join("");
     $("mainContent").innerHTML = processingTabs("processing-hub") +
       '<div class="hero-kpis storage-kpis">' +
-      heroKpi("Cards aguardando destino",(intake.pending||[]).length,"Decisão do responsável","⇢","teal","processing-hub") +
-      heroKpi("Cadastros para Costura",costuraTasks.length,"Fluxo independente","▤","teal","processing-register") +
+      heroKpi("Aguardando destino",(intake.pending||[]).length,"Definir próxima etapa","⇢","teal","processing-hub") +
+      heroKpi("Cadastros para Costura",costuraTasks.length,"Acompanhar na aba Cadastro","▤","teal","processing-register") +
       heroKpi("Triagens em andamento",c.triagens_em_andamento||0,(c.triagens_concluidas||0)+" concluídas","⇄","teal","processing-triage") +
       heroKpi("Entradas pendentes",c.entradas_pendentes||0,"Conferências de Estocagem","⇩","teal","processing-entry") +
-      '</div><section class="panel"><div class="panel-body"><h3 class="section-heading">Cards recebidos da Qualidade — definir destino</h3><p class="muted">Escolha uma única destinação para cada Card. Essa decisão não inicia nem cria o Cadastro específico para Costura.</p>'+
-      '<div class="table-wrap"><table class="compact-table"><thead><tr><th>Card / Referência</th><th>Fornecedor</th><th>Qtd. prevista</th><th>Destinação</th></tr></thead><tbody>'+pending+'</tbody></table></div>'+
-      ((intake.pending||[]).length?'':'<div class="notice">Não há Cards aguardando destinação.</div>')+'</div></section>'+
-      '<section class="panel"><div class="panel-body"><h3 class="section-heading">Cadastro normal — destino já definido</h3><p class="muted">Esta fila é separada do Cadastro para Costura. A etapa operacional detalhada do Cadastro normal será tratada separadamente.</p>'+
-      '<div class="table-wrap"><table class="compact-table"><thead><tr><th>Card / Referência</th><th>Fornecedor</th><th>Estado</th><th>Definido por</th></tr></thead><tbody>'+normalCadastro+'</tbody></table></div>'+
-      ((intake.cadastro||[]).length?'':'<div class="notice">Nenhum Card destinado ao Cadastro normal.</div>')+'</div></section>'+
-      '<section class="panel"><div class="panel-body"><h3 class="section-heading">Cadastro para Costura — fluxo independente</h3><p class="muted">Quando a Qualidade marca “Vai para a Costura?”, as tarefas específicas aparecem aqui sem misturar a destinação normal do Processamento.</p>'+
-      '<div class="table-wrap"><table class="compact-table"><thead><tr><th>Card / Referência</th><th>Fornecedor</th><th>Cadastro</th><th>Ação</th></tr></thead><tbody>'+costuraRows+'</tbody></table></div>'+
-      (costuraTasks.length?'':'<div class="notice">Não há tarefas de Cadastro para Costura pendentes nesta fila.</div>')+'</div></section>'+
+      '</div><section class="panel"><div class="panel-body"><h3 class="section-heading">Definir destino</h3><p class="muted">Selecione a próxima etapa de cada Card. O Cadastro para Costura é acompanhado separadamente na aba Cadastro.</p>'+
+      '<div class="table-wrap"><table class="compact-table"><thead><tr><th>Card / Referência</th><th>Fornecedor</th><th>Qtd. prevista</th><th>Próxima etapa</th></tr></thead><tbody>'+pending+'</tbody></table></div>'+
+      ((intake.pending||[]).length?'':'<div class="notice">Nenhum Card aguarda definição de destino.</div>')+'</div></section>'+
       '<div class="dash-row">' +
-      dashboardPanel("▤","Cadastro para Costura",'<button class="panel-action" onclick="goTo(\'processing-register\')">Abrir</button>','<p>Fluxo independente vinculado à decisão da Qualidade.</p>') +
-      dashboardPanel("⇄","Triagem",'<button class="panel-action" onclick="goTo(\'processing-triage\')">Abrir</button>','<p>Somente Cards destinados à Triagem aparecem nesta fila.</p>') +
+      dashboardPanel("▤","Cadastro",'<button class="panel-action" onclick="goTo(\'processing-register\')">Abrir</button>','<p>Cadastros normais e fluxo independente para Costura.</p>') +
+      dashboardPanel("⇄","Triagem",'<button class="panel-action" onclick="goTo(\'processing-triage\')">Abrir</button>','<p>Cards destinados à Triagem.</p>') +
       dashboardPanel("⇩","Entrada na Estocagem",'<button class="panel-action" onclick="goTo(\'processing-entry\')">Abrir</button>','<p>Conferência do que foi efetivamente guardado.</p>') + '</div>';
   } catch(error) {
     $("mainContent").innerHTML = processingTabs("processing-hub") + '<div class="notice error">' + esc(error.message) + '</div>';
@@ -3326,9 +3318,14 @@ async function setProcessingDestination(cardId,destination) {
   } catch(error) { toast(error.message); }
 }
 async function renderProcessingRegister() {
-  clearInterval(processingFlowTick); setPage("Processamento · Cadastro","Uma tarefa por referência; o Card permanece na etapa logística real.");
+  clearInterval(processingFlowTick);
+  setPage("Processamento · Cadastro","Acompanhe o Cadastro normal e as tarefas independentes ligadas à Costura.");
   try {
-    const tasks = await api("/api/processing/cadastro/queue?user_id=" + currentUser.id);
+    const [tasks,intake] = await Promise.all([
+      api("/api/processing/cadastro/queue?user_id=" + currentUser.id),
+      api("/api/processing/intake/queue?user_id=" + currentUser.id)
+    ]);
+    const normalCadastro=(intake.cadastro||[]).map(card=>'<tr><td><b>'+esc(card.purchase_id||("Card "+card.id))+'</b><small>'+esc(refLabel(card))+'</small></td><td>'+esc(card.supplier||"—")+'</td><td><span class="badge">Aguardando Cadastro</span></td><td>'+esc(card.assigned_by_name||"—")+'</td></tr>').join("");
     const rows = tasks.map(t => {
       const manager = ["admin","supervisor"].includes(currentUser.role);
       const owner = !t.user_id || Number(t.user_id) === Number(currentUser.id) || manager;
@@ -3342,9 +3339,13 @@ async function renderProcessingRegister() {
         Number(t.reference_qty || 0).toLocaleString("pt-BR") + '</td><td><span class="badge">' + esc(processingStatusLabel(t.status)) + '</span><small>Card está em: ' + esc(t.card_sector_label) + '</small></td><td>' +
         esc(t.user_name || "—") + '</td><td>' + timer + '</td><td><div class="actions">' + actions + '</div></td></tr>';
     }).join("");
-    $("mainContent").innerHTML = processingTabs("processing-register") + '<section class="panel"><div class="panel-body"><h3 class="section-heading">Fila de Cadastro para Costura</h3>' +
-      '<div class="notice">Esta fila é uma projeção. Ela <b>não altera o setor do Card nem cria um segundo Card</b>. O despacho não é bloqueado.</div><div class="table-wrap"><table class="compact-table"><thead><tr><th>Referência</th><th>Compra / Card</th><th>Peças</th><th>Status / setor real</th><th>Responsável</th><th>Tempo</th><th>Ações</th></tr></thead><tbody>' +
-      (rows || emptyRows(7,"Nenhum Cadastro gerado para a Costura.")) + '</tbody></table></div></div></section>';
+    $("mainContent").innerHTML = processingTabs("processing-register") +
+      '<section class="panel"><div class="panel-body"><h3 class="section-heading">Cadastro normal</h3><p class="muted">Cards destinados ao Cadastro pelo responsável do Processamento.</p>' +
+      '<div class="table-wrap"><table class="compact-table"><thead><tr><th>Card / Referência</th><th>Fornecedor</th><th>Estado</th><th>Definido por</th></tr></thead><tbody>' +
+      (normalCadastro || emptyRows(4,"Nenhum Card destinado ao Cadastro normal.")) + '</tbody></table></div></div></section>' +
+      '<section class="panel"><div class="panel-body"><h3 class="section-heading">Cadastro para Costura</h3><p class="muted">Fluxo independente iniciado pela opção “Vai para a Costura?” na Qualidade. Não altera o setor do Card nem cria um segundo Card.</p>' +
+      '<div class="table-wrap"><table class="compact-table"><thead><tr><th>Referência</th><th>Compra / Card</th><th>Peças</th><th>Status / setor real</th><th>Responsável</th><th>Tempo</th><th>Ações</th></tr></thead><tbody>' +
+      (rows || emptyRows(7,"Nenhuma tarefa de Cadastro para Costura pendente.")) + '</tbody></table></div></div></section>';
     startProcessingFlowTicker();
   } catch(error) { $("mainContent").innerHTML = processingTabs("processing-register") + '<div class="notice error">' + esc(error.message) + '</div>'; toast(error.message); }
 }
