@@ -139,6 +139,11 @@ def test_cadastro_triage_and_entry_round_trip(monkeypatch):
         assert [(int(x["expected_qty"]),int(x["real_qty"])) for x in actual] == [(10,8),(20,19)]
         assert int(con.execute("SELECT COUNT(*) n FROM processing_triage_counts WHERE triage_id=? AND is_extra=1",(triage_id,)).fetchone()["n"]) == 1
 
+        entry_id = flow.ensure_storage_entry(con, triage_card, downstream_id)
+        con.commit()
+        assert flow.ensure_storage_entry(con, triage_card, downstream_id) == entry_id
+        con.commit()
+
         queued = client.get(f"/api/processing/entry/queue?user_id={user_id}")
         assert queued.status_code == 200, queued.text
         entry = next(row for row in queued.json()["pending"] if int(row["card_id"]) == triage_card)
