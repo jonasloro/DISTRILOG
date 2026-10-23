@@ -26,6 +26,7 @@ from positions_module import init_positions_db, register_positions_routes, total
 from collab_module import init_collab_db, register_collab_routes
 from unified_module import init_unified_db, register_unified_routes
 from cleaning_module import init_cleaning_db, register_cleaning_routes
+from processing_flow_module import init_processing_flow_db, backfill_cadastro_tasks, register_processing_flow_routes
 import db
 from sample_math import proportional_allocation
 from concurrent.futures import ThreadPoolExecutor
@@ -1244,6 +1245,7 @@ def startup() -> None:
     init_collab_db()
     init_unified_db()
     init_cleaning_db()
+    init_processing_flow_db()
 
     # Traz uma única vez os cards e dados antigos (tabelas outlog_*) para o schema distrilog.
     try:
@@ -1251,6 +1253,10 @@ def startup() -> None:
         import_legacy_once()
     except Exception as e:
         print(f"[aviso] importação dos dados antigos não concluída: {e}")
+
+    tarefas_cadastro_backfill = backfill_cadastro_tasks()
+    if tarefas_cadastro_backfill:
+        print(f"[Processamento] Backfill verificou {tarefas_cadastro_backfill} Card(s) que passaram pela Costura.")
 
     # Corrige Cards que já concluíram o retorno, mas ficaram presos na fila antiga.
     # Executa após a criação das tabelas da Qualidade e sincroniza primeiro no Supabase.
@@ -2513,6 +2519,7 @@ async def simulate_costura_return(card_id: int, request: Request):
 
 register_quality_routes(app)
 register_processing_routes(app)
+register_processing_flow_routes(app)
 register_downstream_routes(app)
 register_production_routes(app)
 register_goat_routes(app)

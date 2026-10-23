@@ -351,7 +351,7 @@ def processing_card_data(con: "db.Connection", card_id: int) -> Optional[dict[st
     data["volume_allocation_mode"] = "VOLUMES" if volume_only else "REFERENCIA"
     data["global_allocated_volume_total"] = global_volume_total
     item_rows = con.execute(
-        """SELECT pi.*,i.product,i.reference,i.sku,i.color,i.size,i.expected_qty
+        """SELECT pi.*,i.product,i.reference,i.sku,i.color,i.size,COALESCE(i.real_qty,i.expected_qty) AS expected_qty,i.expected_qty AS original_expected_qty,i.real_qty
            FROM processing_item_quantities pi JOIN items i ON i.id=pi.item_id
            WHERE pi.processing_id=? ORDER BY i.product,i.color,i.size,i.id""",
         (record["id"],),
