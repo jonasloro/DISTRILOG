@@ -290,13 +290,20 @@ def _create_manual_card(payload: dict[str, Any], *, allow_direct_sector: bool) -
     if not isinstance(grade, list) or not grade:
         raise HTTPException(400, "Informe a grade da referência.")
 
-    normalized = []
+    # Consolidar linhas repetidas antes de persistir: a chave de origem identifica
+    # uma combinação referência/cor/tamanho e não pode ser inserida duas vezes no mesmo Card.
+    quantities_by_variant: dict[tuple[str, str], int] = {}
     total = 0
     for row in grade:
+        if not isinstance(row, dict):
+            raise HTTPException(400, "Cada linha da grade precisa conter cor, tamanho e quantidade.")
         color = str(row.get("color") or "").strip()
         size = str(row.get("size") or "").strip()
         try:
-            quantity = int(row.get("quantity") or 0)
+            raw_quantity = row.get("quantity")
+            quantity = int(raw_quantity or 0)
+            if str(raw_quantity or "0").strip() not in (str(quantity), f"{quantity}.0"):
+                raise ValueError
         except (TypeError, ValueError):
             raise HTTPException(400, "As quantidades da grade precisam ser números inteiros.")
         if not color or not size:
@@ -304,9 +311,11 @@ def _create_manual_card(payload: dict[str, Any], *, allow_direct_sector: bool) -
         if quantity < 0:
             raise HTTPException(400, "As quantidades da grade não podem ser negativas.")
         if quantity:
-            normalized.append((color, size, quantity))
+            variant = (color, size)
+            quantities_by_variant[variant] = quantities_by_variant.get(variant, 0) + quantity
             total += quantity
 
+    normalized = [(color, size, quantity) for (color, size), quantity in quantities_by_variant.items()]
     if total <= 0:
         raise HTTPException(400, "A grade precisa ter pelo menos uma quantidade maior que zero.")
 
