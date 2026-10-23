@@ -449,6 +449,7 @@ def triage_queue(user_id: int):
           WHERE c.current_sector='PROCESSAMENTO'
             AND (
               (r.destination='TRIAGEM' AND r.status IN ('AGUARDANDO_TRIAGEM','EM_TRIAGEM'))
+              OR r.status='AGUARDANDO_DESTINO'
               OR r.id IS NULL
             )
           ORDER BY c.updated_at DESC,c.id DESC
@@ -507,6 +508,17 @@ async def triage_start(card_id: int,request: Request):
                 card_id,destination,status,assigned_by_user_id,assigned_by_name,assigned_at,created_at,updated_at
               ) VALUES(?,'TRIAGEM','AGUARDANDO_TRIAGEM',?,?,?,?,?)
             """,(card_id,int(actor["id"]),actor["name"],stamp,stamp,stamp))
+            route = con.execute("SELECT * FROM processing_intake_routes WHERE card_id=?",(card_id,)).fetchone()
+        elif route["status"] == "AGUARDANDO_DESTINO":
+            stamp = _iso()
+            changed = con.execute("""
+              UPDATE processing_intake_routes
+              SET destination='TRIAGEM',status='AGUARDANDO_TRIAGEM',
+                  assigned_by_user_id=?,assigned_by_name=?,assigned_at=?,updated_at=?
+              WHERE card_id=? AND status='AGUARDANDO_DESTINO'
+            """,(int(actor["id"]),actor["name"],stamp,stamp,card_id))
+            if changed.rowcount != 1:
+                raise HTTPException(409,"Outro operador alterou a fila. Atualize e tente novamente.")
             route = con.execute("SELECT * FROM processing_intake_routes WHERE card_id=?",(card_id,)).fetchone()
         if not route or route["destination"]!="TRIAGEM" or route["status"]!="AGUARDANDO_TRIAGEM":
             raise HTTPException(409,"Este Card não está aguardando início da Triagem.")
