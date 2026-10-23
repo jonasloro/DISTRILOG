@@ -6,8 +6,24 @@ on:
       - validate/processing-flow
 
 jobs:
-  syntax-and-sql-adapter:
+  syntax-and-integration:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: distrilog_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d distrilog_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      SUPABASE_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/distrilog_test
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -16,13 +32,15 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-      - name: Install runtime dependencies
-        run: python -m pip install --disable-pip-version-check -r requirements.txt
+      - name: Install runtime and test dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements.txt pytest
       - name: Compile Python modules
         run: python -m compileall -q app.py db.py cleaning_module.py quality_module.py processing_module.py processing_flow_module.py downstream_module.py positions_module.py
       - name: Validate frontend syntax
         run: node --check static/app.js
-      - name: Verify SQL translation used by new flow
+      - name: Run PostgreSQL integration test
+        run: python -m pytest -q tests/test_processing_flow_integration.py
+      - name: Verify SQL adapter smoke checks
         run: |
           python - <<'PY'
           import db
@@ -35,5 +53,5 @@ jobs:
           for source in statements:
               translated, _ = db.translate(source)
               assert "distrilog." in translated, translated
-          print("Python compilation and SQL adapter smoke checks passed.")
+          print("SQL adapter smoke checks passed.")
           PY
