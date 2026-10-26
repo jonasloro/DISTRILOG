@@ -705,7 +705,7 @@ async def entry_confirm(entry_id: int, request: Request):
         if not current:
             raise HTTPException(409, "Esta Entrada não contém itens para conferir.")
         if updates:
-            values_sql = ",".join("(?,?,?,?)" for _ in updates)
+            values_sql = ",".join("(?::bigint,?::integer,?::integer,?::text)" for _ in updates)
             update_params = [value for row in updates for value in row]
             update_params.append(entry_id)
             cur = con.execute(

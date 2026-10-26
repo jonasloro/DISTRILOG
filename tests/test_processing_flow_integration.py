@@ -32,7 +32,7 @@ def setup_db():
         CREATE TABLE items (
           id INTEGER PRIMARY KEY AUTOINCREMENT, card_id INTEGER NOT NULL, reference TEXT,
           product TEXT, expected_qty INTEGER NOT NULL DEFAULT 0, real_qty INTEGER,
-          color TEXT, size TEXT, source_stage TEXT,
+          color TEXT, size TEXT, sku TEXT, source_stage TEXT,
           FOREIGN KEY(card_id) REFERENCES cards(id) ON DELETE CASCADE
         );
         CREATE TABLE history (
