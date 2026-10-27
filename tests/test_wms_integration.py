@@ -176,3 +176,38 @@ def test_orphan_reconciliation_requires_physical_confirmation(session):
     with psycopg.connect(session) as conn:
         assert conn.execute("SELECT active FROM distrilog.card_allocations WHERE id=%s",(orphan,)).fetchone()[0] is False
         assert conn.execute("SELECT COUNT(*) FROM distrilog.wms_reconciliation_actions WHERE allocation_id=%s",(orphan,)).fetchone()[0] == 1
+
+
+def test_concurrent_cards_cannot_overfill_four_color_destination(session):
+    """Real connections race for the same EC floor slots; max four colors win."""
+    from concurrent.futures import ThreadPoolExecutor
+    from wms_inventory_module import TransferRequest, transfer, inventory
+    with psycopg.connect(session) as conn:
+        conn.execute("INSERT INTO distrilog.cards(id,purchase_id,current_sector,status) VALUES(102,'TESTE-102','ESTOCAGEM','AGUARDANDO')")
+        colors=["Preto","Branco","Rosa","Azul","Verde"]
+        conn.cursor().executemany(
+            "INSERT INTO distrilog.items(id,card_id,product,reference,color,size) VALUES(%s,%s,'Produto','REF',%s,'P')",
+            [(idx,101 if idx<5 else 102,color) for idx,color in enumerate(colors,1)]
+        )
+        conn.commit()
+    for iid in [1,2,3]:
+        create_allocation(session,card=101,sector="EC",address="1EC02",qty=4,item_id=iid,boxes=1)
+    source_a=create_allocation(session,card=101,sector="EC",address="1EC01",qty=3,item_id=4,boxes=1)
+    source_b=create_allocation(session,card=102,sector="EC",address="1EC01",qty=5,item_id=5,boxes=1)
+    def send(alloc):
+        try:
+            return transfer(TransferRequest(
+                source_allocation_id=alloc,destination_address="1EC02",
+                reason="Redistribuição simultânea entre casulos"
+            ),actor(user_id=12,role="estocagem"))
+        except HTTPException as exc:
+            return exc.status_code
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes=list(pool.map(send,[source_a,source_b]))
+    assert sum(isinstance(outcome,dict) and outcome.get("ok") for outcome in outcomes)==1
+    assert outcomes.count(409)==1
+    target=inventory("1EC02")
+    assert len({row["color"] for row in target["items"]})==4
+    assert target["occupied"]==4
+    with psycopg.connect(session) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM distrilog.position_movements").fetchone()[0]==1
