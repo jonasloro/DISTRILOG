@@ -5,7 +5,7 @@ from typing import Any, Optional
 import os
 from pathlib import Path
 
-from fastapi import APIRouter, FastAPI, HTTPException
+from fastapi import APIRouter, FastAPI, HTTPException, Request
 
 from supabase_module import pg_connect
 
@@ -248,10 +248,21 @@ def _ten_percent_volume_target(volumes: Any) -> int:
 
 
 @router.post("/cards/{card_id}/allocate")
-def allocate(card_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+def allocate(card_id: int, payload: dict[str, Any], request: Request) -> dict[str, Any]:
     setor = str(payload.get("setor") or "").upper()
-    responsavel = payload.get("responsavel")
+    role = getattr(request.state, "auth_role", None)
+    authorized = {
+        "RM": {"recebimento", "qualidade", "processamento", "admin", "supervisor"},
+        "QA": {"recebimento", "qualidade", "processamento", "admin", "supervisor"},
+        "PR": {"recebimento", "qualidade", "processamento", "admin", "supervisor"},
+        "ET": {"processamento", "etiquetagem", "admin", "supervisor"},
+        "EC": {"etiquetagem", "estocagem", "admin", "supervisor"},
+    }
+    if role not in authorized.get(setor, set()):
+        raise HTTPException(403, "Seu setor não possui permissão para endereçar esta área.")
     allocations = payload.get("allocations") or []
+    if not isinstance(allocations, list) or not 1 <= len(allocations) <= 100 or any(not isinstance(a, dict) for a in allocations):
+        raise HTTPException(400, "Informe entre 1 e 100 alocações válidas.")
     if setor not in SECTOR_ZONES:
         raise HTTPException(400, "Setor inválido.")
     if not allocations:
@@ -261,6 +272,11 @@ def allocate(card_id: int, payload: dict[str, Any]) -> dict[str, Any]:
         with pg_connect() as con:
             with con.cursor() as cur:
                 card = _card_or_404(cur, card_id, lock=True)
+                cur.execute("SELECT name FROM distrilog.users WHERE id=%s", (request.state.auth_user_id,))
+                actor = cur.fetchone()
+                if not actor:
+                    raise HTTPException(401, "Operador não encontrado.")
+                responsavel = str(actor["name"])
                 current_sector = str(card.get("current_sector") or "").upper()
                 card_status = str(card.get("status") or "").upper()
                 if current_sector == "FINALIZADO" or card_status == "FINALIZADO":
@@ -392,6 +408,13 @@ def allocate(card_id: int, payload: dict[str, Any]) -> dict[str, Any]:
                                 f"Primeiro, enderece na Qualidade os {sample_target} volume(s) da amostra de 10%. "
                                 f"Já foram alocados {sample_allocated}.",
                             )
+                # Serializa a ocupação física mesmo quando cards diferentes
+                # tentam usar simultaneamente o último espaço de cor no casulo.
+                requested_addresses = sorted({str(a.get("address") or "") for a in allocations})
+                cur.execute(
+                    "SELECT address FROM distrilog.sector_positions WHERE setor=%s AND address = ANY(%s) ORDER BY address FOR UPDATE",
+                    (setor, requested_addresses),
+                )
                 valid = {p["address"] for p in list_positions(setor)}
                 now = iso_now()
                 is_global = setor in GLOBAL_ALLOCATION_SECTORS
