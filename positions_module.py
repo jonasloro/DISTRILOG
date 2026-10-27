@@ -254,6 +254,11 @@ def allocate(card_id: int, payload: dict[str, Any]) -> dict[str, Any]:
             with con.cursor() as cur:
                 card = _card_or_404(cur, card_id, lock=True)
                 current_sector = str(card.get("current_sector") or "").upper()
+                card_status = str(card.get("status") or "").upper()
+                if current_sector == "FINALIZADO" or card_status == "FINALIZADO":
+                    raise HTTPException(409,"Card finalizado não aceita novas alocações.")
+                if current_sector == "PROCESSAMENTO" and card_status == "AGUARDANDO_ENTRADA":
+                    raise HTTPException(409,"A mercadoria já foi estocada em EC e aguarda apenas a Entrada do Processamento.")
                 if current_sector == "PROCESSAMENTO" and setor != "ET":
                     raise HTTPException(409,"Na saída da Triagem, a mercadoria só pode ser endereçada em ET.")
                 if current_sector in {"ETIQUETAGEM","ESTOCAGEM"} and setor != "EC":
