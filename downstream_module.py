@@ -83,6 +83,12 @@ def ensure_operation(con: "db.Connection", card_id: int, sector: str) -> db.Row:
             raise HTTPException(400, f"Não há itens disponíveis em {sector.title()}.")
     elif card["current_sector"] != sector:
         raise HTTPException(400, f"O Card não está em {sector.title()}.")
+    if sector == "ETIQUETAGEM" and not source_subset:
+        cadastro_total = int(con.execute("SELECT COUNT(*) n FROM processing_cadastro_tasks WHERE card_id=?",(card_id,)).fetchone()["n"] or 0)
+        pending_labels = int(con.execute("""SELECT COUNT(*) n FROM processing_cadastro_tasks
+          WHERE card_id=? AND (status<>'CONCLUIDO' OR COALESCE(labels_ready,0)=0)""",(card_id,)).fetchone()["n"] or 0)
+        if cadastro_total <= 0 or pending_labels > 0:
+            raise HTTPException(409, "Aguardando etiquetas. O responsável pelo Cadastro precisa informar que as etiquetas estão disponíveis.")
     con.execute(
         "INSERT OR IGNORE INTO downstream_operations(card_id,sector,purchase_mode,source_subset,created_at) VALUES(?,?,?,?,?)",
         (card_id, sector, card["purchase_mode"], 1 if source_subset else 0, now()),
