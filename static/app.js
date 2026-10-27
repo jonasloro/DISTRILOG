@@ -3350,7 +3350,8 @@ async function renderProcessingHub() {
       api("/api/processing/triage/queue?user_id=" + currentUser.id),
       api("/api/processing/cadastro/queue?user_id=" + currentUser.id)
     ]);
-    const c=data.counts||{};
+    const c=data.counts||{},divergences=data.divergences||[];
+    const divergenceRows=divergences.map(d=>'<tr><td><b>'+esc(d.purchase_id||("Card "+d.card_id))+'</b><small>'+esc(d.supplier||"")+'</small></td><td>'+esc(d.sector||"—")+'</td><td><span class="badge orange">'+Number(d.lines||0)+' linha(s)</span></td><td><button class="warning small-btn" onclick="openCard('+Number(d.card_id)+',\'processing\')">Corrigir no Card</button></td></tr>').join("");
     const costuraTasks=(cadastroTasks||[]).filter(t=>(t.card_status==="AGUARDANDO_DESPACHO_COSTURA"||t.card_status==="EM_COSTURA_CD01")&&t.status!=="CONCLUIDO");
     const pending=cards.filter(card=>!card.triage).map(card=>'<tr><td><b>'+esc(refLabel(card))+'</b><small>'+esc(card.supplier||"")+'</small></td><td><span class="badge">Aguardando triagem</span></td><td><button class="primary small-btn" onclick="startProcessingTriage('+card.id+')">Iniciar triagem</button></td></tr>').join("");
     $("mainContent").innerHTML=processingTabs("processing-hub")+
@@ -3359,7 +3360,10 @@ async function renderProcessingHub() {
       heroKpi("Triagens em andamento",c.triagens_em_andamento||0,(c.triagens_concluidas||0)+" concluídas","⇄","teal","processing-triage")+
       heroKpi("Cadastro para Costura",costuraTasks.length,"Fluxo independente","▤","teal","processing-register")+
       heroKpi("Entradas pendentes",c.entradas_pendentes||0,"Conferências de Estocagem","⇩","teal","processing-entry")+
-      '</div><section class="panel processing-queue-panel"><div class="panel-body"><div class="section-heading-row"><div><h3 class="section-heading">Fila de triagem</h3><p class="muted">Os Cards aparecem aqui automaticamente ao chegar ao Processamento.</p></div><button class="secondary small-btn" onclick="goTo(\'processing-triage\')">Ver todas</button></div>'+
+      heroKpi("Divergências para corrigir",c.divergencias_persistentes||0,"Após segunda recontagem","!","teal","processing-hub")+
+      '</div>'+
+      (divergences.length?'<section class="panel processing-queue-panel"><div class="panel-body"><div class="section-heading-row"><div><h3 class="section-heading">Divergências aguardando Processamento</h3><p class="muted">Somente as linhas que continuaram erradas após a segunda contagem aparecem aqui.</p></div></div><div class="table-wrap"><table class="compact-table"><thead><tr><th>Card</th><th>Origem</th><th>Linhas</th><th>Ação</th></tr></thead><tbody>'+divergenceRows+'</tbody></table></div></div></section>':'')+
+      '<section class="panel processing-queue-panel"><div class="panel-body"><div class="section-heading-row"><div><h3 class="section-heading">Fila de triagem</h3><p class="muted">Os Cards aparecem aqui automaticamente ao chegar ao Processamento.</p></div><button class="secondary small-btn" onclick="goTo(\'processing-triage\')">Ver todas</button></div>'+
       '<div class="table-wrap"><table class="compact-table"><thead><tr><th>Referência</th><th>Etapa</th><th>Ação</th></tr></thead><tbody>'+(pending||emptyRows(3,"Nenhum Card aguardando início da triagem."))+'</tbody></table></div></div></section>'+
       '<div class="dash-row">'+
       dashboardPanel("▤","Cadastro",'<button class="panel-action" onclick="goTo(\'processing-register\')">Abrir</button>','<p>Cadastro normal após a Triagem e fluxo separado para Costura.</p>')+
