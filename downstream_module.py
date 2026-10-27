@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import db
+from positions_module import total_allocated
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -336,6 +337,9 @@ async def complete(operation_id: int, request: Request):
     if not op: con.close(); raise HTTPException(404,"Operação não encontrada.")
     actor=user(con,uid,op["sector"]); data=downstream_card_data(con,op["card_id"],op["sector"])
     if op["sector"]=="ETIQUETAGEM":
+        required_ec=sum(int(x["expected_qty"] or 0) for x in data["items"])
+        allocated_ec=int(total_allocated("EC",int(op["card_id"])) or 0)
+        if allocated_ec < required_ec: con.close(); raise HTTPException(409,f"Antes de concluir a Etiquetagem, enderece toda a mercadoria em EC. Alocado: {allocated_ec}; necessário: {required_ec}.")
         item_ids=[int(x["item_id"]) for x in data["items"]]
         if not item_ids: con.close(); raise HTTPException(400,"A Etiquetagem não possui itens para conferir.")
         marks=",".join("?" for _ in item_ids)
