@@ -66,6 +66,13 @@ def init_downstream_db() -> None:
       FOREIGN KEY(operation_id) REFERENCES downstream_operations(id) ON DELETE CASCADE,
       FOREIGN KEY(item_id) REFERENCES items(id) ON DELETE SET NULL);
     CREATE INDEX IF NOT EXISTS idx_storage_blind_checks_operation ON storage_blind_checks(operation_id,item_id,id);
+    CREATE TABLE IF NOT EXISTS labeling_final_checks(
+      id INTEGER PRIMARY KEY AUTOINCREMENT, operation_id INTEGER NOT NULL, item_id INTEGER NOT NULL,
+      counted_qty INTEGER NOT NULL, attempt INTEGER NOT NULL DEFAULT 1, matched INTEGER NOT NULL DEFAULT 0,
+      counted_by INTEGER NOT NULL, counted_by_name TEXT NOT NULL, created_at TEXT NOT NULL,
+      FOREIGN KEY(operation_id) REFERENCES downstream_operations(id) ON DELETE CASCADE,
+      FOREIGN KEY(item_id) REFERENCES items(id) ON DELETE CASCADE);
+    CREATE INDEX IF NOT EXISTS idx_labeling_final_checks_operation ON labeling_final_checks(operation_id,item_id,id);
     """)
     columns = {row["name"] for row in con.execute("PRAGMA table_info(downstream_operations)").fetchall()}
     if "source_subset" not in columns:
@@ -261,6 +268,36 @@ async def result(assignment_id: int, request: Request):
     con.execute("UPDATE downstream_assignments SET completed_qty=? WHERE id=?",(qty,assignment_id)); con.commit(); con.close(); return {"completed_qty":qty}
 
 
+@router.post("/downstream/{operation_id}/labeling-check")
+async def labeling_final_check(operation_id: int, request: Request):
+    p=await request.json(); uid=int(p.get("user_id") or 0); supplied=p.get("items")
+    if not isinstance(supplied,list): raise HTTPException(400,"Informe a contagem final por cor e tamanho.")
+    con=db_connect()
+    try:
+        con.execute("BEGIN"); op=con.execute("SELECT * FROM downstream_operations WHERE id=?",(operation_id,)).fetchone()
+        if not op or op["sector"]!="ETIQUETAGEM": raise HTTPException(404,"Operação de Etiquetagem não encontrada.")
+        actor=user(con,uid,"ETIQUETAGEM"); data=downstream_card_data(con,int(op["card_id"]),"ETIQUETAGEM")
+        expected={int(x["item_id"]):int(x["expected_qty"] or 0) for x in data["items"]}; seen=set(); divergences=[]
+        for value in supplied:
+            try: iid=int(value.get("item_id")); qty=int(value.get("counted_qty"))
+            except (TypeError,ValueError,AttributeError): raise HTTPException(400,"Contagem inválida.") from None
+            if iid not in expected or iid in seen or qty<0: raise HTTPException(400,"Item inválido ou duplicado na conferência.")
+            seen.add(iid); prev=con.execute("SELECT MAX(attempt) n FROM labeling_final_checks WHERE operation_id=? AND item_id=?",(operation_id,iid)).fetchone()
+            attempt=int(prev["n"] or 0)+1; matched=qty==expected[iid]
+            con.execute("""INSERT INTO labeling_final_checks(operation_id,item_id,counted_qty,attempt,matched,counted_by,counted_by_name,created_at)
+              VALUES(?,?,?,?,?,?,?,?)""",(operation_id,iid,qty,attempt,1 if matched else 0,uid,actor["name"],now()))
+            if not matched: divergences.append({"item_id":iid,"attempt":attempt})
+        if set(expected)!=seen: raise HTTPException(400,"A conferência precisa incluir toda a grade da Etiquetagem.")
+        if divergences:
+            persistent=any(x["attempt"]>=2 for x in divergences)
+            history(con,int(op["card_id"]),"ETIQUETAGEM_RECONTAGEM_DIVERGENTE",f"{actor['name']} encontrou divergência na conferência final da Etiquetagem.",uid)
+            con.commit(); return {"ok":False,"requires_recount":True,"persistent_divergence":persistent,"divergences":divergences,
+              "detail":("A recontagem continua divergente. Procure o responsável do Processamento para verificar a grade." if persistent else "A quantidade não bateu com a Triagem. Reconte somente as linhas indicadas.")}
+        history(con,int(op["card_id"]),"ETIQUETAGEM_CONFERENCIA_OK",f"{actor['name']} conferiu a Etiquetagem; todas as quantidades bateram com a Triagem.",uid)
+        con.commit(); return {"ok":True,"matched":True}
+    finally: con.close()
+
+
 @router.post("/downstream/{operation_id}/storage-check")
 async def storage_blind_check(operation_id: int, request: Request):
     p=await request.json(); uid=int(p.get("user_id") or 0); supplied=p.get("items")
@@ -298,7 +335,14 @@ async def complete(operation_id: int, request: Request):
     p=await request.json(); uid=int(p.get("user_id") or 0); con=db_connect(); op=con.execute("SELECT * FROM downstream_operations WHERE id=?",(operation_id,)).fetchone()
     if not op: con.close(); raise HTTPException(404,"Operação não encontrada.")
     actor=user(con,uid,op["sector"]); data=downstream_card_data(con,op["card_id"],op["sector"])
-    if op["sector"]=="ESTOCAGEM":
+    if op["sector"]=="ETIQUETAGEM":
+        item_ids=[int(x["item_id"]) for x in data["items"]]
+        if not item_ids: con.close(); raise HTTPException(400,"A Etiquetagem não possui itens para conferir.")
+        marks=",".join("?" for _ in item_ids)
+        matched=int(con.execute(f"""SELECT COUNT(*) n FROM labeling_final_checks s WHERE s.operation_id=? AND s.item_id IN ({marks}) AND s.matched=1
+          AND s.id=(SELECT MAX(s2.id) FROM labeling_final_checks s2 WHERE s2.operation_id=s.operation_id AND s2.item_id=s.item_id)""",(operation_id,*item_ids)).fetchone()["n"] or 0)
+        if matched!=len(item_ids): con.close(); raise HTTPException(409,"Conclua a conferência final da Etiquetagem antes de enviar para Estocagem.")
+    elif op["sector"]=="ESTOCAGEM":
         item_ids=[int(x["item_id"]) for x in data["items"]]
         if not item_ids: con.close(); raise HTTPException(400,"A Estocagem não possui itens para conferir.")
         marks=",".join("?" for _ in item_ids)
