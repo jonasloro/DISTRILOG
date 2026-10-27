@@ -5,7 +5,7 @@ import base64
 import hashlib
 import hmac
 import secrets
-import time
+import time as clock_time
 import math
 import os
 import re
@@ -68,7 +68,7 @@ def _session_secret():
     return secret.encode("utf-8")
 
 def _sign_session(user_id: int) -> str:
-    payload = f"{user_id}:{int(time.time()) + _SESSION_TTL}:{secrets.token_hex(16)}"
+    payload = f"{user_id}:{int(clock_time.time()) + _SESSION_TTL}:{secrets.token_hex(16)}"
     encoded = base64.urlsafe_b64encode(payload.encode()).decode().rstrip("=")
     signature = hmac.new(_session_secret(), encoded.encode(), hashlib.sha256).hexdigest()
     return encoded + "." + signature
@@ -81,7 +81,7 @@ def _read_session(token: str) -> int | None:
             return None
         payload = base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)).decode()
         uid, expires, nonce = payload.split(":")
-        if int(expires) < time.time() or len(nonce) != 32:
+        if int(expires) < clock_time.time() or len(nonce) != 32:
             return None
         return int(uid)
     except (ValueError, UnicodeError, TypeError):
