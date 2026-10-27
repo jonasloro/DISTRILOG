@@ -115,10 +115,10 @@ async def require_authenticated_session(request: Request, call_next):
     user_id, issued_ns = session
     con = db_connect()
     try:
-        user = con.execute("SELECT id,username,role,session_revoked_after_ns FROM users WHERE id=?", (user_id,)).fetchone()
+        user = con.execute("SELECT id,username,role,session_revoked_after_ns,is_active FROM users WHERE id=?", (user_id,)).fetchone()
     finally:
         con.close()
-    if not user or issued_ns <= int(user["session_revoked_after_ns"] or 0):
+    if not user or not user["is_active"] or issued_ns <= int(user["session_revoked_after_ns"] or 0):
         return JSONResponse({"detail": "Sessão revogada. Entre novamente."}, status_code=401)
     request.state.auth_user_id = user_id
     request.state.auth_role = user["role"]
@@ -786,29 +786,15 @@ def init_db() -> None:
 
     con.execute("ALTER TABLE receivings ADD COLUMN IF NOT EXISTS volumes_after_sample INTEGER")
     con.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS session_revoked_after_ns BIGINT NOT NULL DEFAULT 0")
+    con.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE")
     con.commit()
-    for username, password, name, role in [
-        ("admin", "1234", "Administrador", "admin"),
-        ("recebimento", "1234", "Operador do Recebimento", "recebimento"),
-        ("recebimento2", "1234", "Segundo Operador do Recebimento", "recebimento"),
-        ("consulta", "1234", "Usuário de Consulta", "consulta"),
-        ("qualidade1", "1234", "Inspetor da Qualidade 1", "qualidade"),
-        ("qualidade2", "1234", "Inspetor da Qualidade 2", "qualidade"),
-        ("supervisor", "1234", "Supervisor", "supervisor"),
-        ("processamento1", "1234", "Operador do Processamento 1", "processamento"),
-        ("processamento2", "1234", "Operador do Processamento 2", "processamento"),
-        ("etiquetagem1", "1234", "Operador da Etiquetagem 1", "etiquetagem"),
-        ("etiquetagem2", "1234", "Operador da Etiquetagem 2", "etiquetagem"),
-        ("estocagem1", "1234", "Operador da Estocagem 1", "estocagem"),
-        ("estocagem2", "1234", "Operador da Estocagem 2", "estocagem"),
-        ("planejamento1", "1234", "Planejamento SGO", "planejamento"),
-        ("expedicao1", "1234", "Operador da Expedição", "expedicao"),
-        ("devolucoes1", "1234", "Operador de Devoluções", "devolucoes"),
-    ]:
-        con.execute(
-            "INSERT OR IGNORE INTO users(username,password,name,role) VALUES(?,?,?,?)",
-            (username, "!supabase-auth-only", name, role),
-        )
+    # Apenas o administrador é inserido automaticamente.
+    # Novos operadores devem ser cadastrados explicitamente pela gestão.
+    # Os quinze usuários padrão não devem reaparecer após reiniciar o Render.
+    con.execute(
+        "INSERT OR IGNORE INTO users(username,password,name,role) VALUES(?,?,?,?)",
+        ("admin", "!supabase-auth-only", "Administrador", "admin"),
+    )
     # A tabela operacional não deve conservar senhas legadas em texto puro.
     con.execute("UPDATE users SET password=? WHERE password<>?",("!supabase-auth-only","!supabase-auth-only"))
     # Normaliza referências já existentes: a referência visual é o descritivo
@@ -1433,12 +1419,12 @@ async def login(request: Request):
 
     con = db_connect()
     user = con.execute(
-        "SELECT id,username,name,role FROM users WHERE username=?",
+        "SELECT id,username,name,role,is_active FROM users WHERE username=?",
         (usuario,),
     ).fetchone()
     con.close()
-    if not user:
-        raise HTTPException(401, "Usuário existe no Supabase mas não está cadastrado localmente — fale com o administrador.")
+    if not user or not user["is_active"]:
+        raise HTTPException(401, "Usuário desativado ou não cadastrado. Contate o administrador.")
     if user["role"] != confirmado["papel"]:
         raise HTTPException(403, "Função divergente entre os cadastros de autenticação e operação. Contate o administrador.")
     response = JSONResponse({**dict(user), "must_change_password": confirmado["must_change_password"]})
@@ -1550,7 +1536,7 @@ async def admin_reset_operator_password(username: str, request: Request):
 @app.get("/api/users")
 def list_users():
     con = db_connect()
-    rows = con.execute("SELECT id,username,name,role FROM users ORDER BY name").fetchall()
+    rows = con.execute("SELECT id,username,name,role FROM users WHERE is_active=TRUE ORDER BY name").fetchall()
     con.close()
     return [dict(r) for r in rows]
 
@@ -1584,10 +1570,10 @@ def protected_upload(filename: str, request: Request):
         raise HTTPException(401, "Entre para acessar o arquivo.")
     con = db_connect()
     try:
-        user = con.execute("SELECT id,session_revoked_after_ns FROM users WHERE id=?", (session[0],)).fetchone()
+        user = con.execute("SELECT id,session_revoked_after_ns,is_active FROM users WHERE id=?", (session[0],)).fetchone()
     finally:
         con.close()
-    if not user or session[1] <= int(user["session_revoked_after_ns"] or 0):
+    if not user or not user["is_active"] or session[1] <= int(user["session_revoked_after_ns"] or 0):
         raise HTTPException(401, "Sessão expirada.")
     if not re.fullmatch(r"[0-9]{8}_[0-9]{6}_[0-9a-f]{8}\.(?:jpg|jpeg|png|webp|gif|bmp|pdf)", filename):
         raise HTTPException(404, "Arquivo não encontrado.")
