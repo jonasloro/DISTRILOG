@@ -41,6 +41,10 @@ jobs:
         run: |
           python -m compileall -q .
           node --check static/app.js
+          node --check static/collab.js
+          node --check static/mission_history_2026.js
           node --check static/mission.js
-      - name: WMS unit checks
+      - name: Historical backlog fidelity
+        run: node --test tests/test_mission_history.cjs
+      - name: WMS and chat integration checks
         run: python -m pytest tests -q
