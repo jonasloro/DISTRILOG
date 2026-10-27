@@ -12,6 +12,7 @@ const MISSION_PHASE_STATE = {
   scheduled:"Agendado",
   not_captured:"Não capturado",
 };
+const MISSION_AUTOMATIC_FIRST_MONTH = "2026-11";
 let missionWeeklyMonth = null;
 let missionWeeklyRequestId = 0;
 
@@ -24,7 +25,8 @@ function missionCurrentParts() {
 }
 function missionCurrentMonth() {
   const p=missionCurrentParts();
-  return p.year+"-"+p.month;
+  const month=p.year+"-"+p.month;
+  return month < MISSION_AUTOMATIC_FIRST_MONTH ? MISSION_AUTOMATIC_FIRST_MONTH : month;
 }
 function missionCurrentDate() {
   const p=missionCurrentParts();
@@ -34,7 +36,12 @@ function missionMoveMonth(change) {
   if (!missionWeeklyMonth) missionWeeklyMonth=missionCurrentMonth();
   const [y,m] = missionWeeklyMonth.split("-").map(Number);
   const d=new Date(Date.UTC(y,m-1+change,1));
-  missionWeeklyMonth=d.getUTCFullYear()+"-"+String(d.getUTCMonth()+1).padStart(2,"0");
+  const selected=d.getUTCFullYear()+"-"+String(d.getUTCMonth()+1).padStart(2,"0");
+  if(selected<MISSION_AUTOMATIC_FIRST_MONTH){
+    // Outubro e os meses anteriores pertencem exclusivamente ao histórico legado.
+    return;
+  }
+  missionWeeklyMonth=selected;
   void showMissionWeekly();
 }
 function missionValue(value, qualifier="") {
@@ -64,7 +71,8 @@ async function showMissionWeekly(){
   setMissionMode("weekly");
   const body=$("missionBody");
   if(!body)return;
-  if(!missionWeeklyMonth)missionWeeklyMonth=missionCurrentMonth();
+  if(!missionWeeklyMonth || missionWeeklyMonth<MISSION_AUTOMATIC_FIRST_MONTH)
+    missionWeeklyMonth=missionCurrentMonth();
   const sequence=++missionWeeklyRequestId;
   const selectedMonth=missionWeeklyMonth;
   body.innerHTML='<div class="state-panel">Carregando quadro do DISTRILOG…</div>';
@@ -133,7 +141,9 @@ async function showMissionWeekly(){
   body.innerHTML='<div class="mission-month-heading"><div><span class="mission-kicker">FONTE: SISTEMA · HORÁRIO DE BRASÍLIA</span>'+
     '<h3>'+esc(monthLabel.charAt(0).toUpperCase()+monthLabel.slice(1))+
     ' <small>Quadro automático</small></h3></div>'+
-    '<div class="actions"><button type="button" class="secondary" onclick="missionMoveMonth(-1)">‹ Mês anterior</button>'+
+    '<div class="actions"><button type="button" class="secondary" '+
+    (selectedMonth===MISSION_AUTOMATIC_FIRST_MONTH?'disabled title="O quadro automático começa em novembro de 2026"':'')+
+    ' onclick="missionMoveMonth(-1)">‹ Mês anterior</button>'+
     '<button type="button" class="secondary" onclick="missionWeeklyMonth=missionCurrentMonth();showMissionWeekly()">Mês atual</button>'+
     '<button type="button" class="secondary" onclick="missionMoveMonth(1)">Próximo mês ›</button>'+
     '<button type="button" class="secondary" onclick="showMissionWeekly()">Atualizar ↻</button></div></div>'+
@@ -149,7 +159,7 @@ async function showMissionWeekly(){
        '<small>Segunda · quarta · sexta</small></div></div>'+
     '<section class="panel mission-board-panel"><div class="panel-header"><div>'+
     '<strong>QUADRO DE BACKLOG E PRODUZIDO · '+esc(monthLabel.toUpperCase())+'</strong>'+
-    '<small>Semana a semana, com números congelados; sem edição ou cálculo retroativo</small></div>'+
+    '<small>Início dos dados automáticos: novembro de 2026 · sem edição ou cálculo retroativo</small></div>'+
     '<span class="mission-board-hint">↔ Deslize para consultar todos os setores</span></div>'+
     '<div class="mission-board-wrap" tabindex="0" aria-label="Quadro mensal com backlog fixo e produção de quarta e sexta">'+
     '<table class="mission-board mission-board-horizontal"><thead>'+tableHeader+'</thead><tbody>'+bodyRows+'</tbody></table></div></section>'+
