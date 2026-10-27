@@ -219,7 +219,7 @@ async def claim(operation_id: int, request: Request):
     actor = user(con, uid, op["sector"])
     worker = con.execute("SELECT * FROM users WHERE id=? AND role=?", (worker_id, op["sector"].lower())).fetchone()
     if not worker: con.close(); raise HTTPException(400, "Selecione um colaborador do setor.")
-    if op["status"] != "ABERTO" or qty <= 0: con.close(); raise HTTPException(400, "Informe uma quantidade válida em uma operação aberta.")
+    if op["status"] != "ABERTO" or (qty <= 0 and op["sector"]!="ESTOCAGEM"): con.close(); raise HTTPException(400, "Informe uma quantidade válida em uma operação aberta.")
     item_id = int(p.get("item_id") or 0) or None
     if op["purchase_mode"] == "GRADE":
         if not item_id: con.close(); raise HTTPException(400, "Selecione um tamanho.")
@@ -239,12 +239,15 @@ async def claim(operation_id: int, request: Request):
         else:
             expected = int(processed["processed_qty"] or 0) if processed else 0
             if expected <= 0: expected = int(item["expected_qty"] or 0)
+        if op["sector"]=="ESTOCAGEM": qty=expected
         if qty != expected: con.close(); raise HTTPException(400, f"Grade é assumida por tamanho completo ({expected} peças).")
     else:
         item_id = None
         expected = sum(int(r[0] or 0) for r in con.execute("SELECT COALESCE(real_qty,expected_qty,0) FROM items WHERE card_id=?", (op["card_id"],)))
         used = con.execute("SELECT COALESCE(SUM(assigned_qty),0) FROM downstream_assignments WHERE operation_id=? AND status!='LIBERADA'", (operation_id,)).fetchone()[0]
-        if qty > expected-used: con.close(); raise HTTPException(400, f"Há somente {expected-used} peças disponíveis.")
+        remaining=max(0,expected-int(used or 0))
+        if op["sector"]=="ESTOCAGEM": qty=remaining
+        if qty <= 0 or qty > remaining: con.close(); raise HTTPException(400, f"Há somente {remaining} peças disponíveis.")
     cur = con.execute("INSERT INTO downstream_assignments(operation_id,item_id,worker_user_id,assigned_qty,created_at) VALUES(?,?,?,?,?)", (operation_id,item_id,worker_id,qty,now()))
     history(con, op["card_id"], f"{op['sector']}_ASSUMIDA", f"{actor['name']} atribuiu {qty} peça(s) a {con.execute('SELECT name FROM users WHERE id=?',(worker_id,)).fetchone()[0]}.", uid)
     con.commit(); aid=cur.lastrowid; con.close(); return {"id":aid}
