@@ -2334,29 +2334,52 @@ async function claimDownstreamCard(opId,sector){
   }catch(e){toast(e.message);}
 }
 
-async function downstreamSession(opId,action,sector){
+async function downstreamSession(opId,action,sector,workerId){
   try{
-    await api("/api/downstream/"+opId+"/session/"+action,{method:"POST",body:JSON.stringify({user_id:currentUser.id})});
+    await api("/api/downstream/"+opId+"/session/"+action,{method:"POST",body:JSON.stringify({user_id:currentUser.id,worker_user_id:Number(workerId)})});
     await openCard(currentCardId,sector==="ETIQUETAGEM"?"labeling":"storage");
   }catch(e){toast(e.message);}
 }
 
-function openDownstreamPartialAll(opId,sector){
+function openDownstreamSplit(opId,sector,sourceWorkerId){
   const op=sector==="ETIQUETAGEM"?cardData.labeling:cardData.storage;
-  const active=(op?.assignments||[]).filter(a=>!["LIBERADA","CONCLUIDA"].includes(a.status));
-  if(!active.length){toast("Não há execução ativa.");return;}
-  const rows=active.map(a=>'<tr data-partial-row data-item-id="'+Number(a.item_id||0)+'"><td><b>'+esc(a.product||a.reference||"Saldo geral")+'</b></td><td>'+esc(a.color||"—")+'</td><td>'+esc(a.size||"—")+'</td><td><input class="partial-card-count" type="number" min="0" step="1" placeholder="Quanto fez" required></td></tr>').join("");
-  $("modalBody").innerHTML='<div class="card-title"><div><h2>Não terminei de executar tudo</h2><div class="card-subtitle">Informe somente o que foi realmente executado. O restante voltará ao saldo da grade.</div></div></div><div class="notice"><b>Conferência cega:</b> a quantidade esperada continua oculta.</div><div class="table-wrap"><table class="compact-table"><thead><tr><th>Produto</th><th>Cor</th><th>Tamanho</th><th>Quantidade executada</th></tr></thead><tbody>'+rows+'</tbody></table></div><div class="actions"><button class="secondary" onclick="openCard(currentCardId,\''+(sector==="ETIQUETAGEM"?"labeling":"storage")+'\')">Cancelar</button><button class="success" onclick="submitDownstreamPartialAll('+opId+',\''+sector+'\')">Registrar parcial</button></div>';
+  const active=(op?.assignments||[]).filter(a=>Number(a.worker_user_id)===Number(sourceWorkerId)&&!["LIBERADA","CONCLUIDA"].includes(a.status));
+  if(!active.length){toast("Não há execução ativa para dividir.");return;}
+  const helpers=(downstreamUsers[sector]||[]).filter(u=>Number(u.id)!==Number(sourceWorkerId));
+  if(!helpers.length){toast("Não há outro colaborador disponível neste setor.");return;}
+  const rows=active.map(a=>'<tr data-split-row data-assignment-id="'+Number(a.id)+'"><td><b>'+esc(a.product||a.reference||"Saldo geral")+'</b></td><td>'+esc(a.color||"—")+'</td><td>'+esc(a.size||"—")+'</td><td><input class="split-card-count" type="number" min="0" step="1" value="0" placeholder="Quanto vai ajudar"></td></tr>').join("");
+  const options=helpers.map(u=>'<option value="'+u.id+'">'+esc(u.name)+'</option>').join("");
+  $("modalBody").innerHTML='<div class="card-title"><div><h2>Dividir Card</h2><div class="card-subtitle">Separe uma parte da execução para outro colaborador ajudar.</div></div></div><div class="notice"><b>Conferência cega:</b> o sistema não mostra quanto existe em cada linha. Informe apenas quanto será transferido.</div><div class="field"><label>Quem vai ajudar?</label><select id="splitTargetWorker"><option value="">Selecione</option>'+options+'</select></div><div class="table-wrap"><table class="compact-table"><thead><tr><th>Produto</th><th>Cor</th><th>Tamanho</th><th>Quantidade para ajudar</th></tr></thead><tbody>'+rows+'</tbody></table></div><div class="actions"><button class="secondary" onclick="openCard(currentCardId,\''+(sector==="ETIQUETAGEM"?"labeling":"storage")+'\')">Cancelar</button><button class="primary" onclick="submitDownstreamSplit('+opId+',\''+sector+'\','+Number(sourceWorkerId)+')">Dividir Card</button></div>';
 }
 
-async function submitDownstreamPartialAll(opId,sector){
+async function submitDownstreamSplit(opId,sector,sourceWorkerId){
+  try{
+    const target=Number($("splitTargetWorker")?.value||0);
+    if(!target)throw new Error("Selecione quem vai ajudar.");
+    const items=[...document.querySelectorAll("[data-split-row]")].map(row=>{const input=row.querySelector(".split-card-count");const qty=Number(input.value||0);if(!Number.isSafeInteger(qty)||qty<0)throw new Error("Use somente quantidades inteiras.");return {assignment_id:Number(row.dataset.assignmentId),qty};});
+    if(!items.some(x=>x.qty>0))throw new Error("Informe ao menos uma quantidade para dividir.");
+    const result=await api("/api/downstream/"+opId+"/split",{method:"POST",body:JSON.stringify({user_id:currentUser.id,source_worker_user_id:Number(sourceWorkerId),target_worker_user_id:target,items})});
+    toast("Card dividido. "+esc(result.target_name||"Outro colaborador")+" começou a ajudar.");
+    await openCard(currentCardId,sector==="ETIQUETAGEM"?"labeling":"storage");
+  }catch(e){toast(e.message);}
+}
+
+function openDownstreamPartialAll(opId,sector,workerId){
+  const op=sector==="ETIQUETAGEM"?cardData.labeling:cardData.storage;
+  const active=(op?.assignments||[]).filter(a=>Number(a.worker_user_id)===Number(workerId)&&!["LIBERADA","CONCLUIDA"].includes(a.status));
+  if(!active.length){toast("Não há execução ativa para este colaborador.");return;}
+  const rows=active.map(a=>'<tr data-partial-row data-assignment-id="'+Number(a.id)+'"><td><b>'+esc(a.product||a.reference||"Saldo geral")+'</b></td><td>'+esc(a.color||"—")+'</td><td>'+esc(a.size||"—")+'</td><td><input class="partial-card-count" type="number" min="0" step="1" placeholder="Quanto fez" required></td></tr>').join("");
+  $("modalBody").innerHTML='<div class="card-title"><div><h2>Não terminei de executar tudo</h2><div class="card-subtitle">Informe somente o que esta pessoa realmente executou. O restante voltará ao saldo da grade.</div></div></div><div class="notice"><b>Conferência cega:</b> a quantidade esperada continua oculta.</div><div class="table-wrap"><table class="compact-table"><thead><tr><th>Produto</th><th>Cor</th><th>Tamanho</th><th>Quantidade executada</th></tr></thead><tbody>'+rows+'</tbody></table></div><div class="actions"><button class="secondary" onclick="openCard(currentCardId,\''+(sector==="ETIQUETAGEM"?"labeling":"storage")+'\')">Cancelar</button><button class="success" onclick="submitDownstreamPartialAll('+opId+',\''+sector+'\','+Number(workerId)+')">Registrar parcial</button></div>';
+}
+
+async function submitDownstreamPartialAll(opId,sector,workerId){
   try{
     const items=[...document.querySelectorAll("[data-partial-row]")].map(row=>{
       const input=row.querySelector(".partial-card-count");
       if(input.value===""||!Number.isSafeInteger(Number(input.value))||Number(input.value)<0)throw new Error("Informe todas as quantidades executadas.");
-      return {item_id:Number(row.dataset.itemId||0),completed_qty:Number(input.value)};
+      return {assignment_id:Number(row.dataset.assignmentId),completed_qty:Number(input.value)};
     });
-    const result=await api("/api/downstream/"+opId+"/partial-all",{method:"POST",body:JSON.stringify({user_id:currentUser.id,items})});
+    const result=await api("/api/downstream/"+opId+"/partial-all",{method:"POST",body:JSON.stringify({user_id:currentUser.id,worker_user_id:Number(workerId),items})});
     toast("Parcial registrado. "+Number(result.returned_qty||0)+" peça(s) voltaram para o saldo.");
     await openCard(currentCardId,sector==="ETIQUETAGEM"?"labeling":"storage");
   }catch(e){toast(e.message);}
