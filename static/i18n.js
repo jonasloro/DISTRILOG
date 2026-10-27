@@ -976,6 +976,24 @@
     if (match) return "¿Marcar los " + match[1] + " artículos de este inspector como inspeccionados y aprobados? Las cantidades rechazadas y de retrabajo de esta lista se pondrán a cero.";
     match = value.match(/^Revogar sessões e redefinir a senha de (.+?)\?$/);
     if (match) return "¿Revocar las sesiones y restablecer la contraseña de " + match[1] + "?";
+    // A small, explicit set of dynamic server and UI messages.
+    // Only the visible wording is changed; addresses and identifiers are not.
+    match = value.match(/^O Card não está em (.+)\.$/);
+    if (match) return "La tarjeta no está en " + lookup(match[1]) + ".";
+    match = value.match(/^Não há itens disponíveis em (.+)\.$/);
+    if (match) return "No hay artículos disponibles en " + lookup(match[1]) + ".";
+    match = value.match(/^Informe um inteiro válido para (.+)\.$/);
+    if (match) return "Ingrese un número entero válido para " + lookup(match[1]) + ".";
+    match = value.match(/^Há somente ([\d.,]+) peças disponíveis\.$/);
+    if (match) return "Solo hay " + match[1] + " piezas disponibles.";
+    match = value.match(/^Recontagem obrigatória: (.+)$/);
+    if (match) return "Recuento obligatorio: " + match[1];
+    match = value.match(/^Não foi possível consultar os endereços do Card: (.+)$/);
+    if (match) return "No se pudieron consultar las ubicaciones de la tarjeta: " + lookup(match[1]);
+    match = value.match(/^Erro ao criar card: (.+)$/);
+    if (match) return "Error al crear la tarjeta: " + lookup(match[1]);
+    match = value.match(/^Card (.+) excluído\.$/);
+    if (match) return "Tarjeta " + match[1] + " eliminada.";
     if (Object.prototype.hasOwnProperty.call(ES, value)) return ES[value];
     const punctuation = value.match(/^(.+?)([.!?:…]+)$/);
     if (punctuation && Object.prototype.hasOwnProperty.call(ES, punctuation[1]))

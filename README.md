@@ -3,6 +3,26 @@
 Aplicativo FastAPI + JavaScript, hospedado no Render. O banco operacional
 e os arquivos de evidência são persistidos no PostgreSQL do Supabase.
 
+
+## Idioma da interface (português / español)
+
+O DISTRILOG oferece apresentação em português (`pt-BR`) ou espanhol (`es`)
+**por login**, sem alterar as regras internas da operação ou códigos WMS.
+
+- Cada colaborador pode escolher **Idioma** no rodapé do menu lateral. A
+  preferência é salva em `public.usuarios.idioma_preferido` e retorna no
+  próximo login, mesmo usando outro dispositivo.
+- O administrador pode definir o idioma ao **criar login de operador** ou
+  mudar o idioma dos usuários existentes em **Cadastros**.
+- A tela de entrada oferece seleção preliminar do idioma, antes da
+  autenticação. Após o login prevalece a preferência salva no perfil.
+- `static/i18n.js` contém traduções estáticas e de mensagens operacionais
+  em espanhol. Os textos não reconhecidos preservam o original em português.
+  Nenhuma informação digitada, mensagem de chat, endereço, SKU, quantidade
+  persistida ou código de status é reescrita.
+- Migração idempotente: `migrations/20261027_user_preferred_language.sql`.
+  Para novos ambientes, aplique-a **antes de habilitar o login bilíngue**.
+
 ## Como funciona
 
 - Recebimento com controle de volumes e amostra de 10%.

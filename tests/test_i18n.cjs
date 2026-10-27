@@ -51,3 +51,11 @@ test("Catalog has substantial coverage across operational screens", () => {
     "Selecionar inspetor", "Confirme sua senha de administrador", "Criar login de operador"];
   for (const label of expected) assert.notEqual(i18n.t(label, "es"), label, label);
 });
+
+
+test("Dynamic backend notices preserve sector names or WMS references while translating", () => {
+  assert.equal(i18n.t("O Card não está em Qualidade.", "es"), "La tarjeta no está en Calidad.");
+  assert.equal(i18n.t("Há somente 12 peças disponíveis.", "es"), "Solo hay 12 piezas disponibles.");
+  assert.equal(i18n.t("Recontagem obrigatória: 349.B · azul", "es"),
+    "Recuento obligatorio: 349.B · azul");
+});

@@ -1464,7 +1464,8 @@ async def change_login_password(request: Request):
 @app.patch("/api/account/language")
 async def update_account_language(request: Request):
     """Persist per-account display language; never change operational data."""
-    language = (await request.json()).get("language")
+    payload = await request.json()
+    language = payload.get("language") if isinstance(payload, dict) else None
     if language not in ("pt-BR", "es"):
         raise HTTPException(422, "Idioma não suportado.")
     user_id = request.state.auth_user_id
