@@ -1336,24 +1336,15 @@ async function completeDispatch() {
 function renderCasuloTab() {
   if (guardSampleAllocationNavigation()) return;
   activateTab("tabCasuloBtn");
-  const canEdit = canOperateReceiving();
-  $("cardTab").innerHTML = `<div class="panel-body">
-    <div class="casulo-box"><h3 style="margin-top:0">Localização física da mercadoria</h3><div class="form-grid">
-      <div class="field"><label>Casulo atual</label><input class="readonly" readonly value="${esc(cardData.casulo_current||"Não informado")}"></div>
-      <div class="field"><label>Novo Casulo</label><input id="newCasulo" ${canEdit?"":"readonly"}></div>
-      <div class="field"><label>Observação da movimentação</label><input id="casuloNote" ${canEdit?"":"readonly"}></div>
-    </div><div class="actions">${canEdit?'<button class="primary" onclick="updateCasulo()">Atualizar Casulo</button>':'<span class="badge gray">Edição permitida somente ao operador de Recebimento enquanto o Card estiver no Recebimento</span>'}</div></div>
-    <h3 class="section-heading">Histórico de Casulos</h3>
-    <div class="timeline">${cardData.casulo_history.map((row)=>`<div class="timeline-event"><b>${esc(row.old_casulo||"Não informado")} → ${esc(row.new_casulo)}</b><br><small>${fmtDateTime(row.created_at)} • ${esc(row.user_name)} ${row.note?"• "+esc(row.note):""}</small></div>`).join("") || '<div class="notice">Nenhuma movimentação registrada.</div>'}</div>
-  </div>`;
-}
-
-async function updateCasulo() {
-  try {
-    await api(`/api/cards/${currentCardId}/casulo`, { method:"POST", body:JSON.stringify({ user_id:currentUser.id,new_casulo:$("newCasulo").value,note:$("casuloNote").value }) });
-    toast("Casulo atualizado.");
-    await openCard(currentCardId, "casulo");
-  } catch (error) { toast(error.message); }
+  $("cardTab").innerHTML = '<div class="panel-body"><div class="casulo-box"><h3>Localização física da mercadoria</h3>'+
+    '<p>O conteúdo físico e as transferências são controlados no WMS. O endereço resumido do Card pode conter informações legadas.</p>'+
+    '<p><b>Último casulo informado:</b> '+esc(cardData.casulo_current||"Consulte o mapa WMS")+'</p>'+
+    '<button class="primary" type="button" onclick="closeModal();goTo(\'address-map\')">Abrir Central de Endereçamento →</button></div>'+
+    '<h3 class="section-heading">Histórico legado de Casulos</h3>'+
+    '<div class="timeline">'+(cardData.casulo_history||[]).map(row=>'<div class="timeline-event"><b>'+
+      esc(row.old_casulo||"Não informado")+' → '+esc(row.new_casulo)+'</b><br><small>'+
+      fmtDateTime(row.created_at)+' • '+esc(row.user_name||"")+(row.note?" • "+esc(row.note):"")+
+      '</small></div>').join("")+'</div></div>';
 }
 
 function renderProductsTab() {
