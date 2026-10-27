@@ -704,8 +704,10 @@ def init_db() -> None:
     ]:
         con.execute(
             "INSERT OR IGNORE INTO users(username,password,name,role) VALUES(?,?,?,?)",
-            (username, password, name, role),
+            (username, "!supabase-auth-only", name, role),
         )
+    # A tabela operacional não deve conservar senhas legadas em texto puro.
+    con.execute("UPDATE users SET password=? WHERE password<>?",("!supabase-auth-only","!supabase-auth-only"))
     # Normaliza referências já existentes: a referência visual é o descritivo
     # da primeira linha do Produto, não o código técnico 258.xxx...
     existing_items = con.execute("SELECT id,product,reference FROM items").fetchall()
