@@ -1,34 +1,82 @@
-# DISTRILOG — Recebimento e endereçamento WMS
+# DISTRILOG — Operação logística e WMS
 
-O DISTRILOG usa como base operacional a lógica do repositório `Distribox-`, preservando a interface e removendo do menu Gestão: Indicadores (GOAT), Produção por Pessoa, Ferramentas de teste e Configurações. Cadastros permanece disponível.
+Aplicativo FastAPI + JavaScript, hospedado no Render. O banco operacional
+e os arquivos de evidência são persistidos no PostgreSQL do Supabase.
 
-## Fluxos importados
-- Criação manual de card por referência, com grade de cores e tamanhos.
-- Recebimento físico, confirmação, contagem de volumes e quantidade recebida.
-- Regras de separação/conferência dos 10%.
-- Cronômetro de recebimento (iniciar, pausar e retomar).
-- Endereçamento WMS por RM, QA, PR, ET e EC; sugestão de posição, saldos e trilha de alocações.
-- Saldo global de alocação compartilhado entre RM + QA + PR.
-- Mapa físico de casulos, mapa de calor e simulador de capacidade removidos para reduzir carga; o endereçamento WMS operacional permanece independente.
-- Banco único: tudo (Cards, Recebimento, Qualidade, Processamento, Endereçamento, GOAT, Devoluções etc.) é lido e gravado direto no schema `distrilog` do Supabase, sem SQLite, cópia local ou sincronização.
+## Como funciona
 
-## Render
-O serviço usa o `Dockerfile` e `render.yaml`. Configure a variável `SUPABASE_DATABASE_URL` nas variáveis do Render com a connection string PostgreSQL de um projeto Supabase **dedicado ao DISTRILOG**, caso queira login seguro e persistência compartilhada entre redeploys. Não reutilize o banco do Distribox- sem querer compartilhar cards e operações.
+- Recebimento com controle de volumes e amostra de 10%.
+- Qualidade, retorno de Costura, Triagem, Cadastro, Etiquetagem e Estocagem.
+- Alocação WMS em RM, QA, PR, ET e EC.
+- RM/QA/PR usam volumes e saldo compartilhado; ET/EC registram caixas pretas e até quatro cores por casulo.
+- **Mapa de endereçamento:** clique em qualquer posição para ver as referências, cores, tamanhos e saldos efetivamente vinculados. A transferência física é independente de concluir um Card; ela não altera o estágio operacional.
+- **Reconciliação WMS:** Gestão pode consultar anomalias; apenas um administrador pode inativar um registro órfão após confirmar fisicamente que o endereço está vazio, com justificativa e histórico preservado.
+- **Visão da Missão:** histórico semanal importado da planilha e fotografia de itens por etapa diretamente do Supabase. O produzido histórico não é inferido dos dados dos Cards.
 
-A variável `SUPABASE_DATABASE_URL` é obrigatória: sem ela o app não inicia. Na inicialização o app cria o schema `distrilog` e todas as tabelas (inclusive as evidências de imagem da Qualidade em `distrilog.quality_files`). Cada operação é uma transação única no Supabase; se falhar, nada é salvo pela metade. Para menor latência, mantenha o serviço do Render na mesma região do projeto Supabase e prefira a connection string do pooler (porta 6543 ou 5432).
+## Ambiente e segurança
 
-Após salvar a variável, publique o commit mais recente em **Manual Deploy → Deploy latest commit** ou aguarde o deploy automático. A rota `/health` é o health check.
+Variáveis do Render:
+- `SUPABASE_DATABASE_URL`: conexão PostgreSQL operacional. Obrigatória.
+- `AUTH_DATABASE_URL`: opcional para separar as credenciais de autenticação, **precisa ter acesso ao mesmo projeto de dados ou operar conforme arquitetura de autenticação configurada**.
+- `AUTH_SESSION_SECRET`: segredo aleatório com ao menos 32 caracteres. Obrigatório.
+- `DISTRILOG_BOOTSTRAP_PASSWORD`: **apenas para primeira instalação**. Se definida, deve conter de 12 a 128 caracteres, letras e números; cria apenas o admin quando não existir. Remova-a após inicialização.
+- `DB_POOL_MAX` e `AUTH_PG_POOL_MAX`: tamanho dos pools, conforme capacidade do banco.
 
-## Endereçamento operacional
-As posições WMS são independentes do mapa físico de capacidade. Endereços usam casulos 01–20 e níveis A/B/C:
-- RM: zona 1
-- QA: zonas 1 e 2
-- PR: zona 1
-- ET: zona 1
-- EC: zonas 1 e 2 (Feminino/Masculino)
+Não são criados logins com senha `1234` automaticamente. Contas existentes
+pendentes de troca foram invalidadas no projeto Supabase avaliado. Para
+reativar operadores, entre como admin e use
+**Cadastros → Redefinir senha de operador** (senha temporária de 12+ caracteres).
+A troca de senha e o logout revogam cookies anteriores.
 
-## Local
+`/health` somente devolve 200 quando o PostgreSQL responde, e o `render.yaml`
+configura deploy automático após o sucesso dos checks do GitHub Actions.
+Se o serviço foi criado fora do Blueprint, confirme também no painel do Render
+que a configuração **After CI Checks Pass** está ativa.
+
+As tabelas expostas ao Supabase Data API permanecem com RLS ativado e sem
+políticas de acesso direto; isso é uma postura de negação por padrão, não um
+mecanismo de autorização por operador. O backend valida sessões e permissões
+por ação. Não altere a conexão para `distrilog_app` (sem BYPASSRLS) sem
+preparar uma migração de políticas e testar as transações em ambiente isolado.
+
+## Migrações
+
+Os scripts versionados ficam em `migrations/`. A criação idempotente de
+tabelas operacionais também ocorre no startup. Migrações de integridade
+instalaram restrições `NOT VALID` que rejeitam **novas** alocações órfãs,
+mas não descartam registros legados sem card/item. Esses registros devem
+ser conferidos fisicamente na Central de Endereçamento.
+
+Não apague nem zere `distrilog.card_allocations` para corrigir a aparência
+do mapa. Faça backup antes de migrações e de reconciliações administrativas.
+
+## Testes
+
+A suíte do GitHub Actions executa verificação de sintaxe Python/JS,
+testes de contrato e testes de transferência WMS em banco PostgreSQL
+temporário: movimentação parcial, transferência de caixas por cor,
+limite de quatro cores, rollback e reconciliação física.
+
+Comandos locais:
+
 ```bash
 pip install -r requirements.txt
+pip install pytest==8.3.4
+python -m compileall -q .
+python -m pytest tests -q
 uvicorn app:app --reload
 ```
+
+Sem `TEST_DATABASE_URL`, os testes que dependem de PostgreSQL isolado
+são ignorados. A suíte não substitui testes de ponta a ponta de login,
+Qualidade e Recebimento no Render com dados operacionais de homologação.
+
+## Histórico e infraestrutura
+
+O `app.py` usa o ciclo de vida ASGI moderno `lifespan`. O banco é
+PostgreSQL; referências a SQLite ainda presentes em comentários ou no
+tradutor `db.py` descrevem apenas compatibilidade histórica de SQL,
+não um banco local ativo. Os novos uploads genéricos e fotos da Qualidade
+são salvos no Supabase; arquivos locais antigos só permanecem acessíveis
+enquanto existirem no container, portanto reimporte evidências legadas
+importantes caso tenham sido perdidas em deploys anteriores.
