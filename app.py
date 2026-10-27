@@ -17,7 +17,7 @@ from urllib.parse import urlsplit
 from typing import Any, Optional
 
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from openpyxl import load_workbook
@@ -36,6 +36,8 @@ from processing_flow_module import init_processing_flow_db, backfill_cadastro_ta
 import db
 from sample_math import proportional_allocation
 from concurrent.futures import ThreadPoolExecutor
+from collections import defaultdict
+from threading import Lock
 from supabase_module import verificar_login_supabase, seed_usuarios_supabase, change_password_supabase, create_operator_supabase, ALLOWED_ROLES
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -61,6 +63,30 @@ async def disable_stale_interface_cache(request: Request, call_next):
 _SESSION_COOKIE = "distrilog_session"
 _SESSION_TTL = 8 * 3600
 _PUBLIC_API = {"/api/login", "/api/auth/change-password"}
+_LOGIN_ATTEMPTS = defaultdict(list)
+_LOGIN_LOCK = Lock()
+_LOGIN_WINDOW_SECONDS = 600
+_LOGIN_MAX_FAILURES = 8
+
+def _check_login_throttle(request: Request, username: str) -> tuple[str, str]:
+    key = (str(request.client.host if request.client else "unknown"), username.strip().lower()[:100])
+    now = clock_time.monotonic()
+    with _LOGIN_LOCK:
+        if len(_LOGIN_ATTEMPTS) > 10000:
+            _LOGIN_ATTEMPTS.clear()
+        attempts = [t for t in _LOGIN_ATTEMPTS[key] if now - t < _LOGIN_WINDOW_SECONDS]
+        _LOGIN_ATTEMPTS[key] = attempts
+        if len(attempts) >= _LOGIN_MAX_FAILURES:
+            raise HTTPException(429, "Muitas tentativas. Tente novamente mais tarde.")
+    return key
+
+def _login_attempt_result(key: tuple[str, str], success: bool) -> None:
+    with _LOGIN_LOCK:
+        if success:
+            _LOGIN_ATTEMPTS.pop(key, None)
+        else:
+            _LOGIN_ATTEMPTS[key].append(clock_time.monotonic())
+
 def _session_secret():
     secret = os.getenv("AUTH_SESSION_SECRET", "")
     if len(secret) < 32:
@@ -68,7 +94,7 @@ def _session_secret():
     return secret.encode("utf-8")
 
 def _sign_session(user_id: int) -> str:
-    payload = f"{user_id}:{int(clock_time.time()) + _SESSION_TTL}:{secrets.token_hex(16)}"
+    payload = f"{user_id}:{int(clock_time.time()) + _SESSION_TTL}:{clock_time.time_ns()}:{secrets.token_hex(16)}"
     encoded = base64.urlsafe_b64encode(payload.encode()).decode().rstrip("=")
     signature = hmac.new(_session_secret(), encoded.encode(), hashlib.sha256).hexdigest()
     return encoded + "." + signature
@@ -80,10 +106,10 @@ def _read_session(token: str) -> int | None:
         if not hmac.compare_digest(signature, expected):
             return None
         payload = base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)).decode()
-        uid, expires, nonce = payload.split(":")
+        uid, expires, issued_ns, nonce = payload.split(":")
         if int(expires) < clock_time.time() or len(nonce) != 32:
             return None
-        return int(uid)
+        return int(uid), int(issued_ns)
     except (ValueError, UnicodeError, TypeError):
         return None
 
@@ -93,18 +119,19 @@ async def require_authenticated_session(request: Request, call_next):
     if not path.startswith("/api/") or path in _PUBLIC_API:
         return await call_next(request)
     try:
-        user_id = _read_session(request.cookies.get(_SESSION_COOKIE, ""))
+        session = _read_session(request.cookies.get(_SESSION_COOKIE, ""))
     except RuntimeError:
         return JSONResponse({"detail": "Configuração de autenticação ausente."}, status_code=503)
-    if user_id is None:
+    if session is None:
         return JSONResponse({"detail": "Sessão expirada. Entre novamente."}, status_code=401)
+    user_id, issued_ns = session
     con = db_connect()
     try:
-        user = con.execute("SELECT id,username,role FROM users WHERE id=?", (user_id,)).fetchone()
+        user = con.execute("SELECT id,username,role,session_revoked_after_ns FROM users WHERE id=?", (user_id,)).fetchone()
     finally:
         con.close()
-    if not user:
-        return JSONResponse({"detail": "Usuário não encontrado."}, status_code=401)
+    if not user or issued_ns <= int(user["session_revoked_after_ns"] or 0):
+        return JSONResponse({"detail": "Sessão revogada. Entre novamente."}, status_code=401)
     request.state.auth_user_id = user_id
     request.state.auth_role = user["role"]
     if request.method not in ("GET", "HEAD", "OPTIONS"):
@@ -131,7 +158,6 @@ async def require_authenticated_session(request: Request, call_next):
     return await call_next(request)
 
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
-app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
 
 KANBAN_TRANSITO = "1.3 Compras - Em Trânsito"
@@ -762,6 +788,7 @@ def init_db() -> None:
     )
 
     con.execute("ALTER TABLE receivings ADD COLUMN IF NOT EXISTS volumes_after_sample INTEGER")
+    con.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS session_revoked_after_ns BIGINT NOT NULL DEFAULT 0")
     con.commit()
     for username, password, name, role in [
         ("admin", "1234", "Administrador", "admin"),
@@ -1360,33 +1387,13 @@ def startup() -> None:
                 pass
         print(f"[aviso] não consegui reconciliar retornos concluídos no startup: {e}")
 
-    # Popula os 16 usuários padrão no Supabase (só na primeira vez — se já
-    # existirem lá, não faz nada). Se o Supabase ainda não estiver
-    # configurado (variável SUPABASE_DATABASE_URL ausente) ou fora do ar,
-    # não derruba o app inteiro por causa disso — só o login fica indisponível
-    # até isso ser resolvido; o resto (cards, tarefas, qualidade etc.,
-    # todos no SQLite local) continua funcionando normalmente.
-    try:
-        seed_usuarios_supabase([
-            ("admin", "1234", "admin"),
-            ("recebimento", "1234", "recebimento"),
-            ("recebimento2", "1234", "recebimento"),
-            ("consulta", "1234", "consulta"),
-            ("qualidade1", "1234", "qualidade"),
-            ("qualidade2", "1234", "qualidade"),
-            ("supervisor", "1234", "supervisor"),
-            ("processamento1", "1234", "processamento"),
-            ("processamento2", "1234", "processamento"),
-            ("etiquetagem1", "1234", "etiquetagem"),
-            ("etiquetagem2", "1234", "etiquetagem"),
-            ("estocagem1", "1234", "estocagem"),
-            ("estocagem2", "1234", "estocagem"),
-            ("planejamento1", "1234", "planejamento"),
-            ("expedicao1", "1234", "expedicao"),
-            ("devolucoes1", "1234", "devolucoes"),
-        ])
-    except Exception as e:
-        print(f"[aviso] não consegui popular usuarios no Supabase ainda: {e}")
+    # Novas instalações recebem um admin somente quando o operador
+    # configura explicitamente uma senha forte no ambiente do Render.
+    bootstrap_password = os.getenv("DISTRILOG_BOOTSTRAP_PASSWORD", "")
+    if bootstrap_password:
+        from supabase_module import validate_new_password
+        validate_new_password(bootstrap_password)
+        seed_usuarios_supabase([("admin", bootstrap_password, "admin")])
 
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request):
@@ -1410,10 +1417,14 @@ async def login(request: Request):
     # texto puro). O id/nome/papel que o resto do app usa (tarefas, cards,
     # etc.) continua vindo do SQLite local, pra não quebrar nada que já
     # depende desse id — os dois ficam sincronizados pelo username.
+    key = _check_login_throttle(request, str(usuario))
     try:
         confirmado = verificar_login_supabase(usuario, senha)
-    except Exception as e:
-        raise HTTPException(500, f"Não foi possível conectar no banco de autenticação: {e}")
+    except Exception:
+        import logging
+        logging.exception("Falha no serviço de autenticação")
+        raise HTTPException(503, "Autenticação temporariamente indisponível.") from None
+    _login_attempt_result(key, bool(confirmado))
     if not confirmado:
         raise HTTPException(401, "Usuário ou senha inválidos.")
 
@@ -1436,15 +1447,31 @@ async def login(request: Request):
 @app.post("/api/auth/change-password")
 async def change_login_password(request: Request):
     payload=await request.json()
+    username=str(payload.get("username") or "")
+    key=_check_login_throttle(request, username)
     try:
-        change_password_supabase(str(payload.get("username") or ""),str(payload.get("current_password") or ""),str(payload.get("new_password") or ""))
+        change_password_supabase(username,str(payload.get("current_password") or ""),str(payload.get("new_password") or ""))
     except ValueError as exc:
+        _login_attempt_result(key, False)
         raise HTTPException(400,str(exc)) from None
+    _login_attempt_result(key, True)
+    con=db_connect()
+    try:
+        con.execute("UPDATE users SET session_revoked_after_ns=? WHERE username=?", (clock_time.time_ns(),username))
+        con.commit()
+    finally:
+        con.close()
     return {"ok":True}
 
 
 @app.post("/api/auth/logout")
-def logout_session():
+def logout_session(request: Request):
+    con=db_connect()
+    try:
+        con.execute("UPDATE users SET session_revoked_after_ns=? WHERE id=?", (clock_time.time_ns(),request.state.auth_user_id))
+        con.commit()
+    finally:
+        con.close()
     response=JSONResponse({"ok":True})
     response.delete_cookie(_SESSION_COOKIE, path="/")
     return response
@@ -1505,7 +1532,7 @@ async def upload_files(files: list[UploadFile] = File(...)):
 
 @app.post("/api/import-excel")
 async def import_excel(request: Request, file: UploadFile = File(...)):
-    user_id = int(request.query_params.get("user_id", "0") or 0)
+    user_id = request.state.auth_user_id
     if not (file.filename or "").lower().endswith((".xlsx", ".xlsm")):
         raise HTTPException(400, "Envie um arquivo Excel .xlsx ou .xlsm.")
     content = await file.read()
@@ -1532,8 +1559,7 @@ async def import_excel(request: Request, file: UploadFile = File(...)):
             return default if idx is None or idx >= len(row) else row[idx]
 
         con = db_connect()
-        if user_id:
-            require_role(con, user_id, {"admin"})
+        require_role(con, user_id, {"admin"})
         total_rows = matched_rows = cards_created = cards_updated = items_created = items_updated = cards_removed_cd02 = 0
         touched_cards: set[int] = set()
         removed_card_ids: list[int] = []
