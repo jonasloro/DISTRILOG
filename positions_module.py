@@ -403,8 +403,11 @@ def allocate(card_id: int, payload: dict[str, Any]) -> dict[str, Any]:
                 for a in allocations:
                     if setor in FLAT_SECTORS and a.get("color"):
                         color = str(a.get("color") or "").strip()
-                        cur.execute("""SELECT id,expected_qty,real_qty FROM distrilog.items
-                          WHERE card_id=%s AND COALESCE(NULLIF(TRIM(color),''),'SEM COR')=%s ORDER BY id""",(card_id,color or "SEM COR"))
+                        cur.execute("""SELECT i.id,i.expected_qty,i.real_qty FROM distrilog.items i
+                          WHERE i.card_id=%s AND COALESCE(NULLIF(TRIM(i.color),''),'SEM COR')=%s
+                            AND NOT EXISTS (SELECT 1 FROM distrilog.card_allocations ca
+                              WHERE ca.card_id=i.card_id AND ca.item_id=i.id AND ca.setor=%s AND ca.active IS TRUE)
+                          ORDER BY i.id""",(card_id,color or "SEM COR",setor))
                         color_items=cur.fetchall()
                         if not color_items: raise HTTPException(400,"A cor selecionada não pertence a este Card.")
                         boxes=int(a.get("box_count") or 0)
