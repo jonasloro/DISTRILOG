@@ -1518,17 +1518,57 @@ def list_users():
     return [dict(r) for r in rows]
 
 
-@app.post("/api/uploads")
-async def upload_files(files: list[UploadFile] = File(...)):
-    saved: list[str] = []
-    for file in files:
-        suffix = Path(file.filename or "arquivo").suffix.lower()
-        safe = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}{suffix}"
-        path = UPLOAD_DIR / safe
-        path.write_bytes(await file.read())
-        saved.append(f"/uploads/{safe}")
-    return {"paths": saved}
+@app.get("/uploads/{filename}")
+def protected_upload(filename: str, request: Request):
+    """Uploaded evidence requires an authenticated browser session."""
+    try:
+        session = _read_session(request.cookies.get(_SESSION_COOKIE, ""))
+    except RuntimeError:
+        raise HTTPException(503, "Autenticação indisponível.") from None
+    if not session:
+        raise HTTPException(401, "Entre para acessar o arquivo.")
+    con = db_connect()
+    try:
+        user = con.execute("SELECT id,session_revoked_after_ns FROM users WHERE id=?", (session[0],)).fetchone()
+    finally:
+        con.close()
+    if not user or session[1] <= int(user["session_revoked_after_ns"] or 0):
+        raise HTTPException(401, "Sessão expirada.")
+    if not re.fullmatch(r"[0-9]{8}_[0-9]{6}_[0-9a-f]{8}\\.(?:jpg|jpeg|png|webp|gif|bmp|pdf)", filename):
+        raise HTTPException(404, "Arquivo não encontrado.")
+    path = UPLOAD_DIR / filename
+    if not path.is_file():
+        raise HTTPException(404, "Arquivo não encontrado.")
+    return FileResponse(path, headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"})
 
+
+@app.post("/api/uploads")
+async def upload_files(files: list[UploadFile] = File(...)) -> dict[str, list[str]]:
+    if not files or len(files) > 10:
+        raise HTTPException(400, "Envie entre 1 e 10 arquivos.")
+    allowed = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".pdf"}
+    saved: list[str] = []
+    total_bytes = 0
+    try:
+        for file in files:
+            suffix = Path(file.filename or "").suffix.lower()
+            if suffix not in allowed:
+                raise HTTPException(415, "Formato não permitido para evidência.")
+            content = await file.read(10 * 1024 * 1024 + 1)
+            if not content or len(content) > 10 * 1024 * 1024:
+                raise HTTPException(413, "Cada arquivo deve ter entre 1 byte e 10 MB.")
+            total_bytes += len(content)
+            if total_bytes > 25 * 1024 * 1024:
+                raise HTTPException(413, "O total de arquivos não pode ultrapassar 25 MB.")
+            safe = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}{suffix}"
+            path = UPLOAD_DIR / safe
+            path.write_bytes(content)
+            saved.append(f"/uploads/{safe}")
+    except Exception:
+        for url in saved:
+            (UPLOAD_DIR / url.rsplit("/", 1)[-1]).unlink(missing_ok=True)
+        raise
+    return {"paths": saved}
 
 @app.post("/api/import-excel")
 async def import_excel(request: Request, file: UploadFile = File(...)):
