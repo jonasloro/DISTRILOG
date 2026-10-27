@@ -739,6 +739,32 @@ def ensure_storage_entry(con,card_id,operation_id):
     return eid
 
 
+@router.post("/storage-divergence/{operation_id}/correct")
+async def correct_storage_divergence(operation_id: int, request: Request):
+    body=await request.json(); supplied=body.get("items"); reason=str(body.get("reason") or "").strip()
+    if not isinstance(supplied,list) or not reason: raise HTTPException(400,"Informe a grade corrigida e o motivo da correção.")
+    con=db.connect()
+    try:
+        con.execute("BEGIN"); actor=_operator(con,body.get("user_id"))
+        op=con.execute("SELECT * FROM downstream_operations WHERE id=?",(operation_id,)).fetchone()
+        if not op or op["sector"]!="ESTOCAGEM": raise HTTPException(404,"Operação de Estocagem não encontrada.")
+        persistent=con.execute("""SELECT 1 FROM storage_blind_checks s WHERE s.operation_id=? AND s.matched=0 AND s.attempt>=2 LIMIT 1""",(operation_id,)).fetchone()
+        if not persistent: raise HTTPException(409,"A grade só pode ser corrigida após uma segunda conferência divergente na Estocagem.")
+        items={int(x["id"]):x for x in con.execute("SELECT id,reference,color,size FROM items WHERE card_id=?",(int(op["card_id"]),)).fetchall()}
+        seen=set()
+        for value in supplied:
+            try: iid=int(value.get("item_id")); qty=_qty(value.get("quantity"),"quantidade corrigida")
+            except (TypeError,ValueError,AttributeError): raise HTTPException(400,"Correção de grade inválida.") from None
+            if iid not in items or iid in seen: raise HTTPException(400,"Item inválido ou duplicado na correção.")
+            seen.add(iid); con.execute("UPDATE items SET real_qty=? WHERE id=? AND card_id=?",(qty,iid,int(op["card_id"])))
+        if not seen: raise HTTPException(400,"Informe pelo menos uma linha para corrigir.")
+        stamp=_iso()
+        _history(con,int(op["card_id"]),"GRADE_CORRIGIDA_PELO_PROCESSAMENTO",
+          f"{actor['name']} corrigiu {len(seen)} linha(s) da grade após divergência persistente na Estocagem. Motivo: {reason}",int(actor["id"]))
+        con.commit(); return {"ok":True,"corrected":len(seen)}
+    finally: con.close()
+
+
 @router.get("/entry/queue")
 def entry_queue(user_id: int):
     con=db.connect()
