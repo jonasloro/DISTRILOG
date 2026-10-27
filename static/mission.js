@@ -12,19 +12,22 @@ const missionSumValues=values=>{
 const missionRowsOfMonth=month=>MISSAO_HISTORICO_2026.filter(row=>row[0]===Number(month));
 const missionMonthName=month=>MISSAO_MESES_2026.find(m=>m.numero===Number(month))?.nome||"";
 function renderMissao(){
-  setPage("Visão da Missão","Quadro de backlog · histórico de maio a outubro de 2026");
+  setPage("Visão da Missão","Fotografias operacionais: segunda 08h10 · quarta 12h · sexta 16h");
   $("mainContent").innerHTML =
-    '<div class="missao-header"><div><span class="mission-kicker">CONTROLE DE PRODUÇÃO · 2026</span>'+
-    '<h2>Visão da Missão</h2><p>Quadro completo de backlog e produção por setor</p></div>'+
-    '<div class="actions"><button id="missionHistoryTab" class="primary" type="button" onclick="showMissionHistorical()">Quadro histórico</button>'+
-    '<button id="missionLiveTab" class="secondary" type="button" onclick="showMissionLive()">Operação agora</button></div></div>'+
+    '<div class="missao-header"><div><span class="mission-kicker">CONTROLE DE PRODUÇÃO · DISTRILOG</span>'+
+    '<h2>Visão da Missão</h2><p>Backlog inicial fixo e produzido nos cortes oficiais da semana</p></div>'+
+    '<div class="actions"><button id="missionWeeklyTab" class="primary" type="button" onclick="showMissionWeekly()">Quadro automático</button>'+
+    '<button id="missionLiveTab" class="secondary" type="button" onclick="showMissionLive()">Situação agora</button>'+
+    '<button id="missionHistoryTab" class="secondary" type="button" onclick="showMissionHistorical()">Histórico legado</button></div></div>'+
     '<div id="missionBody"></div>';
-  showMissionHistorical();
+  void showMissionWeekly();
 }
 function setMissionMode(mode){
-  const historical=mode==="historical";
-  if($("missionHistoryTab"))$("missionHistoryTab").className=historical?"primary":"secondary";
-  if($("missionLiveTab"))$("missionLiveTab").className=historical?"secondary":"primary";
+  for(const [id,value] of [
+    ["missionWeeklyTab","weekly"],["missionHistoryTab","historical"],["missionLiveTab","live"]
+  ]){
+    if($(id))$(id).className=mode===value?"primary":"secondary";
+  }
 }
 function selectMissionMonth(month){
   if(!MISSAO_MESES_2026.some(m=>m.numero===Number(month)))return;
@@ -106,7 +109,7 @@ function showMissionHistorical(){
       (delta===null?'—':(delta>0?'+':'')+missaoFmt(delta))+'</td></tr>';
   }).join("");
   body.innerHTML='<div class="mission-period-tabs" aria-label="Meses de 2026">'+monthTabs+'</div>'+
-    '<div class="mission-month-heading"><div><span class="mission-kicker">HISTÓRICO CONSOLIDADO · 2026</span>'+
+    '<div class="mission-month-heading"><div><span class="mission-kicker">ARQUIVO LEGADO DA PLANILHA · 2026</span>'+
     '<h3>'+esc(monthLabel)+' <small>'+weeks.length+' semanas registradas</small></h3></div>'+
     '<label>Exibir <select onchange="selectMissionMetric(this.value)">'+opts+'</select></label></div>'+
     '<div class="missao-kpis">'+
@@ -130,7 +133,7 @@ function showMissionHistorical(){
     '<div class="panel-body" style="overflow:auto"><table class="missao-table mission-sector-table">'+
     '<thead><tr><th>Setor</th><th>Último backlog</th><th>Produzido no mês</th><th>Δ backlog semanal</th></tr></thead>'+
     '<tbody>'+summaryRows+'</tbody></table></div></section></div>'+
-    '<p class="missao-note"><b>Fonte:</b> QUADRO BACKLOG + PRODUZIDO.xlsx. Maio a setembro: aba BASE_DADOS_QUADRO; outubro: aba QUADRO. '+
+    '<p class="missao-note"><b>Arquivo histórico, sem uso nos novos cálculos automáticos.</b> Fonte: QUADRO BACKLOG + PRODUZIDO.xlsx. Maio a setembro: aba BASE_DADOS_QUADRO; outubro: aba QUADRO. '+
     'A semana de 28/09 a 02/10 aparece uma única vez, em setembro. '+
     'Campos vazios, N.A, traços e ??? aparecem como —; zero registrado permanece zero. '+
     'Backlog e produção agregados por setor não representam peças únicas; semanas sem todas as áreas informadas geram somas parciais.</p>';
