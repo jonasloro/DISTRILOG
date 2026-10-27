@@ -16,6 +16,7 @@ import binascii
 import hashlib
 import hmac
 import os
+import re
 
 import psycopg
 from psycopg.rows import dict_row
@@ -122,7 +123,7 @@ def verificar_login_supabase(usuario: str, senha_texto_puro: str) -> dict | None
     with pg_connect() as con:
         with con.cursor() as cur:
             cur.execute(
-                "SELECT usuario, senha_hash, papel FROM usuarios WHERE usuario=%s",
+                "SELECT usuario, senha_hash, papel, must_change_password FROM usuarios WHERE usuario=%s",
                 (usuario,),
             )
             linha = cur.fetchone()
@@ -130,7 +131,7 @@ def verificar_login_supabase(usuario: str, senha_texto_puro: str) -> dict | None
         return None
     if not verificar_senha(senha_texto_puro, linha["senha_hash"]):
         return None
-    return {"usuario": linha["usuario"], "papel": linha["papel"]}
+    return {"usuario": linha["usuario"], "papel": linha["papel"], "must_change_password": bool(linha["must_change_password"])}
 
 
 def criar_usuario_supabase(usuario: str, senha_texto_puro: str, papel: str) -> None:
@@ -155,9 +156,11 @@ def seed_usuarios_supabase(usuarios_padrao: list[tuple[str, str, str]]) -> None:
                 """CREATE TABLE IF NOT EXISTS usuarios (
                        usuario TEXT PRIMARY KEY,
                        senha_hash TEXT NOT NULL,
-                       papel TEXT NOT NULL
+                       papel TEXT NOT NULL,
+                       must_change_password BOOLEAN NOT NULL DEFAULT TRUE
                    )"""
             )
+            cur.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN NOT NULL DEFAULT TRUE")
             for usuario, senha_texto_puro, papel in usuarios_padrao:
                 senha_hash = gerar_hash_senha(senha_texto_puro)
                 cur.execute(
@@ -166,3 +169,37 @@ def seed_usuarios_supabase(usuarios_padrao: list[tuple[str, str, str]]) -> None:
                     (usuario, senha_hash, papel),
                 )
         con.commit()
+
+ALLOWED_ROLES = frozenset({"admin","supervisor","consulta","recebimento","qualidade","processamento","etiquetagem","estocagem","planejamento","expedicao","devolucoes"})
+
+def validate_new_password(password: str) -> None:
+    if not isinstance(password, str) or len(password) < 12 or len(password) > 128 or not re.search(r"[A-Za-z]", password) or not re.search(r"\\d", password):
+        raise ValueError("A senha deve ter de 12 a 128 caracteres, incluindo letras e números.")
+
+def change_password_supabase(username: str, current_password: str, new_password: str) -> None:
+    validate_new_password(new_password)
+    with pg_connect() as con:
+        with con.cursor() as cur:
+            cur.execute("SELECT senha_hash FROM usuarios WHERE usuario=%s FOR UPDATE", (username,))
+            row=cur.fetchone()
+            if not row or not verificar_senha(current_password,row["senha_hash"]):
+                raise ValueError("Credenciais atuais inválidas.")
+            if verificar_senha(new_password,row["senha_hash"]):
+                raise ValueError("A nova senha precisa ser diferente da atual.")
+            cur.execute("UPDATE usuarios SET senha_hash=%s,must_change_password=FALSE WHERE usuario=%s",
+                        (gerar_hash_senha(new_password),username))
+
+def create_operator_supabase(admin_username: str, admin_password: str, username: str, name: str, role: str, temporary_password: str) -> None:
+    validate_new_password(temporary_password)
+    if not re.fullmatch(r"[a-z0-9_.-]{3,40}",username):
+        raise ValueError("Usuário inválido: use 3 a 40 letras minúsculas, números, ponto, traço ou sublinhado.")
+    if not 2 <= len(name.strip()) <= 100 or role not in ALLOWED_ROLES:
+        raise ValueError("Nome ou função inválida.")
+    with pg_connect() as con:
+        with con.cursor() as cur:
+            cur.execute("SELECT senha_hash,papel,must_change_password FROM usuarios WHERE usuario=%s",(admin_username,))
+            admin=cur.fetchone()
+            if not admin or admin["papel"]!="admin" or admin["must_change_password"] or not verificar_senha(admin_password,admin["senha_hash"]):
+                raise PermissionError("Autenticação de administrador inválida.")
+            cur.execute("INSERT INTO usuarios(usuario,senha_hash,papel,must_change_password) VALUES(%s,%s,%s,TRUE)",
+                        (username,gerar_hash_senha(temporary_password),role))
