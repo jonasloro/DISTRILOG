@@ -2470,7 +2470,7 @@ function analyticsBarsBody(rows){const max=Math.max(1,...rows.map(r=>Number(r.va
 
 async function renderDashboard() {
   setPage("Central de Operações", "");
-  $("mainContent").innerHTML='<div class="state-panel"><b>Carregando Central de Operações…</b><span>Consultando os módulos operacionais.</span></div>';
+  showLoading("Central de Operações");
   try {
     const results=await Promise.all([
       safeApi("/api/dashboard",null),
