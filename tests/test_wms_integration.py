@@ -28,7 +28,7 @@ def db_url():
         """)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS distrilog.cards(
-                id BIGINT PRIMARY KEY, purchase_id TEXT, current_sector TEXT, status TEXT
+                id BIGINT PRIMARY KEY, purchase_id TEXT, supplier TEXT, brand TEXT, current_sector TEXT, status TEXT
             )
         """)
         conn.execute("""
@@ -134,7 +134,7 @@ def test_four_other_colors_block_transfer_without_mutation(session):
     from wms_inventory_module import TransferRequest, transfer, inventory
     with psycopg.connect(session) as conn:
         values=[(i,101,"Produto","REF",color,"P") for i,color in enumerate(["Azul","Rosa","Preto","Branco","Verde"],1)]
-        conn.executemany("INSERT INTO distrilog.items(id,card_id,product,reference,color,size) VALUES(%s,%s,%s,%s,%s,%s)",values)
+        conn.cursor().executemany("INSERT INTO distrilog.items(id,card_id,product,reference,color,size) VALUES(%s,%s,%s,%s,%s,%s)",values)
         conn.commit()
     source=create_allocation(session,card=101,sector="EC",address="1EC01",qty=12,item_id=1,boxes=2)
     for item in [2,3,4,5]:
