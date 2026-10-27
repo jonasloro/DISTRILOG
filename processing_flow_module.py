@@ -770,6 +770,29 @@ def ensure_storage_entry(con,card_id,operation_id):
     return eid
 
 
+def _downstream_divergence_rows(con,op):
+    table="labeling_final_checks" if op["sector"]=="ETIQUETAGEM" else "storage_blind_checks"
+    checks=con.execute(f"""SELECT s.id AS check_id,s.item_id,s.counted_qty,s.attempt,
+             i.reference,i.product,i.color,i.size,COALESCE(i.real_qty,i.expected_qty,0) current_qty
+      FROM {table} s JOIN items i ON i.id=s.item_id
+      WHERE s.operation_id=? AND s.matched=0 AND s.attempt>=2
+        AND s.id=(SELECT MAX(s2.id) FROM {table} s2
+                  WHERE s2.operation_id=s.operation_id AND s2.item_id=s.item_id)
+      ORDER BY i.reference,i.color,i.size,i.id""",(int(op["id"]),)).fetchall()
+    pending=[]; awaiting=[]
+    for row in checks:
+        value=dict(row)
+        correction=con.execute("""SELECT corrected_qty,reason,corrected_by_name,corrected_at
+          FROM processing_downstream_corrections
+          WHERE operation_id=? AND sector=? AND check_id=? AND item_id=?""",
+          (int(op["id"]),op["sector"],int(row["check_id"]),int(row["item_id"]))).fetchone()
+        if correction:
+            value["correction"]=dict(correction); awaiting.append(value)
+        else:
+            pending.append(value)
+    return pending,awaiting
+
+
 @router.get("/downstream-divergence/card/{card_id}")
 def downstream_divergence_status(card_id: int,user_id: int):
     con=db.connect()
@@ -780,25 +803,7 @@ def downstream_divergence_status(card_id: int,user_id: int):
           ORDER BY id DESC LIMIT 1""",(card_id,)).fetchone()
         if not op:
             return {"operation":None,"pending":[],"awaiting_recount":[]}
-        table="labeling_final_checks" if op["sector"]=="ETIQUETAGEM" else "storage_blind_checks"
-        checks=con.execute(f"""SELECT s.id AS check_id,s.item_id,s.counted_qty,s.attempt,
-                 i.reference,i.product,i.color,i.size,COALESCE(i.real_qty,i.expected_qty,0) current_qty
-          FROM {table} s JOIN items i ON i.id=s.item_id
-          WHERE s.operation_id=? AND s.matched=0 AND s.attempt>=2
-            AND s.id=(SELECT MAX(s2.id) FROM {table} s2
-                      WHERE s2.operation_id=s.operation_id AND s2.item_id=s.item_id)
-          ORDER BY i.reference,i.color,i.size,i.id""",(int(op["id"]),)).fetchall()
-        pending=[]; awaiting=[]
-        for row in checks:
-            value=dict(row)
-            correction=con.execute("""SELECT corrected_qty,reason,corrected_by_name,corrected_at
-              FROM processing_downstream_corrections
-              WHERE operation_id=? AND sector=? AND check_id=? AND item_id=?""",
-              (int(op["id"]),op["sector"],int(row["check_id"]),int(row["item_id"]))).fetchone()
-            if correction:
-                value["correction"]=dict(correction); awaiting.append(value)
-            else:
-                pending.append(value)
+        pending,awaiting=_downstream_divergence_rows(con,op)
         return {"operation":{"id":int(op["id"]),"sector":op["sector"]},"pending":pending,"awaiting_recount":awaiting}
     finally:
         con.close()
@@ -927,8 +932,20 @@ def processing_flow_overview(user_id: int):
           (SELECT COALESCE(AVG(worked_seconds),0) FROM processing_cadastro_tasks WHERE status='CONCLUIDO') cadastro_seconds,
           (SELECT COALESCE(AVG(worked_seconds),0) FROM processing_triages WHERE status='CONCLUIDA') triage_seconds""").fetchone()
         count_keys=("cadastro_pendentes","cadastro_em_andamento","triagens_em_andamento","triagens_concluidas","entradas_pendentes","entradas_divergentes","cards_processamento")
-        return {"counts":{k:int(row[k] or 0) for k in count_keys},
-          "averages":{"cadastro_seconds":int(row["cadastro_seconds"] or 0),"triage_seconds":int(row["triage_seconds"] or 0)}}
+        divergences=[]
+        for op in con.execute("""SELECT o.*,c.purchase_id,c.supplier
+          FROM downstream_operations o JOIN cards c ON c.id=o.card_id
+          WHERE o.sector IN ('ETIQUETAGEM','ESTOCAGEM') AND o.status='ABERTO'
+          ORDER BY o.id DESC""").fetchall():
+            pending,_awaiting=_downstream_divergence_rows(con,op)
+            if pending:
+                divergences.append({"card_id":int(op["card_id"]),"operation_id":int(op["id"]),"sector":op["sector"],
+                                    "purchase_id":op["purchase_id"],"supplier":op["supplier"],"lines":len(pending)})
+        counts={k:int(row[k] or 0) for k in count_keys}
+        counts["divergencias_persistentes"]=sum(int(x["lines"]) for x in divergences)
+        return {"counts":counts,
+          "averages":{"cadastro_seconds":int(row["cadastro_seconds"] or 0),"triage_seconds":int(row["triage_seconds"] or 0)},
+          "divergences":divergences}
     finally: con.close()
 
 
