@@ -1,19 +1,26 @@
 from __future__ import annotations
 
 import json
+import uuid
 import os
 import re
 import db
 from datetime import datetime
 from pathlib import Path
 from typing import Any
-from fastapi import APIRouter, FastAPI, File, HTTPException, UploadFile
+from fastapi import APIRouter, FastAPI, File, HTTPException, UploadFile, Request
 from openpyxl import load_workbook
 
 from supabase_module import pg_connect
 
 BASE_DIR = Path(__file__).resolve().parent
 router = APIRouter(prefix="/api/goat", tags=["GOAT"])
+
+def _authorize(request: Request, allowed: set[str]) -> None:
+    role = getattr(request.state, "auth_role", None)
+    if role not in allowed:
+        raise HTTPException(403, "Seu perfil não pode executar esta operação.")
+
 
 SHEET_LABELS = {
     "Rejeitados": "Peças rejeitadas por lote/fornecedor",
@@ -95,12 +102,15 @@ def _get_sheet_records(sheet_name: str) -> list[dict[str, Any]]:
 
 
 @router.post("/import")
-async def import_report(file: UploadFile = File(...)) -> dict[str, Any]:
+async def import_report(request: Request, file: UploadFile = File(...)) -> dict[str, Any]:
+    _authorize(request, {"admin", "supervisor"})
     if not file.filename or not file.filename.endswith(".xlsx"):
         raise HTTPException(400, "Envie um arquivo .xlsx exportado do GOAT.")
 
-    content = await file.read()
-    tmp = BASE_DIR / "_tmp_goat.xlsx"
+    content = await file.read(25 * 1024 * 1024 + 1)
+    if len(content) > 25 * 1024 * 1024:
+        raise HTTPException(413, "O relatório deve ter até 25 MB.")
+    tmp = BASE_DIR / f"_tmp_goat_{uuid.uuid4().hex}.xlsx"
     tmp.write_bytes(content)
     wb = load_workbook(tmp, read_only=True, data_only=True)
 
@@ -387,14 +397,16 @@ def _create_manual_card(payload: dict[str, Any], *, allow_direct_sector: bool) -
 
  
 @router.post("/create-card")
-def create_manual_card(payload: dict[str, Any]) -> dict[str, Any]:
+def create_manual_card(payload: dict[str, Any], request: Request) -> dict[str, Any]:
     """Criação operacional: sempre inicia no Recebimento, sem atalhos entre setores."""
+    _authorize(request, {"recebimento", "admin", "supervisor"})
     return _create_manual_card(payload, allow_direct_sector=False)
 
 
 @router.post("/create-test-card")
-def create_test_card(payload: dict[str, Any]) -> dict[str, Any]:
+def create_test_card(payload: dict[str, Any], request: Request) -> dict[str, Any]:
     """Ferramenta de teste separada; permite iniciar diretamente em um setor."""
+    _authorize(request, {"admin"})
     return _create_manual_card(payload, allow_direct_sector=True)
 
 def register_goat_routes(app: FastAPI) -> None:
@@ -405,8 +417,9 @@ def register_goat_routes(app: FastAPI) -> None:
 # ==========================================
 
 @router.post("/confirm-receiving")
-def confirm_receiving(payload: dict[str, Any]) -> dict[str, Any]:
+def confirm_receiving(payload: dict[str, Any], request: Request) -> dict[str, Any]:
     """Confirma o recebimento físico de um card: volumes, peças, casulo e tratativa."""
+    _authorize(request, {"recebimento", "admin", "supervisor"})
     card_id = payload.get("id") or payload.get("item_id") or payload.get("card_id")
     casulo = str(payload.get("casulo") or "").strip().upper()
     if not card_id:
@@ -425,8 +438,11 @@ def confirm_receiving(payload: dict[str, Any]) -> dict[str, Any]:
     con = db_connect()
     try:
         con.execute("PRAGMA foreign_keys=ON")
-        if not con.execute("SELECT 1 FROM cards WHERE id=?", (card_id,)).fetchone():
+        card = con.execute("SELECT current_sector FROM cards WHERE id=?", (card_id,)).fetchone()
+        if not card:
             raise HTTPException(404, "Card não encontrado.")
+        if card["current_sector"] != "RECEBIMENTO":
+            raise HTTPException(409, "Este Card não está sob responsabilidade do Recebimento.")
         rec = con.execute(
             "SELECT id FROM receivings WHERE card_id=? AND closed_at IS NULL ORDER BY id DESC LIMIT 1", (card_id,)
         ).fetchone()
@@ -438,7 +454,9 @@ def confirm_receiving(payload: dict[str, Any]) -> dict[str, Any]:
                 "INSERT INTO receivings(card_id,receiving_type,volumes,received_qty,notes,created_at) VALUES(?,?,?,?,?,?)",
                 (card_id, "NOVA", vol, pecas, note, now),
             )
-        con.execute("UPDATE cards SET casulo_current=?, updated_at=? WHERE id=?", (casulo, now, card_id))
+        # Rota legada: não altere o endereço físico fora do motor WMS.
+        # A localização oficial é gerida exclusivamente por /api/positions.
+        # Mantemos apenas a conferência de peças e volumes.
         con.execute(
             "INSERT INTO history(card_id,user_id,event_type,description,created_at) VALUES(?,?,?,?,?)",
             (card_id, None, "CONFERENCIA", f"Conferência {status}: {pecas} peças, {vol} volumes, casulo {casulo}. {obs}".strip(), now),
