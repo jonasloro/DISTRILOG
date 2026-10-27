@@ -455,6 +455,16 @@ async def labeling_final_check(operation_id: int, request: Request):
             history(con,int(op["card_id"]),"ETIQUETAGEM_RECONTAGEM_DIVERGENTE",f"{actor['name']} encontrou divergência na conferência final da Etiquetagem.",uid)
             con.commit(); return {"ok":False,"requires_recount":True,"persistent_divergence":persistent,"divergences":divergences,
               "detail":("A recontagem continua divergente. Procure o responsável do Processamento para verificar a grade." if persistent else "A quantidade não bateu com a Triagem. Reconte somente as linhas indicadas.")}
+        stamp=now()
+        active_rows=con.execute("""SELECT * FROM downstream_assignments WHERE operation_id=?
+          AND status NOT IN ('LIBERADA','CONCLUIDA')""",(operation_id,)).fetchall()
+        for row in active_rows:
+            accum=int(row["accumulated_seconds"] or 0)
+            if row["timer_state"]=="EM_ANDAMENTO" and row["timer_started_at"]:
+                accum += max(0,int((datetime.now()-datetime.fromisoformat(row["timer_started_at"])).total_seconds()))
+            con.execute("""UPDATE downstream_assignments SET completed_qty=assigned_qty,status='CONCLUIDA',
+              timer_state='FINALIZADA',timer_started_at=NULL,accumulated_seconds=?,completed_at=? WHERE id=?""",
+              (accum,stamp,int(row["id"])))
         history(con,int(op["card_id"]),"ETIQUETAGEM_CONFERENCIA_OK",f"{actor['name']} conferiu a Etiquetagem; todas as quantidades bateram com a Triagem.",uid)
         con.commit(); return {"ok":True,"matched":True}
     finally: con.close()
@@ -488,6 +498,16 @@ async def storage_blind_check(operation_id: int, request: Request):
             con.commit()
             return {"ok":False,"requires_recount":True,"persistent_divergence":persistent,"divergences":divergences,
                     "detail":("A recontagem continua divergente. Procure o Processamento; somente o Processamento pode confirmar o erro e alterar a grade." if persistent else "A conferência divergiu. Reconte somente as linhas indicadas.")}
+        stamp=now()
+        active_rows=con.execute("""SELECT * FROM downstream_assignments WHERE operation_id=?
+          AND status NOT IN ('LIBERADA','CONCLUIDA')""",(operation_id,)).fetchall()
+        for row in active_rows:
+            accum=int(row["accumulated_seconds"] or 0)
+            if row["timer_state"]=="EM_ANDAMENTO" and row["timer_started_at"]:
+                accum += max(0,int((datetime.now()-datetime.fromisoformat(row["timer_started_at"])).total_seconds()))
+            con.execute("""UPDATE downstream_assignments SET completed_qty=assigned_qty,status='CONCLUIDA',
+              timer_state='FINALIZADA',timer_started_at=NULL,accumulated_seconds=?,completed_at=? WHERE id=?""",
+              (accum,stamp,int(row["id"])))
         history(con,int(op["card_id"]),"ESTOCAGEM_CONFERENCIA_OK",f"{actor['name']} concluiu a conferência cega da Estocagem sem divergências.",uid)
         con.commit(); return {"ok":True,"matched":True}
     finally: con.close()
