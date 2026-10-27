@@ -506,7 +506,7 @@ def allocation_status(card_id: int, setor: str) -> dict[str, Any]:
                 item_rows = cur.fetchall()
 
                 cur.execute(
-                    """SELECT item_id,address,SUM(quantidade) qty
+                    """SELECT item_id,address,SUM(quantidade) qty,SUM(box_count) box_count
                        FROM distrilog.card_allocations
                        WHERE card_id=%s AND setor=%s AND active IS TRUE AND item_id IS NOT NULL
                        GROUP BY item_id,address
@@ -588,6 +588,7 @@ def allocation_status(card_id: int, setor: str) -> dict[str, Any]:
         grouped[item_id]["posicoes"].append({
             "address": r["address"],
             "quantidade": int(r["qty"] or 0),
+            "box_count": int(r.get("box_count") or 0),
         })
 
     global_item_grouped: dict[int, dict[str, Any]] = {}
