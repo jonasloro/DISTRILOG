@@ -399,7 +399,22 @@ def allocate(card_id: int, payload: dict[str, Any]) -> dict[str, Any]:
                 total_volumes = _card_total_volumes(cur, card_id, allocation_receiving_id or None) if is_global else None
                 alocado_global = _global_allocated(cur, card_id) if is_global else 0
 
+                expanded_allocations = []
                 for a in allocations:
+                    if setor in FLAT_SECTORS and a.get("color"):
+                        color = str(a.get("color") or "").strip()
+                        cur.execute("""SELECT id,expected_qty,real_qty FROM distrilog.items
+                          WHERE card_id=%s AND COALESCE(NULLIF(TRIM(color),''),'SEM COR')=%s ORDER BY id""",(card_id,color or "SEM COR"))
+                        color_items=cur.fetchall()
+                        if not color_items: raise HTTPException(400,"A cor selecionada não pertence a este Card.")
+                        boxes=int(a.get("box_count") or 0)
+                        for color_item in color_items:
+                            piece_qty=int(color_item["real_qty"] if color_item.get("real_qty") is not None else color_item["expected_qty"] or 0)
+                            if piece_qty>0:
+                                expanded_allocations.append({"address":a.get("address"),"quantidade":piece_qty,"item_id":int(color_item["id"]),"box_count":boxes if not expanded_allocations or expanded_allocations[-1].get("_color")!=color else 0,"_color":color})
+                    else:
+                        expanded_allocations.append(a)
+                for a in expanded_allocations:
                     address = str(a.get("address") or "")
                     qty = int(a.get("quantidade") or 0)
 
