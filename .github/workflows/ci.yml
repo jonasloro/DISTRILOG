@@ -43,8 +43,9 @@ jobs:
           node --check static/app.js
           node --check static/collab.js
           node --check static/mission_history_2026.js
+          node --check static/mission_weekly.js
           node --check static/mission.js
-      - name: Historical backlog fidelity
-        run: node --test tests/test_mission_history.cjs
+      - name: Mission frontend and archived history
+        run: node --test tests/test_mission_history.cjs tests/test_mission_weekly.cjs
       - name: WMS and chat integration checks
         run: python -m pytest tests -q
