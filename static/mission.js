@@ -64,24 +64,30 @@ function showMissionHistorical(){
   const metricLabel={backlog:"Backlog",produzido:"Produzido"};
   const monthTabs=MISSAO_MESES_2026.map(m=>'<button type="button" class="mission-month '+(m.numero===missionSelectedMonth?'selected':'')+
     '" onclick="selectMissionMonth('+m.numero+')" aria-pressed="'+(m.numero===missionSelectedMonth?'true':'false')+'">'+esc(m.nome)+'</button>').join("");
-  const h1=weeks.map(w=>'<th colspan="'+colSpan+'" scope="colgroup"><b>SEMANA '+w[1]+'</b>'+
-    (w[2]?'<small>'+esc(w[2])+'</small>':'')+'</th>').join("");
-  const h2=weeks.map(w=>metrics.map(m=>'<th class="mission-th-metric '+(m==="backlog"?"is-backlog":"is-produced")+'">'+metricLabel[m]+'</th>').join("")).join("");
-  const bodyRows=MISSAO_SETORES.map((sector,index)=>{
-    const cells=weeks.map(w=>metrics.map(m=>{
-      const number=w[m==="backlog"?3:4][index];
-      return '<td class="mission-val '+(m==="backlog"?"backlog":"produzido")+'">'+missionCell(number,m)+'</td>';
-    }).join("")).join("");
-    return '<tr><th scope="row">'+esc(sector)+'</th>'+cells+'</tr>';
-  }).join("");
-  const totalCells=weeks.map(w=>metrics.map(m=>{
-    const stat=missionSumValues(w[m==="backlog"?3:4]);
-    return '<td class="mission-val mission-total '+(m==="backlog"?"backlog":"produzido")+'">'+
-      missionCell(stat.value,m)+'<small>'+stat.reported+'/9 informados</small></td>';
+  // Repete a orientação da aba QUADRO: cada semana ocupa linhas
+  // BACKLOG e PRODUZIDO; cada setor é uma coluna física da matriz.
+  const sectorHeaders=MISSAO_SETORES.map(sector=>
+    '<th scope="col" class="mission-sector-head">'+esc(sector)+'</th>'
+  ).join("");
+  const boardRows=weeks.map(w=>metrics.map((metric,index)=>{
+    const values=w[metric==="backlog"?3:4];
+    const total=missionSumValues(values);
+    const weekCell=index===0
+      ?'<th scope="rowgroup" class="mission-week-cell" rowspan="'+metrics.length+'">'+
+        '<b>SEMANA '+w[1]+'</b>'+(w[2]?'<small>'+esc(w[2])+'</small>':'')+'</th>'
+      :'';
+    return '<tr class="mission-matrix-row '+(metric==="backlog"?'is-backlog':'is-produced')+'">'+
+      weekCell+'<th scope="row" class="mission-metric-cell">'+metricLabel[metric]+'</th>'+
+      values.map(value=>'<td class="mission-val">'+missionCell(value,metric)+'</td>').join("")+
+      '<td class="mission-val mission-total">'+missionCell(total.value,metric)+
+      '<small>'+total.reported+'/9 setores</small></td></tr>';
   }).join("")).join("");
-  const board='<div class="mission-board-wrap" tabindex="0" aria-label="Quadro mensal de backlog e produzido: role horizontalmente para ver todos os setores">'+
-    '<table class="mission-board"><thead><tr><th rowspan="2" scope="col">SETOR</th>'+h1+'</tr><tr>'+h2+'</tr></thead>'+
-    '<tbody>'+bodyRows+'</tbody><tfoot><tr><th scope="row">SOMA INFORMADA <small>Não são peças únicas</small></th>'+totalCells+'</tr></tfoot></table></div>';
+  const board='<div class="mission-board-wrap" tabindex="0" aria-label="Quadro histórico com semanas nas linhas e setores nas colunas; role horizontalmente para ver todos os setores">'+
+    '<table class="mission-board mission-board-horizontal"><thead><tr>'+
+    '<th scope="col" class="mission-week-head">SEMANA</th>'+
+    '<th scope="col" class="mission-indicator-head">INDICADOR</th>'+
+    sectorHeaders+'<th scope="col" class="mission-total-head">SOMA INFORMADA</th>'+
+    '</tr></thead><tbody>'+boardRows+'</tbody></table></div>';
   const weeklyStats=weeks.map(w=>({...{week:w[1],label:w[2]},backlog:missionSumValues(w[3]),produced:missionSumValues(w[4])}));
   const maxBacklog=Math.max(1,...weeklyStats.map(w=>Number(w.backlog.value||0)));
   const trend=weeklyStats.map(w=>
