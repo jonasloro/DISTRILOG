@@ -839,6 +839,13 @@ async def entry_confirm(entry_id: int,request: Request):
           has_divergence=0,grade_changed=0,notes=? WHERE id=? AND status='PENDENTE'""",
           (int(actor["id"]),actor["name"],stamp,str(body.get("notes") or "").strip() or None,entry_id))
         if changed.rowcount!=1: raise HTTPException(409,"Esta Entrada foi confirmada por outra pessoa.")
+        op=con.execute("SELECT source_subset FROM downstream_operations WHERE id=?",(int(entry["downstream_operation_id"]),)).fetchone()
+        if op and not bool(op["source_subset"]):
+            card_changed=con.execute("""UPDATE cards SET status='FINALIZADO',updated_at=?
+              WHERE id=? AND current_sector='PROCESSAMENTO' AND status='AGUARDANDO_ENTRADA'""",
+              (stamp,int(entry["card_id"])))
+            if card_changed.rowcount!=1:
+                raise HTTPException(409,"O Card mudou de estado antes da confirmação da Entrada; nenhuma alteração foi confirmada.")
         _history(con,int(entry["card_id"]),"ENTRADA_ESTOCAGEM_CONFIRMADA",
           f"{actor['name']} confirmou a Entrada após a Estocagem.",int(actor["id"]))
         con.commit()
