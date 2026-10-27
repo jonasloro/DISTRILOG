@@ -18,6 +18,7 @@ def db_url():
     url = os.getenv("TEST_DATABASE_URL")
     if not url:
         pytest.skip("A disposable PostgreSQL test database is not configured.")
+    os.environ["AUTH_DATABASE_URL"] = url
     with psycopg.connect(url, autocommit=True) as conn:
         conn.execute("CREATE SCHEMA IF NOT EXISTS distrilog")
         conn.execute("""
