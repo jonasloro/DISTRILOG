@@ -6,7 +6,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 from fastapi import APIRouter, HTTPException, Request
 import db
-from positions_module import item_allocation_totals, deactivate_card_allocations
+from positions_module import item_allocation_totals
 
 router = APIRouter(prefix="/api/processing", tags=["Processamento - fluxo"])
 PROCESSING_ROLES = {"processamento", "supervisor", "admin"}
@@ -716,7 +716,8 @@ async def triage_action(triage_id: int,action: str,request: Request):
                     (target_sector,target_status,stamp,int(triage["card_id"])))
         if changed.rowcount != 1:
             raise HTTPException(409,"O Card mudou de setor durante a conclusão da Triagem; nenhuma alteração foi confirmada.")
-        deactivate_card_allocations(int(triage["card_id"]),("RM","QA","PR"))
+        con.execute("""UPDATE card_allocations SET active=0
+          WHERE card_id=? AND setor IN ('RM','QA','PR') AND active=1""",(int(triage["card_id"]),))
         # Cria uma tarefa por referência após a Triagem, sem duplicar tarefas existentes.
         # A função é idempotente e roda na mesma transação da conclusão da Triagem.
         ensure_cadastro_tasks(con,int(triage["card_id"]))
