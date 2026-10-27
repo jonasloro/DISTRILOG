@@ -40,12 +40,41 @@ def as_int(value: Any, default: int = 0) -> int:
         return default
 
 
+async def read_limited_upload(file: UploadFile, *, pdf: bool = True) -> bytes:
+    """Valida extensão, assinatura e limite real antes de processar documentos."""
+    suffix=Path(file.filename or "").suffix.lower()
+    expected={".pdf"} if pdf else {".xlsx", ".xlsm"}
+    if suffix not in expected:
+        raise HTTPException(415,"Formato inválido. Envie um PDF." if pdf else "Envie uma planilha Excel válida.")
+    limit=10*1024*1024 if pdf else 20*1024*1024
+    raw=await file.read(limit+1)
+    if not raw or len(raw)>limit:
+        raise HTTPException(413,"Documento vazio ou maior que o limite permitido.")
+    if pdf and b"%PDF-" not in raw[:1024]:
+        raise HTTPException(415,"O documento não possui assinatura PDF.")
+    if not pdf and not raw.startswith(b"PK"):
+        raise HTTPException(415,"O documento não possui assinatura de planilha Excel.")
+    return raw
+
+
 def read_pdf_text(raw: bytes) -> str:
     try:
-        reader = PdfReader(io.BytesIO(raw))
-        return "\n".join(page.extract_text() or "" for page in reader.pages)
-    except Exception as exc:
-        raise HTTPException(400, f"Não foi possível ler o PDF: {exc}")
+        reader=PdfReader(io.BytesIO(raw))
+        if len(reader.pages)>150:
+            raise HTTPException(413,"O PDF deve conter no máximo 150 páginas.")
+        parts=[]
+        total_chars=0
+        for page in reader.pages:
+            text=page.extract_text() or ""
+            total_chars+=len(text)
+            if total_chars>2_000_000:
+                raise HTTPException(413,"O PDF contém texto excessivamente extenso.")
+            parts.append(text)
+        return "\n".join(parts)
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(400,"Não foi possível ler o PDF. Confira se o documento está íntegro.") from None
 
 
 def parse_pdf_items(raw: bytes) -> tuple[str, list[dict[str, Any]]]:
@@ -241,7 +270,8 @@ def register_unified_routes(app) -> None:
 
     @app.post("/api/unified/stock-group-report/import")
     async def import_group_report(user_id:int,file:UploadFile=File(...)):
-        text=read_pdf_text(await file.read());groups={}
+        con=db_connect();require_user(con,user_id,{"admin","supervisor","estocagem"});con.close()
+        text=read_pdf_text(await read_limited_upload(file));groups={}
         for raw_line in text.splitlines():
             line=" ".join(raw_line.split()).strip()
             match=re.match(r"^(.{3,}?)\s+([\d.]{1,12})$",line)
@@ -279,13 +309,18 @@ def register_unified_routes(app) -> None:
 
     @app.post("/api/unified/sgo/import")
     async def import_sgo(user_id: int, file: UploadFile = File(...)):
-        raw = await file.read()
+        con=db_connect();require_user(con,user_id,{"admin","supervisor","planejamento"});con.close()
+        raw = await read_limited_upload(file,pdf=False)
         try:
             wb = load_workbook(io.BytesIO(raw), read_only=True, data_only=True)
         except Exception as exc:
             raise HTTPException(400, f"Não foi possível abrir o relatório: {exc}")
         ws = wb[wb.sheetnames[0]]
-        rows = list(ws.iter_rows(values_only=True))
+        from itertools import islice
+        rows = list(islice(ws.iter_rows(values_only=True),50_001))
+        wb.close()
+        if len(rows)>50_000:
+            raise HTTPException(413,"A planilha excede 50 mil linhas. Divida em lotes menores.")
         if not rows: raise HTTPException(400, "Relatório vazio.")
         headers = {norm(v): i for i, v in enumerate(rows[0]) if v is not None}
         aliases = {
@@ -459,7 +494,8 @@ def register_unified_routes(app) -> None:
 
     @app.post("/api/unified/shipments/import-pdf")
     async def import_shipment_pdf(user_id: int, file: UploadFile = File(...)):
-        raw = await file.read(); parsed_doc, items = parse_pdf_items(raw)
+        con=db_connect();require_user(con,user_id,{"admin","supervisor","estocagem","expedicao"});con.close()
+        raw = await read_limited_upload(file); parsed_doc, items = parse_pdf_items(raw)
         con=db_connect();require_user(con,user_id,{"admin","supervisor","estocagem","expedicao"})
         doc=parsed_doc or Path(file.filename or "romaneio").stem
         total=sum(as_int(i["quantity"]) for i in items)
@@ -514,11 +550,12 @@ def register_unified_routes(app) -> None:
         file_cd: UploadFile = File(...),
         file_anapolis: UploadFile | None = File(None),
     ):
-        store_doc, store_items = parse_pdf_items(await file_store.read())
-        cd_doc, cd_items = parse_pdf_items(await file_cd.read())
+        con=db_connect();require_user(con,user_id,{"admin","supervisor","devolucoes"});con.close()
+        store_doc, store_items = parse_pdf_items(await read_limited_upload(file_store))
+        cd_doc, cd_items = parse_pdf_items(await read_limited_upload(file_cd))
         ana_doc, ana_items = ("", [])
         if file_anapolis and file_anapolis.filename:
-            ana_doc, ana_items = parse_pdf_items(await file_anapolis.read())
+            ana_doc, ana_items = parse_pdf_items(await read_limited_upload(file_anapolis))
         by_source = [{i["barcode"]: i for i in source} for source in (store_items, cd_items, ana_items)]
         barcodes = sorted(set().union(*(set(source) for source in by_source)))
         items = []
