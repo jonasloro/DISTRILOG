@@ -147,6 +147,11 @@ async def require_authenticated_session(request: Request, call_next):
         return JSONResponse({"detail": "Sessão revogada. Entre novamente."}, status_code=401)
     request.state.auth_user_id = user_id
     request.state.auth_role = user["role"]
+    # Verificar a identidade até em consultas GET: diversos módulos usam
+    # user_id para autorizar acesso a filas, inspeções e mensagens.
+    # Sem isto um operador autenticado podia pedir dados de outro operador.
+    if any(value != str(user_id) for value in request.query_params.getlist("user_id")):
+        return JSONResponse({"detail": "Identidade da consulta não corresponde à sessão."}, status_code=403)
     if request.method not in ("GET", "HEAD", "OPTIONS"):
         origin = request.headers.get("origin")
         if origin and urlsplit(origin).netloc.lower() != request.headers.get("host", "").lower():
@@ -154,9 +159,6 @@ async def require_authenticated_session(request: Request, call_next):
         # Identificadores de autor enviados pelo cliente nunca podem substituir
         # a identidade da sessão. Para fluxos de supervisão, permissões próprias
         # dos módulos ainda precisam ser verificadas.
-        supplied = request.query_params.get("user_id")
-        if supplied is not None and supplied != str(user_id):
-            return JSONResponse({"detail": "Identidade da operação não corresponde à sessão."}, status_code=403)
         if request.headers.get("content-type", "").startswith("application/json"):
             body = await request.body()
             if body:
