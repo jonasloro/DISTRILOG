@@ -258,21 +258,66 @@ async def claim_all(operation_id: int, request: Request):
     finally: con.close()
 
 
+@router.post("/downstream/{operation_id}/split")
+async def split_downstream_card(operation_id: int, request: Request):
+    p=await request.json(); uid=int(p.get("user_id") or 0)
+    source_worker=int(p.get("source_worker_user_id") or uid); target_worker=int(p.get("target_worker_user_id") or 0)
+    supplied=p.get("items")
+    if not isinstance(supplied,list) or not supplied:
+        raise HTTPException(400,"Informe o que será dividido.")
+    if target_worker<=0 or target_worker==source_worker:
+        raise HTTPException(400,"Selecione outro colaborador para ajudar.")
+    con=db_connect(); con.execute("BEGIN IMMEDIATE")
+    try:
+        op=con.execute("SELECT * FROM downstream_operations WHERE id=?",(operation_id,)).fetchone()
+        if not op: raise HTTPException(404,"Operação não encontrada.")
+        if op["status"]!="ABERTO": raise HTTPException(409,"Esta operação não está aberta.")
+        actor=user(con,uid,op["sector"])
+        if actor["role"]==op["sector"].lower() and source_worker!=uid:
+            raise HTTPException(403,"Você só pode dividir a sua própria execução.")
+        source=con.execute("SELECT * FROM users WHERE id=? AND role=?",(source_worker,op["sector"].lower())).fetchone()
+        target=con.execute("SELECT * FROM users WHERE id=? AND role=?",(target_worker,op["sector"].lower())).fetchone()
+        if not source or not target: raise HTTPException(400,"Os colaboradores precisam pertencer ao setor.")
+        stamp=now(); transferred=0; lines=0
+        for value in supplied:
+            try:
+                assignment_id=int(value.get("assignment_id") or 0); qty=int(value.get("qty") or 0)
+            except (TypeError,ValueError,AttributeError):
+                raise HTTPException(400,"Quantidade inválida na divisão.") from None
+            if qty<=0: continue
+            row=con.execute("""SELECT * FROM downstream_assignments WHERE id=? AND operation_id=?
+              AND worker_user_id=? AND status NOT IN ('LIBERADA','CONCLUIDA')""",
+              (assignment_id,operation_id,source_worker)).fetchone()
+            if not row: raise HTTPException(409,"Uma das linhas não está mais disponível para divisão.")
+            assigned=int(row["assigned_qty"] or 0)
+            if qty>=assigned:
+                raise HTTPException(400,"A quantidade transferida deve ser menor que a quantidade atualmente atribuída nessa linha.")
+            con.execute("UPDATE downstream_assignments SET assigned_qty=assigned_qty-? WHERE id=?",(qty,assignment_id))
+            con.execute("""INSERT INTO downstream_assignments(operation_id,item_id,worker_user_id,assigned_qty,status,timer_state,timer_started_at,created_at)
+              VALUES(?,?,?,?, 'EM_EXECUCAO','EM_ANDAMENTO',?,?)""",
+              (operation_id,row["item_id"],target_worker,qty,stamp,stamp))
+            transferred+=qty; lines+=1
+        if lines<=0: raise HTTPException(400,"Informe ao menos uma quantidade maior que zero para dividir.")
+        history(con,int(op["card_id"]),f"{op['sector']}_CARD_DIVIDIDO",
+                f"{actor['name']} dividiu a execução de {source['name']} com {target['name']}: {transferred} peça(s) em {lines} linha(s).",uid)
+        con.commit(); return {"ok":True,"transferred_qty":transferred,"lines":lines,"target_name":target["name"]}
+    finally: con.close()
+
+
 @router.post("/downstream/{operation_id}/session/{action}")
 async def downstream_session(operation_id: int, action: str, request: Request):
     if action not in {"pause","resume"}: raise HTTPException(404,"Ação de execução inválida.")
-    p=await request.json(); uid=int(p.get("user_id") or 0); con=db_connect(); con.execute("BEGIN")
+    p=await request.json(); uid=int(p.get("user_id") or 0); target_worker=int(p.get("worker_user_id") or uid); con=db_connect(); con.execute("BEGIN")
     try:
         op=con.execute("SELECT * FROM downstream_operations WHERE id=?",(operation_id,)).fetchone()
         if not op: raise HTTPException(404,"Operação não encontrada.")
         actor=user(con,uid,op["sector"]); stamp=now()
-        rows=con.execute("""SELECT * FROM downstream_assignments WHERE operation_id=?
-          AND status NOT IN ('LIBERADA','CONCLUIDA')""",(operation_id,)).fetchall()
-        if not rows: raise HTTPException(409,"Não há execução ativa neste Card.")
+        if actor["role"]==op["sector"].lower(): target_worker=uid
+        rows=con.execute("""SELECT * FROM downstream_assignments WHERE operation_id=? AND worker_user_id=?
+          AND status NOT IN ('LIBERADA','CONCLUIDA')""",(operation_id,target_worker)).fetchall()
+        if not rows: raise HTTPException(409,"Não há execução ativa para este colaborador.")
         changed=0
         for row in rows:
-            if actor["role"]==op["sector"].lower() and int(row["worker_user_id"])!=uid:
-                raise HTTPException(403,"Você controla somente a sua própria execução.")
             state=row["timer_state"]; accum=int(row["accumulated_seconds"] or 0)
             if action=="pause" and state=="EM_ANDAMENTO":
                 if row["timer_started_at"]:
@@ -291,22 +336,22 @@ async def downstream_session(operation_id: int, action: str, request: Request):
 
 @router.post("/downstream/{operation_id}/partial-all")
 async def partial_all(operation_id: int, request: Request):
-    p=await request.json(); uid=int(p.get("user_id") or 0); supplied=p.get("items")
+    p=await request.json(); uid=int(p.get("user_id") or 0); target_worker=int(p.get("worker_user_id") or uid); supplied=p.get("items")
     if not isinstance(supplied,list): raise HTTPException(400,"Informe quanto foi executado em cada linha.")
     con=db_connect(); con.execute("BEGIN")
     try:
         op=con.execute("SELECT * FROM downstream_operations WHERE id=?",(operation_id,)).fetchone()
         if not op: raise HTTPException(404,"Operação não encontrada.")
-        actor=user(con,uid,op["sector"]); rows=con.execute("""SELECT * FROM downstream_assignments
-          WHERE operation_id=? AND status NOT IN ('LIBERADA','CONCLUIDA') ORDER BY id""",(operation_id,)).fetchall()
-        if not rows: raise HTTPException(409,"Não há execução ativa neste Card.")
-        by_item={int(v.get("item_id") or 0):v for v in supplied if isinstance(v,dict)}
+        actor=user(con,uid,op["sector"])
+        if actor["role"]==op["sector"].lower(): target_worker=uid
+        rows=con.execute("""SELECT * FROM downstream_assignments
+          WHERE operation_id=? AND worker_user_id=? AND status NOT IN ('LIBERADA','CONCLUIDA') ORDER BY id""",(operation_id,target_worker)).fetchall()
+        if not rows: raise HTTPException(409,"Não há execução ativa para este colaborador.")
+        by_assignment={int(v.get("assignment_id") or 0):v for v in supplied if isinstance(v,dict)}
         stamp=now(); returned=0; completed=0
         for row in rows:
-            if actor["role"]==op["sector"].lower() and int(row["worker_user_id"])!=uid:
-                raise HTTPException(403,"Você altera somente a sua própria execução.")
-            key=int(row["item_id"] or 0); value=by_item.get(key)
-            if value is None: raise HTTPException(400,"Informe a quantidade executada de todas as linhas ativas.")
+            value=by_assignment.get(int(row["id"]))
+            if value is None: raise HTTPException(400,"Informe a quantidade executada de todas as linhas desta execução.")
             try: qty=int(value.get("completed_qty"))
             except (TypeError,ValueError): raise HTTPException(400,"Quantidade executada inválida.") from None
             assigned=int(row["assigned_qty"] or 0)
