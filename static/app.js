@@ -203,6 +203,22 @@ document.addEventListener("keydown", (event) => {
   }
 });
 
+function closeModal() {
+  const modal = $("modal");
+  if (!modal) return;
+  modal.classList.add("hidden");
+  if ($("modalBody")) $("modalBody").innerHTML = "";
+  currentCardId = null;
+  cardData = null;
+  window.processingTriageCardId = null;
+  window.allocCtx = null;
+  window.positionMapRequestId = (window.positionMapRequestId || 0) + 1;
+}
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !$("modal")?.classList.contains("hidden")) closeModal();
+});
+
 function showQuickHelp() {
   $("modalBody").innerHTML = `<div class="card-title"><div><h2>Ajuda rápida</h2><div class="card-subtitle">DistriLog — fluxo operacional</div></div></div><div class="help-grid"><button onclick="closeModal();goTo('receiving')"><b>Recebimento</b><span>Recebimento físico e tiragem de 10%.</span></button><button onclick="closeModal();goTo('quality')"><b>Qualidade</b><span>Inspeções, amostras e resultados.</span></button><button onclick="closeModal();goTo('storage-hub')"><b>Estocagem</b><span>Fila, mapa, consulta e capacidade.</span></button><button onclick="closeModal();goTo('returns-hub')"><b>Devoluções</b><span>Conferência, pendências e indicadores.</span></button></div>`;
   $("modal").classList.remove("hidden");
