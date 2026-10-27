@@ -18,6 +18,25 @@ async function api(url, options = {}) {
   const response = await fetch(url, { ...options, headers });
   if (!response.ok) {
     const error = await response.json().catch(() => ({ detail: "Erro inesperado." }));
+    // Uma exclusão direta no Supabase revoga imediatamente o acesso.
+    // Não deixar o app exibindo uma sessão que o servidor já recusou.
+    if (response.status === 401 && currentUser && url !== "/api/login" &&
+        url !== "/api/auth/change-password") {
+      currentUser = null;
+      currentCardId = null;
+      cardData = null;
+      currentView = "auth";
+      localStorage.removeItem("cl_recebimento_user");
+      if (typeof stopChatTimer === "function") stopChatTimer();
+      if (cleaningTick) clearInterval(cleaningTick);
+      if (processingFlowTick) clearInterval(processingFlowTick);
+      $("appShell")?.classList.add("hidden");
+      $("passwordChangeScreen")?.classList.add("hidden");
+      $("loginScreen")?.classList.remove("hidden");
+      if ($("loginPassword")) $("loginPassword").value = "";
+      if ($("loginError")) $("loginError").textContent =
+        "Sessão encerrada. Se o perfil foi excluído no Supabase, ele não está mais autorizado.";
+    }
     throw new Error(error.detail || "Erro inesperado.");
   }
   return response.json();
