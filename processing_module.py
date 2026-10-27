@@ -768,10 +768,15 @@ async def processing_timer_action(worker_id: int, action: str, request: Request)
                 ).fetchone()
                 if rec10:
                     keep10 = int(rec10["ten_percent_actual"] if rec10["ten_percent_actual"] is not None else rec10["ten_percent_min"] or 0)
-            if release_card_allocations(worker["card_id"], keep10) >= 0:
-                con.execute("UPDATE cards SET casulo_current=NULL WHERE id=?", (worker["card_id"],))
+            release_card_allocations(worker["card_id"], keep10, con=con)
+            con.execute("UPDATE cards SET casulo_current=NULL WHERE id=?", (worker["card_id"],))
         except Exception as exc:
-            print(f"[aviso] não liberou endereço do card {worker['card_id']}: {exc}")
+            con.rollback()
+            con.close()
+            raise HTTPException(
+                503,
+                "Não foi possível liberar o endereço físico do Card. O início do Processamento foi cancelado.",
+            ) from exc
     add_history(con, worker["card_id"], "TEMPO_PROCESSAMENTO", f"{worker['worker_name']} {verbs[action]} o Processamento.", user_id)
     refresh_processing_card_status(con, worker["processing_id"])
     if action == "finish":
