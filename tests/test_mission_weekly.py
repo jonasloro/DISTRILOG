@@ -84,7 +84,7 @@ def test_before_first_cutoff_is_not_zero_and_missing_source_is_not_zero():
 
 
 def test_month_validation():
-    for invalid in ("2026-13","2026-00","2026-1","not-a-date","2025-12"):
+    for invalid in ("2026-13","2026-00","2026-1","not-a-date","2025-12","2026-05","2026-10"):
         with pytest.raises(Exception):
             mission.mission_weekly(invalid)
 
@@ -118,3 +118,10 @@ def test_api_reads_only_immutable_records(monkeypatch):
     assert row["backlog"]==240
     assert row["produced"] is None
     assert response["timezone"]=="America/Sao_Paulo"
+
+
+def test_automatic_period_starts_november_and_excludes_october():
+    assert mission.AUTOMATIC_START_MONTH == "2026-11"
+    assert mission.AUTOMATIC_START_WEEK == date(2026, 11, 2)
+    assert mission.mondays_in_month(2026, 11)[0] == mission.AUTOMATIC_START_WEEK
+    assert mission.deadlines(mission.AUTOMATIC_START_WEEK)["BACKLOG"].hour == 8
