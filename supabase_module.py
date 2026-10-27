@@ -129,7 +129,7 @@ def verificar_login_supabase(usuario: str, senha_texto_puro: str) -> dict | None
     with pg_connect() as con:
         with con.cursor() as cur:
             cur.execute(
-                "SELECT usuario, senha_hash, papel, must_change_password FROM usuarios WHERE usuario=%s",
+                "SELECT usuario, senha_hash, papel, must_change_password, idioma_preferido FROM usuarios WHERE usuario=%s",
                 (usuario,),
             )
             linha = cur.fetchone()
@@ -137,7 +137,7 @@ def verificar_login_supabase(usuario: str, senha_texto_puro: str) -> dict | None
         return None
     if not verificar_senha(senha_texto_puro, linha["senha_hash"]):
         return None
-    return {"usuario": linha["usuario"], "papel": linha["papel"], "must_change_password": bool(linha["must_change_password"])}
+    return {"usuario": linha["usuario"], "papel": linha["papel"], "must_change_password": bool(linha["must_change_password"]), "language": linha["idioma_preferido"]}
 
 
 def criar_usuario_supabase(usuario: str, senha_texto_puro: str, papel: str) -> None:
@@ -167,6 +167,8 @@ def seed_usuarios_supabase(usuarios_padrao: list[tuple[str, str, str]]) -> None:
                    )"""
             )
             cur.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN NOT NULL DEFAULT TRUE")
+            cur.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS idioma_preferido TEXT NOT NULL DEFAULT 'pt-BR'")
+            cur.execute("UPDATE usuarios SET idioma_preferido='pt-BR' WHERE idioma_preferido NOT IN ('pt-BR','es')")
             for usuario, senha_texto_puro, papel in usuarios_padrao:
                 senha_hash = gerar_hash_senha(senha_texto_puro)
                 cur.execute(
