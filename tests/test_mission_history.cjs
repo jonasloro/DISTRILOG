@@ -11,6 +11,7 @@ const staticFile = name =>
 
 const historyCode = staticFile('mission_history_2026.js');
 const appCode = staticFile('mission.js');
+const localeCode = staticFile('i18n.js');
 const history = vm.runInNewContext(
   historyCode + ';JSON.parse(JSON.stringify(MISSAO_HISTORICO_2026))',
   {JSON}
@@ -65,7 +66,7 @@ test('monthly dashboard builds the complete backlog matrix, not just bars', () =
       setPage: () => {},
     };
     vm.runInNewContext(
-      historyCode + '\n' + appCode +
+      localeCode + '\n' + historyCode + '\n' + appCode +
       '\nmissionSelectedMonth=' + month + ';showMissionHistorical();',
       sandbox,
     );
