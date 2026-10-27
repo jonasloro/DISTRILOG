@@ -300,7 +300,12 @@ async def timer(assignment_id: int, action: str, request: Request):
     elif action=="pause" and state=="EM_ANDAMENTO": new="PAUSADA"
     elif action=="finish" and state in {"EM_ANDAMENTO","PAUSADA"}: new="FINALIZADA"
     else: con.close(); raise HTTPException(400,"Ação incompatível com o estado atual.")
-    con.execute("UPDATE downstream_assignments SET timer_state=?,timer_started_at=?,accumulated_seconds=?,status=? WHERE id=?",(new,stamp if new=="EM_ANDAMENTO" else None,accum,"CONCLUIDA" if new=="FINALIZADA" else "EM_EXECUCAO",assignment_id))
+    if new=="FINALIZADA":
+        con.execute("""UPDATE downstream_assignments SET timer_state=?,timer_started_at=NULL,accumulated_seconds=?,
+          status='CONCLUIDA',completed_qty=assigned_qty,completed_at=? WHERE id=?""",(new,accum,stamp,assignment_id))
+    else:
+        con.execute("UPDATE downstream_assignments SET timer_state=?,timer_started_at=?,accumulated_seconds=?,status='EM_EXECUCAO' WHERE id=?",
+                    (new,stamp if new=="EM_ANDAMENTO" else None,accum,assignment_id))
     con.commit(); con.close(); return {"timer_state":new,"elapsed_seconds":accum}
 
 
