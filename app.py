@@ -83,6 +83,7 @@ STATUS_LABELS = {
     "AGUARDANDO_TRIAGEM": "Aguardando Triagem",
     "AGUARDANDO_ETIQUETAGEM": "Aguardando Etiquetagem",
     "AGUARDANDO_ESTOCAGEM": "Aguardando Estocagem",
+    "AGUARDANDO_ENTRADA": "Aguardando Entrada no Processamento",
     "FINALIZADO": "Finalizado",
     "ORIGEM_FORNECEDOR": "No fornecedor",
     "ORIGEM_TRANSITO": "Em trânsito",
