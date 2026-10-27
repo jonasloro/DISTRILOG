@@ -2866,32 +2866,32 @@ function referenceSecondaryLabel(item){
 }
 
 function renderAllocationItemPicker(){
-  const ctx=window.allocCtx;
-  const unit=ctx&&["ET","EC"].includes(ctx.setor)?"caixas pretas":"volumes";
-  const box=$("positionItemPicker");
-  if(!ctx || !box) return;
+  const ctx=window.allocCtx,box=$("positionItemPicker");
+  if(!ctx||!box)return;
   const items=allocationItemRows();
-
-  if(!items.length){
-    box.innerHTML='<div class="position-empty">Nenhuma referência disponível para este Recebimento.</div>';
+  if(!items.length){box.innerHTML='<div class="position-empty">Nenhuma referência disponível.</div>';return;}
+  if(["ET","EC"].includes(ctx.setor)){
+    const colors=[...new Map(items.map(i=>[String(i.color||"SEM COR").trim()||"SEM COR",i])).entries()];
+    box.innerHTML=colors.map(([color,item])=>{
+      const selected=String(ctx.selectedColor||"")===color;
+      const sizes=items.filter(i=>(String(i.color||"SEM COR").trim()||"SEM COR")===color).map(i=>i.size).filter(Boolean);
+      return '<button type="button" class="allocation-item-card '+(selected?'is-selected ':'')+'" onclick="selectAllocationColor(\''+esc(color)+'\')"><div class="allocation-item-main"><span class="allocation-item-ref">'+esc(color)+'</span><small>'+esc(referenceLabel(item))+' · '+esc(sizes.join(", ")||"grade completa")+'</small></div><div class="allocation-item-numbers"><b>'+sizes.length+'</b><span>tamanho(s)</span></div></button>';
+    }).join("");
     return;
   }
-
   box.innerHTML=items.map(function(item){
-    const allocated=globalItemAllocatedQty(item.id);
-    const selected=Number(ctx.selectedItemId)===Number(item.id);
-    return '<button type="button" class="allocation-item-card ' + (selected?'is-selected ':'') +
-      '" onclick="selectAllocationItem(' + Number(item.id) + ')">' +
-        '<div class="allocation-item-main">' +
-          '<span class="allocation-item-ref">' + esc(referenceLabel(item)) + '</span>' +
-          '<small>'+esc(referenceSecondaryLabel(item) || "Sem detalhe")+'</small>' +
-        '</div>' +
-        '<div class="allocation-item-numbers">' +
-          '<b>'+allocated.toLocaleString("pt-BR")+'</b><span>'+unit+' alocados</span>' +
-          '<b>'+Number(item.expected_qty||0).toLocaleString("pt-BR")+'</b><span>peças da referência</span>' +
-        '</div>' +
-      '</button>';
+    const allocated=globalItemAllocatedQty(item.id),selected=Number(ctx.selectedItemId)===Number(item.id);
+    return '<button type="button" class="allocation-item-card '+(selected?'is-selected ':'')+'" onclick="selectAllocationItem('+Number(item.id)+')"><div class="allocation-item-main"><span class="allocation-item-ref">'+esc(referenceLabel(item))+'</span><small>'+esc(referenceSecondaryLabel(item)||"Sem detalhe")+'</small></div><div class="allocation-item-numbers"><b>'+allocated.toLocaleString("pt-BR")+'</b><span>volumes alocados</span><b>'+Number(item.expected_qty||0).toLocaleString("pt-BR")+'</b><span>peças da referência</span></div></button>';
   }).join("");
+}
+
+function selectAllocationColor(color){
+  const ctx=window.allocCtx;if(!ctx)return;
+  const item=allocationItemRows().find(i=>(String(i.color||"SEM COR").trim()||"SEM COR")===color);
+  if(!item)return;
+  ctx.selectedColor=color;ctx.selectedItemId=Number(item.id);
+  if($("positionSelectedItemLabel"))$("positionSelectedItemLabel").textContent=color+" · "+referenceLabel(item);
+  renderAllocationItemPicker();renderPositionMap();updateReferenceRemaining();updateAllocHint();
 }
 
 function positionCardQty(address){
@@ -3116,6 +3116,7 @@ async function loadPositionAllocator(cardId,setor,tenPercentSample=false,tenPerc
     remaining:isTenPercentSample?Math.max(0,sourceTotal-sampleAllocated):Math.max(0,sourceTotal-scopedAllocated),
     positions:positions,status:status,suggestion:suggestion,
     selectedItemId:isVolumeOnly?0:Number(firstAvailable?.id||firstAllocated?.item_id||0),
+    selectedColor:isPieceSector?String(firstAvailable?.color||"SEM COR").trim()||"SEM COR":"",
     selectedAddress:suggestion?.address||firstAllocated?.posicoes?.[0]?.address||"",
     posFilter:"ALL",zoneFilter:"ALL",search:""
   };
@@ -3305,7 +3306,7 @@ async function submitAllocation(cardId,setor){
       method:"POST",body:JSON.stringify({
         setor:setor,responsavel:currentUser?.name,receiving_id:cardData?.receiving?.id||null,
         allocation_purpose:isTenPercentSample?"TEN_PERCENT_SAMPLE":null,
-        allocations:[{item_id:isVolumeOnly?null:Number(item.id),address:address,quantidade:isPieceSector?Math.max(1,itemRemainingQty(item)):qty,box_count:isPieceSector?qty:0}]
+        allocations:[isPieceSector?{color:ctx.selectedColor||String(item.color||"SEM COR").trim()||"SEM COR",address:address,quantidade:1,box_count:qty}:{item_id:isVolumeOnly?null:Number(item.id),address:address,quantidade:qty,box_count:0}]
       })
     });
     ctx.status=result;
@@ -3326,7 +3327,7 @@ async function submitAllocation(cardId,setor){
     $("posQty").value="";
     if($("positionAllocatedTotal"))$("positionAllocatedTotal").textContent=Number(isPieceSector?scopedNow:result.global_total_alocado||0).toLocaleString("pt-BR");
     if($("positionUsedCount"))$("positionUsedCount").textContent=String(result.posicoes?.length||0);
-    toast((isVolumeOnlyRM?"Volumes":"Referência "+referenceLabel(item))+" alocados em "+address+" com "+qty.toLocaleString("pt-BR")+" "+unit+".");
+    toast((isVolumeOnlyRM?"Volumes":(isPieceSector?"Cor "+(ctx.selectedColor||item.color):"Referência "+referenceLabel(item)))+" alocados em "+address+" com "+qty.toLocaleString("pt-BR")+" "+unit+".");
     renderAllocationItemPicker();renderCurrentItemAllocations();updateReferenceRemaining();renderPositionMap();
   }catch(e){toast(e.message);}
 }
