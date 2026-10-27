@@ -131,7 +131,7 @@ def elapsed(row: db.Row) -> int:
     return seconds
 
 
-def downstream_card_data(con: "db.Connection", card_id: int, sector: str) -> dict[str, Any] | None:
+def downstream_card_data(con: "db.Connection", card_id: int, sector: str, reveal_expected: bool = False) -> dict[str, Any] | None:
     op = con.execute("SELECT * FROM downstream_operations WHERE card_id=? AND sector=?", (card_id, sector)).fetchone()
     card = con.execute("SELECT purchase_mode FROM cards WHERE id=?", (card_id,)).fetchone()
     if not card:
@@ -158,9 +158,16 @@ def downstream_card_data(con: "db.Connection", card_id: int, sector: str) -> dic
     expected = sum(int(i["expected_qty"] or 0) for i in items)
     assigned = sum(int(a["completed_qty"] if a["status"]=="LIBERADA" else a["assigned_qty"] or 0) for a in assignments)
     completed = sum(int(a["completed_qty"] or 0) for a in assignments)
+    has_pending = any(int(i["completed_qty"] or 0) < int(i["expected_qty"] or 0) for i in items)
     result = dict(op)
-    result.update({"items": items, "assignments": assignments,
+    result.update({"items": items, "assignments": assignments, "has_pending": has_pending,
                    "totals": {"expected": expected, "assigned": assigned, "completed": completed, "available": max(0, expected-assigned)}})
+    if not reveal_expected:
+        for item in result["items"]:
+            item.pop("expected_qty",None); item.pop("assigned_qty",None); item.pop("completed_qty",None)
+        for assignment in result["assignments"]:
+            assignment.pop("assigned_qty",None); assignment.pop("completed_qty",None)
+        result["totals"] = {}
     return result
 
 
@@ -518,7 +525,7 @@ async def complete(operation_id: int, request: Request):
     p=await request.json(); uid=int(p.get("user_id") or 0); con=db_connect(); op=con.execute("SELECT * FROM downstream_operations WHERE id=?",(operation_id,)).fetchone()
     if not op: con.close(); raise HTTPException(404,"Operação não encontrada.")
     if op["status"]!="ABERTO": con.close(); raise HTTPException(409,"Esta operação já foi concluída.")
-    actor=user(con,uid,op["sector"]); data=downstream_card_data(con,op["card_id"],op["sector"])
+    actor=user(con,uid,op["sector"]); data=downstream_card_data(con,op["card_id"],op["sector"],True)
     expected_map=_operation_expected_by_item(con,op)
     item_ids=list(expected_map)
     if not item_ids: con.close(); raise HTTPException(400,f"A {op['sector'].title()} não possui itens para conferir.")
