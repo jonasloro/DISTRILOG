@@ -2320,19 +2320,6 @@ function downstreamWorkerSelect(sector){
   if([sector.toLowerCase()].includes(currentUser.role)) return `<input type="hidden" id="downstreamWorker" value="${currentUser.id}"><div class="selected-inspector"><span>Colaborador</span><b>${esc(currentUser.name)}</b></div>`;
   return `<div class="field"><label>Colaborador</label><select id="downstreamWorker"><option value="">Selecione</option>${downstreamUsers[sector].map(u=>`<option value="${u.id}">${esc(u.name)}</option>`).join("")}</select></div>`;
 }
-function downstreamGradePicker(op,sector){
-  const activeIds=new Set((op.assignments||[]).filter(a=>a.status!=="LIBERADA").map(a=>Number(a.item_id)));
-  const free=(op.items||[]).filter(i=>!activeIds.has(Number(i.item_id)) && Number(i.completed_qty||0)<Number(i.expected_qty||0));
-  return `<h3 class="section-heading">Assumir próximo tamanho</h3><div class="downstream-picker">${downstreamWorkerSelect(sector)}<div class="queue-search"><span>⌕</span><input id="downstreamSizeSearch" placeholder="Produto, cor ou tamanho" oninput="filterDownstreamSizes()"></div></div>
-    <div class="table-wrap compact-picker"><table class="compact-table"><thead><tr><th>Produto</th><th>Cor</th><th>Tamanho</th><th></th></tr></thead><tbody>${free.map(i=>`<tr class="downstream-size-row" data-search="${esc([i.product,i.reference,i.color,i.size].join(' ').toLowerCase())}"><td><b>${esc(i.product||'—')}</b><small>${esc(i.reference||i.sku||'—')}</small></td><td>${esc(i.color||'—')}</td><td><span class="size-token">${esc(i.size||'—')}</span></td><td><button class="primary small-btn" onclick="claimDownstream(${op.id},'${sector}',${i.item_id},1)">Assumir tamanho</button></td></tr>`).join("")||'<tr><td colspan="4">Nenhum tamanho disponível para assumir.</td></tr>'}</tbody></table></div>`;
-}
-function downstreamSaldoPicker(op,sector){return `<h3 class="section-heading">Assumir quantidade do Saldo</h3><div class="downstream-picker saldo-picker">${downstreamWorkerSelect(sector)}<div class="field"><label>Quantidade disponível: ${op.totals.available}</label><input id="downstreamSaldoQty" type="number" min="1" max="${op.totals.available}" placeholder="Quantidade"></div><button class="primary" onclick="claimDownstream(${op.id},'${sector}',null,Number($(\"downstreamSaldoQty\").value||0))">Assumir quantidade</button></div>`;}
-function filterDownstreamSizes(){const t=normalizeSearch($("downstreamSizeSearch")?.value||"");document.querySelectorAll(".downstream-size-row").forEach(r=>r.classList.toggle("hidden",t&&!normalizeSearch(r.dataset.search).includes(t)));}
-function downstreamAssignmentHtml(a,sector,allowed){
-  const own=a.worker_user_id===currentUser.id||["supervisor","admin"].includes(currentUser.role);
-  const released=a.status==="LIBERADA";
-  return `<div class="assignment-strip"><div><b>${esc(a.product||"Saldo geral")}</b><small>${a.item_id?`${esc(a.color||'—')} • Tam. ${esc(a.size||'—')}`:"Controle por quantidade"}</small></div><div><span>Colaborador</span><b>${esc(a.worker_name)}</b></div><div><span>Status</span><b>${released?"Parcial encerrado":"Em execução"}</b></div><div><span>Tempo</span><b>${fmtSeconds(a.elapsed_seconds)}</b><small>${esc(a.timer_state)}</small></div><div class="actions">${allowed&&own&&!released?`${a.timer_state==="NAO_INICIADA"?`<button class="primary small-btn" onclick="downstreamTimer(${a.id},'start','${sector}')">Iniciar</button>`:""}${a.timer_state==="EM_ANDAMENTO"?`<button class="warning small-btn" onclick="downstreamTimer(${a.id},'pause','${sector}')">Pausar</button><button class="secondary small-btn" onclick="partialDownstreamAssignment(${a.id},'${sector}')">Não terminei de executar tudo</button><button class="success small-btn" onclick="downstreamTimer(${a.id},'finish','${sector}')">Finalizar</button>`:""}${a.timer_state==="PAUSADA"?`<button class="primary small-btn" onclick="downstreamTimer(${a.id},'resume','${sector}')">Retomar</button><button class="secondary small-btn" onclick="partialDownstreamAssignment(${a.id},'${sector}')">Não terminei de executar tudo</button><button class="success small-btn" onclick="downstreamTimer(${a.id},'finish','${sector}')">Finalizar</button>`:""}`:""}</div></div>`;
-}
 async function claimDownstreamCard(opId,sector){
   try{
     const worker=Number($("downstreamWorker")?.value||0);
@@ -2372,20 +2359,6 @@ async function submitDownstreamPartialAll(opId,sector){
 }
 
 async function startDownstream(sector){try{const labelingType=sector==="ETIQUETAGEM"?($("labelingType")?.value||""):"";if(sector==="ETIQUETAGEM"&&!labelingType)throw new Error("Selecione o tipo de etiquetagem.");const worker=Number($("downstreamWorker")?.value||0);if(!worker)throw new Error("Selecione o colaborador.");const op=await api(`/api/cards/${currentCardId}/downstream/${sector}`,{method:"POST",body:JSON.stringify({user_id:currentUser.id,labeling_type:labelingType})});await api("/api/downstream/"+op.id+"/claim-all",{method:"POST",body:JSON.stringify({user_id:currentUser.id,worker_user_id:worker})});toast("Card assumido e execução iniciada.");await openCard(currentCardId,sector==="ETIQUETAGEM"?"labeling":"storage");}catch(e){toast(e.message)}}
-async function claimDownstream(opId,sector,itemId,qty){try{const worker=Number($("downstreamWorker")?.value||0);if(!worker)throw new Error("Selecione o colaborador.");await api(`/api/downstream/${opId}/claim`,{method:"POST",body:JSON.stringify({user_id:currentUser.id,worker_user_id:worker,item_id:itemId,qty})});toast("Material assumido.");await openCard(currentCardId,sector==="ETIQUETAGEM"?"labeling":"storage");}catch(e){toast(e.message)}}
-async function saveDownstreamResult(id,sector){try{await api(`/api/downstream/assignments/${id}`,{method:"PATCH",body:JSON.stringify({user_id:currentUser.id,completed_qty:Number($(`downstreamDone_${id}`).value||0)})});toast("Quantidade salva.");await openCard(currentCardId,sector==="ETIQUETAGEM"?"labeling":"storage");}catch(e){toast(e.message)}}
-async function partialDownstreamAssignment(id,sector){
-  try{
-    const raw=prompt("Quanto você conseguiu executar?");
-    if(raw===null)return;
-    const qty=Number(raw);
-    if(!Number.isSafeInteger(qty)||qty<0)throw new Error("Informe uma quantidade inteira válida.");
-    const result=await api("/api/downstream/assignments/"+id+"/partial",{method:"POST",body:JSON.stringify({user_id:currentUser.id,completed_qty:qty})});
-    toast("Parcial registrado. "+Number(result.returned_qty||0)+" peça(s) voltaram para o saldo da grade.");
-    await openCard(currentCardId,sector==="ETIQUETAGEM"?"labeling":"storage");
-  }catch(e){toast(e.message);}
-}
-async function downstreamTimer(id,action,sector){try{await api(`/api/downstream/assignments/${id}/timer/${action}`,{method:"POST",body:JSON.stringify({user_id:currentUser.id})});await openCard(currentCardId,sector==="ETIQUETAGEM"?"labeling":"storage");}catch(e){toast(e.message)}}
 function openStorageBlindCheck(opId){
   const op=cardData.storage;
   if(!op?.items?.length){toast("Não há itens para conferir.");return;}
