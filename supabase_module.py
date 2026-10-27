@@ -173,7 +173,7 @@ def seed_usuarios_supabase(usuarios_padrao: list[tuple[str, str, str]]) -> None:
 ALLOWED_ROLES = frozenset({"admin","supervisor","consulta","recebimento","qualidade","processamento","etiquetagem","estocagem","planejamento","expedicao","devolucoes"})
 
 def validate_new_password(password: str) -> None:
-    if not isinstance(password, str) or len(password) < 12 or len(password) > 128 or not re.search(r"[A-Za-z]", password) or not re.search(r"\\d", password):
+    if not isinstance(password, str) or len(password) < 12 or len(password) > 128 or not re.search(r"[A-Za-z]", password) or not re.search(r"\d", password):
         raise ValueError("A senha deve ter de 12 a 128 caracteres, incluindo letras e números.")
 
 def change_password_supabase(username: str, current_password: str, new_password: str) -> None:
