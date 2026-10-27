@@ -29,6 +29,7 @@ from production_module import init_production_db, register_production_routes
 from processing_module import ensure_worker_function_column
 from goat_module import init_goat_db, register_goat_routes
 from positions_module import init_positions_db, register_positions_routes, total_allocated, item_allocation_totals
+from wms_inventory_module import init_inventory_db, register_inventory_routes
 from collab_module import init_collab_db, register_collab_routes
 from unified_module import init_unified_db, register_unified_routes
 from cleaning_module import init_cleaning_db, register_cleaning_routes
@@ -1353,6 +1354,7 @@ def startup() -> None:
     init_production_db()
     init_goat_db()
     init_positions_db()
+    init_inventory_db()
     init_collab_db()
     init_unified_db()
     init_cleaning_db()
@@ -1534,7 +1536,7 @@ def protected_upload(filename: str, request: Request):
         con.close()
     if not user or session[1] <= int(user["session_revoked_after_ns"] or 0):
         raise HTTPException(401, "Sessão expirada.")
-    if not re.fullmatch(r"[0-9]{8}_[0-9]{6}_[0-9a-f]{8}\\.(?:jpg|jpeg|png|webp|gif|bmp|pdf)", filename):
+    if not re.fullmatch(r"[0-9]{8}_[0-9]{6}_[0-9a-f]{8}\.(?:jpg|jpeg|png|webp|gif|bmp|pdf)", filename):
         raise HTTPException(404, "Arquivo não encontrado.")
     path = UPLOAD_DIR / filename
     if not path.is_file():
@@ -2733,6 +2735,7 @@ register_downstream_routes(app)
 register_production_routes(app)
 register_goat_routes(app)
 register_positions_routes(app)
+register_inventory_routes(app)
 register_unified_routes(app)
 register_cleaning_routes(app)
 register_collab_routes(app)
