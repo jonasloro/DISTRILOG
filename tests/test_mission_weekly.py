@@ -106,7 +106,7 @@ def test_api_reads_only_immutable_records(monkeypatch):
                 ])
             return Result([
                 {"week_start":week,"snapshot_kind":"BACKLOG",
-                 "sector":"QUALIDADE 1","pieces":240}
+                 "sector":"QUALIDADE 1","pieces":240, "source_label":"Cards abertos do setor · peças dos itens"}
             ])
         def close(self):self.closed=True
     con = Connection()
