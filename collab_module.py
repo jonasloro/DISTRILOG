@@ -52,21 +52,26 @@ class _Db:
         return sql.replace("?", "%s")
 
     def rows(self, sql: str, params: tuple = ()) -> list[dict[str, Any]]:
-        cur = self.con.cursor()
-        cur.execute(self._sql(sql), params)
-        return [dict(r) for r in cur.fetchall()]
+        with self.con.cursor() as cur:
+            cur.execute(self._sql(sql), params)
+            return [dict(r) for r in cur.fetchall()]
 
     def one(self, sql: str, params: tuple = ()) -> dict[str, Any] | None:
         r = self.rows(sql, params)
         return r[0] if r else None
 
     def run(self, sql: str, params: tuple = ()) -> int:
-        cur = self.con.cursor()
-        if sql.lstrip().upper().startswith("INSERT"):
-            cur.execute(self._sql(sql) + " RETURNING id", params)
-            return int(cur.fetchone()["id"])
-        cur.execute(self._sql(sql), params)
-        return 0
+        """Only queries that explicitly request RETURNING id fetch an ID.
+
+        The chat_reads table has a composite PK and no id column. Previously
+        all INSERTs automatically gained RETURNING id, breaking chat loading.
+        """
+        with self.con.cursor() as cur:
+            cur.execute(self._sql(sql), params)
+            if "RETURNING id" in sql.upper():
+                row = cur.fetchone()
+                return int(row["id"])
+            return int(cur.rowcount or 0)
 
 
 def init_collab_db() -> None:
@@ -135,10 +140,13 @@ def chat_messages(user_id: int, channel: str = "geral", after_id: int = 0) -> li
         rows.reverse()
         if rows:
             last = rows[-1]["id"]
-            if db.one("SELECT 1 x FROM chat_reads WHERE user_id=? AND channel=?", (user_id, ch)):
-                db.run("UPDATE chat_reads SET last_id=? WHERE user_id=? AND channel=? AND last_id<?", (last, user_id, ch, last))
-            else:
-                db.run("INSERT INTO chat_reads(user_id,channel,last_id) VALUES(?,?,?)", (user_id, ch, last))
+            db.run(
+                """INSERT INTO chat_reads(user_id,channel,last_id)
+                   VALUES(?,?,?)
+                   ON CONFLICT(user_id,channel)
+                   DO UPDATE SET last_id=GREATEST(chat_reads.last_id,EXCLUDED.last_id)""",
+                (user_id, ch, last),
+            )
     return rows
 
 
@@ -154,7 +162,7 @@ def chat_send(payload: dict[str, Any]) -> dict[str, Any]:
     ch = _channel(uid, str(payload.get("channel") or "geral"))
     with _Db() as db:
         mid = db.run(
-            "INSERT INTO chat_messages(channel,sender_id,sender_name,body,created_at) VALUES(?,?,?,?,?)",
+            "INSERT INTO chat_messages(channel,sender_id,sender_name,body,created_at) VALUES(?,?,?,?,?) RETURNING id",
             (ch, uid, name, body, _now()),
         )
     return {"ok": True, "id": mid}
@@ -228,7 +236,7 @@ def calendar_create(payload: dict[str, Any]) -> dict[str, Any]:
     with _Db() as db:
         eid = db.run(
             """INSERT INTO calendar_events(title,description,start_at,end_at,all_day,kind,created_by,created_by_name,attendees,created_at)
-               VALUES(?,?,?,?,?,?,?,?,?,?)""",
+               VALUES(?,?,?,?,?,?,?,?,?,?) RETURNING id""",
             (f["title"], f["description"], f["start_at"], f["end_at"], f["all_day"], f["kind"], uid, name, f["attendees"], _now()),
         )
     return {"ok": True, "id": eid}
