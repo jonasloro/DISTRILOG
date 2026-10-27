@@ -3127,7 +3127,7 @@ async function loadPositionAllocator(cardId,setor,tenPercentSample=false,tenPerc
       '<div class="position-allocator-head">' +
         '<div><div class="position-kicker">ENDEREÇAMENTO FÍSICO</div>' +
           '<h3>'+(isTenPercentSample?"Alocar os 10% na Qualidade":({RM:"Alocar no Recebimento",QA:"Alocar na Qualidade",PR:"Alocar no Processamento",ET:"Alocar na Etiquetagem",EC:"Alocar na Estocagem"}[setor]||("Alocar no "+setor)))+'</h3>' +
-          '<p>'+(isTenPercentSample?"Etapa obrigatória: enderece exatamente "+Number(tenPercentTarget).toLocaleString("pt-BR")+" volume(s) da amostra em endereços da QA antes de liberar o RM.":(isVolumeOnlyRM?"No RM, a alocação é exclusivamente por volumes, sem divisão por produto, cor ou tamanho.":("Escolha primeiro a referência, depois a posição. O controle é feito em "+(isPieceSector?"peças":"volumes")+" da referência.")))+'</p>' +
+          '<p>'+(isTenPercentSample?"Etapa obrigatória: enderece exatamente "+Number(tenPercentTarget).toLocaleString("pt-BR")+" volume(s) da amostra em endereços da QA antes de liberar o RM.":(isVolumeOnlyRM?"No RM, a alocação é exclusivamente por volumes, sem divisão por produto, cor ou tamanho.":(isPieceSector?"Selecione a cor e o casulo; informe quantas caixas pretas físicas deixou. A conferência de peças é independente.":"Escolha primeiro a referência, depois a posição. O controle é feito em volumes da referência.")))+'</p>' +
           (isTenPercentSample ? '<div class="position-dest"><b>Destino fixo: Qualidade (QA)</b><small>Os 10% são endereçados primeiro; o saldo global restante continua compartilhado entre RM, QA e PR.</small></div>' :
           fixedDestination ? '<div class="position-dest"><b>Destino fixo: '+esc(setor==="ET"?"Etiquetagem (ET)":"Estocagem (EC)")+'</b><small>Este fechamento não permite alterar o setor de destino.</small></div>' :
           '<div class="position-dest"><label for="positionDestSetor">Destino</label>' +
@@ -3153,12 +3153,12 @@ async function loadPositionAllocator(cardId,setor,tenPercentSample=false,tenPerc
 
       '<div class="position-stat-grid">' +
         '<div class="position-stat"><span>'+(isTenPercentSample?"10% endereçados na QA":"Total alocado")+'</span><strong id="positionAllocatedTotal">'+Number(isTenPercentSample?sampleAllocated:(isPieceSector?scopedAllocated:status.global_total_alocado||0)).toLocaleString("pt-BR")+
-          '</strong><small>'+(isTenPercentSample?"de "+Number(tenPercentTarget).toLocaleString("pt-BR")+" volume(s) obrigatórios":(isPieceSector?"peças alocadas em "+setor:"volumes globais · RM "+Number(status.global_por_setor?.RM||0).toLocaleString("pt-BR")+
+          '</strong><small>'+(isTenPercentSample?"de "+Number(tenPercentTarget).toLocaleString("pt-BR")+" volume(s) obrigatórios":(isPieceSector?"peças endereçadas (não são caixas) em "+setor:"volumes globais · RM "+Number(status.global_por_setor?.RM||0).toLocaleString("pt-BR")+
           ' · QA '+Number(status.global_por_setor?.QA||0).toLocaleString("pt-BR")+
           ' · PR '+Number(status.global_por_setor?.PR||0).toLocaleString("pt-BR")) )+'</small></div>' +
         '<div class="position-stat"><span>Posições usadas</span><strong id="positionUsedCount">'+(status.posicoes?.length||0)+
           '</strong><small>endereços</small></div>' +
-        '<div class="position-stat"><span>'+(isTenPercentSample?"Restante dos 10%":(isVolumeOnlyRM?"Saldo global do Card":"Saldo da referência"))+'</span><strong id="positionReferenceRemainingStat">—</strong><small>'+(isPieceSector?"peças restantes":(isTenPercentSample?"volume(s) que ainda precisam de endereço":(isVolumeOnlyRM?"volumes restantes no Card":"volumes restantes")))+'</small></div>' +
+        '<div class="position-stat"><span>'+(isTenPercentSample?"Restante dos 10%":(isVolumeOnlyRM?"Saldo global do Card":"Saldo da referência"))+'</span><strong id="positionReferenceRemainingStat">—</strong><small>'+(isPieceSector?"peças da grade restantes":(isTenPercentSample?"volume(s) que ainda precisam de endereço":(isVolumeOnlyRM?"volumes restantes no Card":"volumes restantes")))+'</small></div>' +
       '</div>' +
 
       '<div class="position-controls">' +
@@ -3232,9 +3232,11 @@ function updateReferenceRemaining(){
   const item=selectedAllocationItem();
   if(!item)return;
   const allocated=globalItemAllocatedQty(item.id),remaining=itemRemainingQty(item);
-  const unit=["ET","EC"].includes(ctx.setor)?"caixas pretas":"volumes";
+  const isBoxes=["ET","EC"].includes(ctx.setor);
   if($("positionReferenceRemainingStat"))$("positionReferenceRemainingStat").textContent=remaining.toLocaleString("pt-BR");
-  if($("positionReferenceRemainingLabel"))$("positionReferenceRemainingLabel").textContent=allocated.toLocaleString("pt-BR")+" "+unit+(unit==="peças"?" alocadas neste setor":" alocados globalmente");
+  if($("positionReferenceRemainingLabel"))$("positionReferenceRemainingLabel").textContent=isBoxes
+    ? "Saldo de peças: "+remaining.toLocaleString("pt-BR")+" · Caixas pretas: informar separadamente por cor e casulo"
+    : allocated.toLocaleString("pt-BR")+" volumes alocados globalmente";
   if($("positionSelectedItemLabel"))$("positionSelectedItemLabel").textContent=referenceDetailLabel(item);
 }
 
@@ -3262,10 +3264,10 @@ function renderCurrentItemAllocations(){
   box.innerHTML=rows.map(function(row){
     return '<div class="reference-allocation-summary">' +
       '<div><b>'+esc(referenceDetailLabel(row))+'</b><small>'+(row.product?esc(row.product):"")+'</small></div>' +
-      '<strong>'+Number(row.total_alocado||0).toLocaleString("pt-BR")+' '+unit+'</strong>' +
+      '<strong>'+Number(["ET","EC"].includes(ctx.setor)?(row.posicoes||[]).reduce((n,p)=>n+Number(p.box_count||0),0):row.total_alocado||0).toLocaleString("pt-BR")+' '+unit+'</strong>' +
       '<div class="reference-allocation-addresses">'+(row.posicoes||[]).map(function(p){
         return '<button type="button" onclick="selectAllocationItem('+Number(row.item_id)+');selectAllocationPosition(\''+esc(p.address)+'\')">'+
-          esc(p.address)+' · '+Number(p.quantidade||0).toLocaleString("pt-BR")+' '+unit+'</button>';
+          esc(p.address)+' · '+Number(["ET","EC"].includes(ctx.setor)?p.box_count:p.quantidade||0).toLocaleString("pt-BR")+' '+unit+'</button>';
       }).join("")+'</div>' +
     '</div>';
   }).join("");
@@ -3283,7 +3285,11 @@ function updateAllocHint(){
   }
   const item=selectedAllocationItem();
   if(!item)return;
-  el.textContent=(unit==="peças"?"Peças restantes nesta referência: ":"Volumes restantes no Card: ")+Number(ctx.remaining||0).toLocaleString("pt-BR");
+  if(["ET","EC"].includes(ctx.setor)){
+    el.textContent="Informe somente as caixas pretas físicas desta cor neste casulo. A quantidade conferida em peças é independente.";
+    return;
+  }
+  el.textContent="Volumes restantes no Card: "+Number(ctx.remaining||0).toLocaleString("pt-BR");
   if(raw>Number(ctx.remaining||0))el.textContent+=" — quantidade acima do saldo disponível.";
   updateReferenceRemaining();
 }
@@ -3295,10 +3301,10 @@ async function submitAllocation(cardId,setor){
   if(!isVolumeOnly&&!item){toast("Selecione a referência que será alocada.");return;}
   if(!address){toast("Clique em uma posição no mapa.");return;}
   if(qty<=0){toast("Informe a quantidade para esta referência.");return;}
-  if(ctx.remaining<=0){toast(isTenPercentSample?"Os 10% já foram totalmente endereçados na Qualidade.":(isPieceSector?"Não há mais peças disponíveis nesta referência.":"Não há mais volumes disponíveis para este Card."));return;}
+  if(!isPieceSector&&ctx.remaining<=0){toast(isTenPercentSample?"Os 10% já foram totalmente endereçados na Qualidade.":"Não há mais volumes disponíveis para este Card.");return;}
   if(!isVolumeOnly){
     const itemRemaining=itemRemainingQty(item);
-    if(isPieceSector&&itemRemaining<=0){toast("Esta cor/tamanho já foi totalmente endereçada.");return;}
+    if(isPieceSector&&itemRemaining<=0){toast("Esta cor já foi endereçada. Se precisar movimentá-la, utilize a movimentação de estoque.");return;}
   }
   if(!isPieceSector&&qty>ctx.remaining){toast("A quantidade ultrapassa o saldo de "+ctx.remaining.toLocaleString("pt-BR")+" "+unit+" disponíveis.");return;}
   try{
