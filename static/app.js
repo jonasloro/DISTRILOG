@@ -2298,13 +2298,23 @@ async function renderDownstreamTab(sector) {
     return;
   }
   const grade=op.purchase_mode==="GRADE",open=op.status==="ABERTO";
+  const active=(op.assignments||[]).filter(a=>!["LIBERADA","CONCLUIDA"].includes(a.status));
+  const hasPending=(op.items||[]).some(i=>Number(i.completed_qty||0)<Number(i.expected_qty||0));
+  const workerNames=[...new Set(active.map(a=>a.worker_name).filter(Boolean))];
+  const paused=active.length>0&&active.every(a=>a.timer_state==="PAUSADA");
+  const elapsed=active.length?Math.max(...active.map(a=>Number(a.elapsed_seconds||0))):0;
+  const executionHtml=active.length
+    ? `<div class="notice success-box"><b>Card em execução</b><br>Responsável: <b>${esc(workerNames.join(", ")||"—")}</b> • ${active.length} tamanho(s) em uma única execução.</div>
+       <div class="summary-grid compact-summary"><div class="summary-box"><span>Tempo da execução</span><strong>${fmtSeconds(elapsed)}</strong></div><div class="summary-box"><span>Modo</span><strong>Conferência cega</strong></div></div>
+       <div class="actions">${allowed?`${paused?`<button class="primary" onclick="downstreamSession(${op.id},'resume','${sector}')">Retomar Card</button>`:`<button class="warning" onclick="downstreamSession(${op.id},'pause','${sector}')">Pausar Card</button>`}<button class="secondary" onclick="openDownstreamPartialAll(${op.id},'${sector}')">Não terminei de executar tudo</button>${sector==="ESTOCAGEM"?`<button class="success" onclick="openStorageBlindCheck(${op.id})">Conferir e concluir Estocagem</button>`:`<button class="success" onclick="completeDownstream(${op.id},'ETIQUETAGEM')">Conferir e concluir Etiquetagem</button>`}`:""}</div>`
+    : hasPending&&open
+      ? `<div class="notice"><b>Card disponível para execução</b><br>O colaborador assume a grade inteira de uma vez. As quantidades permanecem ocultas até a conferência final.</div>${allowed?`<div class="downstream-picker">${downstreamWorkerSelect(sector)}<button class="primary" onclick="claimDownstreamCard(${op.id},'${sector}')">Assumir Card e iniciar</button></div>`:""}`
+      : '<div class="notice success-box"><b>Execução concluída.</b><br>Aguardando somente as próximas validações do fluxo.</div>';
   $("cardTab").innerHTML=`<div class="panel-body downstream-panel">
-    <div class="notice success-box"><b>${sector==="ETIQUETAGEM"?"Etiquetagem":"Estocagem"} • ${grade?"Grade":"Saldo"}</b><br>${grade?"Escolha e assuma somente um tamanho por vez. Tamanhos já assumidos ficam indisponíveis.":"Saldo é dividido por quantidade geral, sem separar tamanhos."}</div>
-    <div class="notice"><b>Execução cega</b><br>As quantidades esperadas e o saldo da grade ficam ocultos durante a atividade. A conferência numérica acontece somente no encerramento.</div>
-    ${open&&allowed?(grade?downstreamGradePicker(op,sector):downstreamSaldoPicker(op,sector)):""}
-    <h3 class="section-heading">Em execução</h3>${op.assignments.length?op.assignments.map(a=>downstreamAssignmentHtml(a,sector,allowed&&open)).join(""):'<div class="notice">Nenhum material assumido.</div>'}
-    <div class="actions">${sector==="ESTOCAGEM"?`<button class="success" ${open&&allowed?"":"disabled"} onclick="openStorageBlindCheck(${op.id})">Conferir e concluir Estocagem</button>`:`<button class="success" ${op.totals.completed===op.totals.expected&&open&&allowed?"":"disabled"} onclick="completeDownstream(${op.id},'ETIQUETAGEM')">Concluir Etiquetagem</button>`}</div>
-    <div class="notice"><b>Endereçamento no fechamento</b><br>A posição física será escolhida somente ao concluir esta etapa.</div></div>`;
+    <div class="notice"><b>${sector==="ETIQUETAGEM"?"Etiquetagem":"Estocagem"} • ${grade?"Grade":"Saldo"}</b><br>Execução única por Card, sem assumir tamanho por tamanho.</div>
+    <div class="notice"><b>Execução cega</b><br>Quantidade esperada, saldo e quantidade por grade ficam ocultos durante a atividade.</div>
+    ${executionHtml}
+    <div class="notice"><b>Endereçamento no fechamento</b><br>A posição física será escolhida somente depois da conferência final.</div></div>`;
 }
 
 function downstreamWorkerSelect(sector){
