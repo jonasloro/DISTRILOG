@@ -387,6 +387,42 @@ _CADASTRO = {"pause":("EM_ANDAMENTO","PAUSE","PAUSADA"),"resume":("PAUSADA","RES
              "finish":(("EM_ANDAMENTO","PAUSADA"),"FINISH","CONCLUIDO")}
 
 
+@router.post("/cadastro/{task_id}/labels-ready")
+async def cadastro_labels_ready(task_id: int, request: Request):
+    body = await request.json()
+    con = db.connect()
+    try:
+        con.execute("BEGIN")
+        actor = _operator(con, body.get("user_id"))
+        task = con.execute("""SELECT t.*,c.current_sector,c.status AS card_status
+          FROM processing_cadastro_tasks t JOIN cards c ON c.id=t.card_id WHERE t.id=?""",(task_id,)).fetchone()
+        if not task:
+            raise HTTPException(404,"Tarefa de Cadastro não encontrada.")
+        if task["status"] != "CONCLUIDO":
+            raise HTTPException(409,"Conclua o Cadastro antes de liberar as etiquetas.")
+        if int(task["user_id"] or 0) != int(actor["id"]) and actor["role"] not in {"admin","supervisor"}:
+            raise HTTPException(403,"Somente quem assumiu o Cadastro pode liberar as etiquetas.")
+        if task["current_sector"] != "ETIQUETAGEM":
+            raise HTTPException(409,"Este Card não está aguardando Etiquetagem.")
+        stamp = _iso()
+        changed = con.execute("""UPDATE processing_cadastro_tasks SET labels_ready=1,labels_ready_at=?,labels_ready_by=?
+          WHERE id=? AND status='CONCLUIDO' AND COALESCE(labels_ready,0)=0""",(stamp,int(actor["id"]),task_id))
+        if changed.rowcount:
+            con.execute("INSERT INTO processing_cadastro_events(task_id,event,occurred_at,user_id) VALUES(?,?,?,?)",
+                        (task_id,"LABELS_READY",stamp,int(actor["id"])))
+            _history(con,int(task["card_id"]),"ETIQUETAS_DISPONIVEIS",
+                     f"{actor['name']} informou que as etiquetas da referência {task['reference']} estão disponíveis para etiquetar.",int(actor["id"]))
+        pending = int(con.execute("""SELECT COUNT(*) n FROM processing_cadastro_tasks
+          WHERE card_id=? AND status='CONCLUIDO' AND COALESCE(labels_ready,0)=0""",(int(task["card_id"]),)).fetchone()["n"] or 0)
+        if pending == 0:
+            con.execute("UPDATE cards SET status='ETIQUETAS_DISPONIVEIS',updated_at=? WHERE id=? AND current_sector='ETIQUETAGEM'",
+                        (stamp,int(task["card_id"])))
+        con.commit()
+        return {"ok":True,"id":task_id,"labels_ready":True,"card_ready":pending==0}
+    finally:
+        con.close()
+
+
 @router.post("/cadastro/{task_id}/{action}")
 async def cadastro_action(task_id: int,action: str,request: Request):
     if action not in {"start","pause","resume","finish"}:
@@ -432,41 +468,6 @@ async def cadastro_action(task_id: int,action: str,request: Request):
     finally:
         con.close()
 
-
-@router.post("/cadastro/{task_id}/labels-ready")
-async def cadastro_labels_ready(task_id: int, request: Request):
-    body = await request.json()
-    con = db.connect()
-    try:
-        con.execute("BEGIN")
-        actor = _operator(con, body.get("user_id"))
-        task = con.execute("""SELECT t.*,c.current_sector,c.status AS card_status
-          FROM processing_cadastro_tasks t JOIN cards c ON c.id=t.card_id WHERE t.id=?""",(task_id,)).fetchone()
-        if not task:
-            raise HTTPException(404,"Tarefa de Cadastro não encontrada.")
-        if task["status"] != "CONCLUIDO":
-            raise HTTPException(409,"Conclua o Cadastro antes de liberar as etiquetas.")
-        if int(task["user_id"] or 0) != int(actor["id"]) and actor["role"] not in {"admin","supervisor"}:
-            raise HTTPException(403,"Somente quem assumiu o Cadastro pode liberar as etiquetas.")
-        if task["current_sector"] != "ETIQUETAGEM":
-            raise HTTPException(409,"Este Card não está aguardando Etiquetagem.")
-        stamp = _iso()
-        changed = con.execute("""UPDATE processing_cadastro_tasks SET labels_ready=1,labels_ready_at=?,labels_ready_by=?
-          WHERE id=? AND status='CONCLUIDO' AND COALESCE(labels_ready,0)=0""",(stamp,int(actor["id"]),task_id))
-        if changed.rowcount:
-            con.execute("INSERT INTO processing_cadastro_events(task_id,event,occurred_at,user_id) VALUES(?,?,?,?)",
-                        (task_id,"LABELS_READY",stamp,int(actor["id"])))
-            _history(con,int(task["card_id"]),"ETIQUETAS_DISPONIVEIS",
-                     f"{actor['name']} informou que as etiquetas da referência {task['reference']} estão disponíveis para etiquetar.",int(actor["id"]))
-        pending = int(con.execute("""SELECT COUNT(*) n FROM processing_cadastro_tasks
-          WHERE card_id=? AND status='CONCLUIDO' AND COALESCE(labels_ready,0)=0""",(int(task["card_id"]),)).fetchone()["n"] or 0)
-        if pending == 0:
-            con.execute("UPDATE cards SET status='ETIQUETAS_DISPONIVEIS',updated_at=? WHERE id=? AND current_sector='ETIQUETAGEM'",
-                        (stamp,int(task["card_id"])))
-        con.commit()
-        return {"ok":True,"id":task_id,"labels_ready":True,"card_ready":pending==0}
-    finally:
-        con.close()
 
 
 def _items(con,card_id):
