@@ -116,7 +116,13 @@ async def require_authenticated_session(request: Request, call_next):
     user_id, issued_ns = session
     con = db_connect()
     try:
-        user = con.execute("SELECT id,username,role,session_revoked_after_ns,is_active FROM users WHERE id=?", (user_id,)).fetchone()
+        user = con.execute(
+            """SELECT u.id,u.username,u.role,u.session_revoked_after_ns,u.is_active
+               FROM distrilog.users u
+               JOIN public.usuarios credentials
+                 ON credentials.usuario=u.username AND credentials.papel=u.role
+               WHERE u.id=?""", (user_id,)
+        ).fetchone()
     finally:
         con.close()
     if not user or not user["is_active"] or issued_ns <= int(user["session_revoked_after_ns"] or 0):
@@ -906,7 +912,7 @@ def add_history(con: "db.Connection", card_id: int, event_type: str, description
 
 
 def get_user(con: "db.Connection", user_id: int) -> db.Row:
-    user = con.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
+    user = con.execute("SELECT * FROM users WHERE id=? AND is_active=TRUE", (user_id,)).fetchone()
     if not user:
         raise HTTPException(401, "Usuário inválido.")
     return user
@@ -1509,7 +1515,7 @@ async def admin_reset_operator_password(username: str, request: Request):
     con = db_connect()
     try:
         current = con.execute("SELECT username FROM users WHERE id=?", (request.state.auth_user_id,)).fetchone()
-        target = con.execute("SELECT id FROM users WHERE username=?", (username,)).fetchone()
+        target = con.execute("SELECT id FROM users WHERE username=? AND is_active=TRUE", (username,)).fetchone()
     finally:
         con.close()
     if not current or not target:
@@ -1535,11 +1541,26 @@ async def admin_reset_operator_password(username: str, request: Request):
 
 
 @app.get("/api/users")
-def list_users():
+def list_users(response: Response):
+    """Somente operadores com credenciais ativas no Supabase.
+
+    A identidade operacional permanece arquivada para históricos, mas uma
+    exclusão em public.usuarios se reflete imediatamente na interface.
+    """
     con = db_connect()
-    rows = con.execute("SELECT id,username,name,role FROM users WHERE is_active=TRUE ORDER BY name").fetchall()
-    con.close()
-    return [dict(r) for r in rows]
+    try:
+        rows = con.execute(
+            """SELECT u.id,u.username,u.name,u.role
+               FROM distrilog.users u
+               JOIN public.usuarios credentials
+                 ON credentials.usuario=u.username AND credentials.papel=u.role
+               WHERE u.is_active=TRUE
+               ORDER BY u.name"""
+        ).fetchall()
+    finally:
+        con.close()
+    response.headers["Cache-Control"] = "no-store"
+    return [dict(row) for row in rows]
 
 
 def init_generic_uploads_db() -> None:
