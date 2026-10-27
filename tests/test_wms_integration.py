@@ -67,7 +67,7 @@ def db_url():
 def session(db_url):
     with psycopg.connect(db_url) as conn:
         conn.execute("TRUNCATE distrilog.position_movements, distrilog.history, distrilog.card_allocations, distrilog.items, distrilog.cards, distrilog.users, distrilog.sector_positions RESTART IDENTITY CASCADE")
-        conn.execute("INSERT INTO distrilog.users(id,name,role) VALUES(11,'Operador','recebimento'),(12,'Estoquista','estocagem')")
+        conn.execute("INSERT INTO distrilog.users(id,name,role) VALUES(1,'Administrador','admin'),(11,'Operador','recebimento'),(12,'Estoquista','estocagem')")
         conn.execute("INSERT INTO distrilog.cards(id,purchase_id,current_sector,status) VALUES(100,'TESTE-100','RECEBIMENTO','AGUARDANDO'),(101,'TESTE-101','ESTOCAGEM','AGUARDANDO')")
         conn.execute("""INSERT INTO distrilog.sector_positions(address,setor,zona,casulo,nivel)
             VALUES('1RM01A','RM','1','01','A'),('1RM02A','RM','1','02','A'),
@@ -148,3 +148,31 @@ def test_four_other_colors_block_transfer_without_mutation(session):
     assert inventory("1EC02")["occupied"] == 4
     with psycopg.connect(session) as conn:
         assert conn.execute("SELECT COUNT(*) FROM distrilog.position_movements").fetchone()[0] == 0
+
+
+def test_orphan_reconciliation_requires_physical_confirmation(session):
+    from wms_inventory_module import ClearOrphanRequest, clear_confirmed_empty_orphan, reconciliation
+    orphan=create_allocation(session,card=999,sector="RM",address="1RM01A",qty=4)
+    report=reconciliation(actor(user_id=1,role="admin"))
+    assert report["total"] == 1
+    assert report["items"][0]["missing_card"] is True
+    with pytest.raises(HTTPException) as exc:
+        clear_confirmed_empty_orphan(
+            orphan, ClearOrphanRequest(
+                physically_verified_empty=False,
+                reason="Conferência física realizada",
+            ), actor(user_id=1,role="admin"),
+        )
+    assert exc.value.status_code == 400
+    assert reconciliation(actor(user_id=1,role="admin"))["total"] == 1
+    result=clear_confirmed_empty_orphan(
+        orphan, ClearOrphanRequest(
+            physically_verified_empty=True,
+            reason="Conferência física confirmou local vazio",
+        ), actor(user_id=1,role="admin"),
+    )
+    assert result["ok"] is True
+    assert reconciliation(actor(user_id=1,role="admin"))["total"] == 0
+    with psycopg.connect(session) as conn:
+        assert conn.execute("SELECT active FROM distrilog.card_allocations WHERE id=%s",(orphan,)).fetchone()[0] is False
+        assert conn.execute("SELECT COUNT(*) FROM distrilog.wms_reconciliation_actions WHERE allocation_id=%s",(orphan,)).fetchone()[0] == 1
