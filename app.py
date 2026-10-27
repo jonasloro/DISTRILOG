@@ -39,7 +39,7 @@ from sample_math import proportional_allocation
 from concurrent.futures import ThreadPoolExecutor
 from collections import defaultdict
 from threading import Lock
-from supabase_module import verificar_login_supabase, seed_usuarios_supabase, change_password_supabase, create_operator_supabase, ALLOWED_ROLES
+from supabase_module import verificar_login_supabase, seed_usuarios_supabase, change_password_supabase, create_operator_supabase, reset_operator_password_supabase, ALLOWED_ROLES
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = Path(os.getenv("OUTLOG_DATA_DIR", str(BASE_DIR / "data"))).resolve()
@@ -1517,6 +1517,39 @@ async def admin_create_login(request: Request):
         return {"ok":True,"username":username,"role":role}
     finally:
         con.close()
+
+
+@app.post("/api/admin/users/{username}/reset-password")
+async def admin_reset_operator_password(username: str, request: Request):
+    if request.state.auth_role != "admin":
+        raise HTTPException(403, "Somente um administrador pode redefinir senhas.")
+    payload = await request.json()
+    con = db_connect()
+    try:
+        current = con.execute("SELECT username FROM users WHERE id=?", (request.state.auth_user_id,)).fetchone()
+        target = con.execute("SELECT id FROM users WHERE username=?", (username,)).fetchone()
+    finally:
+        con.close()
+    if not current or not target:
+        raise HTTPException(404, "Usuário não encontrado.")
+    try:
+        reset_operator_password_supabase(
+            str(current["username"]),
+            str(payload.get("admin_password") or ""),
+            username,
+            str(payload.get("temporary_password") or ""),
+        )
+    except PermissionError:
+        raise HTTPException(403, "Senha do administrador inválida.") from None
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from None
+    con = db_connect()
+    try:
+        con.execute("UPDATE users SET session_revoked_after_ns=? WHERE id=?", (clock_time.time_ns(), target["id"]))
+        con.commit()
+    finally:
+        con.close()
+    return {"ok": True, "username": username, "must_change_password": True}
 
 
 @app.get("/api/users")
