@@ -514,6 +514,12 @@ def is_cd02(value: Any) -> bool:
 
 def delete_card_with_downstream(con: "db.Connection", card_id: int) -> None:
     """Remove primeiro os registros V8, cujas tabelas antigas não possuíam cascade."""
+    if con.execute("SELECT 1 FROM card_allocations WHERE card_id=? LIMIT 1", (card_id,)).fetchone():
+        raise HTTPException(
+            409,
+            "Este Card possui histórico de endereçamento. Arquive o Card em vez de apagá-lo: "
+            "a exclusão destruiria a rastreabilidade física.",
+        )
     operation_ids = [row["id"] for row in con.execute(
         "SELECT id FROM downstream_operations WHERE card_id=?", (card_id,)
     ).fetchall()]
@@ -532,6 +538,7 @@ def has_local_workflow(con: "db.Connection", card_id: int, current_sector: str) 
         "SELECT 1 FROM processing_records WHERE card_id=? LIMIT 1",
         "SELECT 1 FROM downstream_operations WHERE card_id=? LIMIT 1",
         "SELECT 1 FROM dispatches WHERE card_id=? LIMIT 1",
+        "SELECT 1 FROM card_allocations WHERE card_id=? LIMIT 1",
         """SELECT 1 FROM receivings r WHERE r.card_id=? AND
              (r.physical_status!='PENDENTE' OR r.ten_percent_status!='PENDENTE') LIMIT 1""",
     ]
@@ -2496,38 +2503,12 @@ async def mark_arrived(card_id: int, request: Request):
 
 @app.post("/api/cards/{card_id}/casulo")
 async def update_casulo(card_id: int, request: Request):
-    data = await request.json()
-    user_id = int(data.get("user_id") or 0)
-    new_casulo = str(data.get("new_casulo") or "").strip()
-    note = str(data.get("note") or "").strip()
-    if not new_casulo:
-        raise HTTPException(400, "Informe o novo Casulo.")
-    con = db_connect()
-    user = require_role(con, user_id, {"recebimento"})
-    card = con.execute("SELECT * FROM cards WHERE id=?", (card_id,)).fetchone()
-    if not card:
-        con.close()
-        raise HTTPException(404, "Card não encontrado.")
-    if card["current_sector"] != "RECEBIMENTO":
-        con.close()
-        raise HTTPException(400, "O Casulo só pode ser alterado enquanto o Card estiver no Recebimento.")
-    old = card["casulo_current"] or ""
-    con.execute("UPDATE cards SET casulo_current=?,updated_at=? WHERE id=?", (new_casulo, iso_now(), card_id))
-    con.execute(
-        """INSERT INTO casulo_history(card_id,old_casulo,new_casulo,note,user_id,created_at)
-           VALUES(?,?,?,?,?,?)""",
-        (card_id, old, new_casulo, note, user_id, iso_now()),
+    """Desativa a atualização legada de texto que não transferia estoque físico."""
+    raise HTTPException(
+        409,
+        "A posição física é controlada pelo WMS. Abra o Mapa de Endereçamento, "
+        "selecione o endereço de origem e use Transferir para movimentar o saldo.",
     )
-    add_history(
-        con,
-        card_id,
-        "CASULO_ALTERADO",
-        f"{user['name']} alterou o Casulo de '{old or 'não informado'}' para '{new_casulo}'.",
-        user_id,
-    )
-    con.commit()
-    con.close()
-    return {"ok": True}
 
 
 @app.post("/api/cards/{card_id}/dispatch")
