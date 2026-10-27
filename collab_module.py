@@ -68,7 +68,7 @@ class _Db:
         """
         with self.con.cursor() as cur:
             cur.execute(self._sql(sql), params)
-            if "RETURNING id" in sql.upper():
+            if "RETURNING ID" in sql.upper():
                 row = cur.fetchone()
                 return int(row["id"])
             return int(cur.rowcount or 0)
