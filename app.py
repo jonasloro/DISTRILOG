@@ -1,6 +1,11 @@
 from __future__ import annotations
 
 import json
+import base64
+import hashlib
+import hmac
+import secrets
+import time
 import math
 import os
 import re
@@ -50,6 +55,79 @@ async def disable_stale_interface_cache(request: Request, call_next):
     return response
 
 
+
+
+_SESSION_COOKIE = "distrilog_session"
+_SESSION_TTL = 8 * 3600
+_PUBLIC_API = {"/api/login", "/api/auth/change-password"}
+def _session_secret():
+    secret = os.getenv("AUTH_SESSION_SECRET", "")
+    if len(secret) < 32:
+        raise RuntimeError("Configure AUTH_SESSION_SECRET com pelo menos 32 caracteres aleatórios no Render.")
+    return secret.encode("utf-8")
+
+def _sign_session(user_id: int) -> str:
+    payload = f"{user_id}:{int(time.time()) + _SESSION_TTL}:{secrets.token_hex(16)}"
+    encoded = base64.urlsafe_b64encode(payload.encode()).decode().rstrip("=")
+    signature = hmac.new(_session_secret(), encoded.encode(), hashlib.sha256).hexdigest()
+    return encoded + "." + signature
+
+def _read_session(token: str) -> int | None:
+    try:
+        encoded, signature = token.split(".", 1)
+        expected = hmac.new(_session_secret(), encoded.encode(), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(signature, expected):
+            return None
+        payload = base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)).decode()
+        uid, expires, nonce = payload.split(":")
+        if int(expires) < time.time() or len(nonce) != 32:
+            return None
+        return int(uid)
+    except (ValueError, UnicodeError, TypeError):
+        return None
+
+@app.middleware("http")
+async def require_authenticated_session(request: Request, call_next):
+    path = request.url.path
+    if not path.startswith("/api/") or path in _PUBLIC_API:
+        return await call_next(request)
+    try:
+        user_id = _read_session(request.cookies.get(_SESSION_COOKIE, ""))
+    except RuntimeError:
+        return JSONResponse({"detail": "Configuração de autenticação ausente."}, status_code=503)
+    if user_id is None:
+        return JSONResponse({"detail": "Sessão expirada. Entre novamente."}, status_code=401)
+    con = db_connect()
+    try:
+        user = con.execute("SELECT id,username,role FROM users WHERE id=?", (user_id,)).fetchone()
+    finally:
+        con.close()
+    if not user:
+        return JSONResponse({"detail": "Usuário não encontrado."}, status_code=401)
+    request.state.auth_user_id = user_id
+    request.state.auth_role = user["role"]
+    if request.method not in ("GET", "HEAD", "OPTIONS"):
+        origin = request.headers.get("origin")
+        if origin and origin != str(request.base_url).rstrip("/"):
+            return JSONResponse({"detail": "Origem não autorizada."}, status_code=403)
+        # Identificadores de autor enviados pelo cliente nunca podem substituir
+        # a identidade da sessão. Para fluxos de supervisão, permissões próprias
+        # dos módulos ainda precisam ser verificadas.
+        supplied = request.query_params.get("user_id")
+        if supplied is not None and supplied != str(user_id):
+            return JSONResponse({"detail": "Identidade da operação não corresponde à sessão."}, status_code=403)
+        if request.headers.get("content-type", "").startswith("application/json"):
+            body = await request.body()
+            if body:
+                try:
+                    data = json.loads(body)
+                except ValueError:
+                    return JSONResponse({"detail": "JSON inválido."}, status_code=400)
+                if isinstance(data, dict):
+                    for key in ("user_id", "created_by", "updated_by"):
+                        if data.get(key) is not None and str(data[key]) != str(user_id):
+                            return JSONResponse({"detail": "Identidade da operação não corresponde à sessão."}, status_code=403)
+    return await call_next(request)
 
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
@@ -1342,7 +1420,10 @@ async def login(request: Request):
     con.close()
     if not user:
         raise HTTPException(401, "Usuário existe no Supabase mas não está cadastrado localmente — fale com o administrador.")
-    return {**dict(user), "must_change_password": confirmado["must_change_password"]}
+    response = JSONResponse({**dict(user), "must_change_password": confirmado["must_change_password"]})
+    if not confirmado["must_change_password"]:
+        response.set_cookie(_SESSION_COOKIE, _sign_session(int(user["id"])), httponly=True, secure=True, samesite="strict", max_age=_SESSION_TTL, path="/")
+    return response
 
 
 @app.post("/api/auth/change-password")
@@ -1355,8 +1436,17 @@ async def change_login_password(request: Request):
     return {"ok":True}
 
 
+@app.post("/api/auth/logout")
+def logout_session():
+    response=JSONResponse({"ok":True})
+    response.delete_cookie(_SESSION_COOKIE, path="/")
+    return response
+
+
 @app.post("/api/admin/users")
 async def admin_create_login(request: Request):
+    if request.state.auth_role != "admin":
+        raise HTTPException(403,"Apenas administradores podem criar logins.")
     payload=await request.json()
     username=str(payload.get("username") or "").strip().lower()
     name=str(payload.get("name") or "").strip()
