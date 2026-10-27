@@ -16,6 +16,8 @@ from fastapi import APIRouter, FastAPI, HTTPException
 import db
 
 BRASILIA = ZoneInfo("America/Sao_Paulo")
+AUTOMATIC_START_MONTH = "2026-11"
+AUTOMATIC_START_WEEK = date(2026, 11, 2)
 SECTORS = (
     "RECEBIMENTO", "EXPEDIÇÃO PCP", "QUALIDADE 1", "QUALIDADE 2",
     "PROCESSAMENTO", "ETIQUETAGEM", "ESTOCAGEM", "AJUSTES", "EXPEDIÇÃO",
@@ -117,7 +119,9 @@ def mission_weekly(month: str | None = None) -> dict:
         if not re.fullmatch(r"20\d{2}-(0[1-9]|1[0-2])", month):
             raise HTTPException(400, "Mês inválido. Use AAAA-MM.")
         year, month_num = map(int, month.split("-"))
-    if year < 2026 or year > now.year + 1:
+    if f"{year:04d}-{month_num:02d}" < AUTOMATIC_START_MONTH:
+        raise HTTPException(400, "O quadro automático começa em novembro de 2026. Para meses anteriores, consulte o Histórico legado.")
+    if year > now.year + 1:
         raise HTTPException(400, "Período fora da janela de consulta.")
     weeks = mondays_in_month(year, month_num)
     first_monday, last_monday = weeks[0], weeks[-1]
@@ -156,6 +160,7 @@ def mission_weekly(month: str | None = None) -> dict:
         "source": "Dados operacionais do DISTRILOG · Supabase",
         "timezone": "America/Sao_Paulo",
         "month": f"{year:04d}-{month_num:02d}",
+        "automatic_start_month": AUTOMATIC_START_MONTH,
         "captured_at": now.isoformat(),
         "schedule": {"BACKLOG": "Segunda 08:10",
                      "WED": "Quarta 12:00", "FRI": "Sexta 16:00"},
