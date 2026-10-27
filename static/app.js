@@ -2287,7 +2287,7 @@ async function renderDownstreamTab(sector) {
     <div class="summary-grid compact-summary"><div class="summary-box"><span>Prevista</span><strong>${op.totals.expected}</strong></div><div class="summary-box"><span>Assumida</span><strong>${op.totals.assigned}</strong></div><div class="summary-box"><span>Concluída</span><strong>${op.totals.completed}</strong></div><div class="summary-box"><span>Disponível</span><strong>${op.totals.available}</strong></div></div>
     ${open&&allowed?(grade?downstreamGradePicker(op,sector):downstreamSaldoPicker(op,sector)):""}
     <h3 class="section-heading">Em execução</h3>${op.assignments.length?op.assignments.map(a=>downstreamAssignmentHtml(a,sector,allowed&&open)).join(""):'<div class="notice">Nenhum material assumido.</div>'}
-    <div class="actions"><button class="success ${sector==="ESTOCAGEM"?"hidden":""}" ${op.totals.completed===op.totals.expected&&open&&allowed?"":"disabled"} onclick="completeDownstream(${op.id},'${sector}')">${sector==="ESTOCAGEM"?"Conferir Estocagem":"Concluir Etiquetagem"}</button>${sector==="ESTOCAGEM"?`<button class="success" onclick="openStorageBlindCheck(${op.id})">Conferência cega</button>`:""}</div>
+    <div class="actions">${sector==="ESTOCAGEM"?`<button class="success" ${open&&allowed?"":"disabled"} onclick="openStorageBlindCheck(${op.id})">Conferir e concluir Estocagem</button>`:`<button class="success" ${op.totals.completed===op.totals.expected&&open&&allowed?"":"disabled"} onclick="completeDownstream(${op.id},'ETIQUETAGEM')">Concluir Etiquetagem</button>`}</div>
     <div class="notice"><b>Endereçamento no fechamento</b><br>A posição física será escolhida somente ao concluir esta etapa.</div></div>`;
 }
 
