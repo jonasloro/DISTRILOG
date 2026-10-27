@@ -6,7 +6,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 from fastapi import APIRouter, HTTPException, Request
 import db
-from positions_module import total_allocated
+from positions_module import total_allocated, deactivate_card_allocations
 
 router = APIRouter(prefix="/api/processing", tags=["Processamento - fluxo"])
 PROCESSING_ROLES = {"processamento", "supervisor", "admin"}
@@ -414,7 +414,7 @@ async def cadastro_labels_ready(task_id: int, request: Request):
             _history(con,int(task["card_id"]),"ETIQUETAS_DISPONIVEIS",
                      f"{actor['name']} informou que as etiquetas da referência {task['reference']} estão disponíveis para etiquetar.",int(actor["id"]))
         pending = int(con.execute("""SELECT COUNT(*) n FROM processing_cadastro_tasks
-          WHERE card_id=? AND status='CONCLUIDO' AND COALESCE(labels_ready,0)=0""",(int(task["card_id"]),)).fetchone()["n"] or 0)
+          WHERE card_id=? AND (status<>'CONCLUIDO' OR COALESCE(labels_ready,0)=0)""",(int(task["card_id"]),)).fetchone()["n"] or 0)
         if pending == 0:
             con.execute("UPDATE cards SET status='ETIQUETAS_DISPONIVEIS',updated_at=? WHERE id=? AND current_sector='ETIQUETAGEM'",
                         (stamp,int(task["card_id"])))
@@ -485,8 +485,7 @@ def triage_queue(user_id: int):
         _operator(con,user_id)
         cards = con.execute("""
           SELECT c.id,c.purchase_id,c.supplier,c.brand,c.status,c.current_sector,c.purchase_mode,c.updated_at,
-                 COALESCE((SELECT i.reference FROM items i WHERE i.card_id=c.id ORDER BY i.id LIMIT 1),c.purchase_id) AS reference_list,
-                 COALESCE((SELECT SUM(i.expected_qty) FROM items i WHERE i.card_id=c.id),0) AS expected_total
+                 COALESCE((SELECT i.reference FROM items i WHERE i.card_id=c.id ORDER BY i.id LIMIT 1),c.purchase_id) AS reference_list
           FROM cards c LEFT JOIN processing_intake_routes r ON r.card_id=c.id
           WHERE c.current_sector='PROCESSAMENTO'
             AND (
@@ -512,12 +511,14 @@ def triage_queue(user_id: int):
             cid = int(row["card_id"])
             if cid not in latest:
                 item = dict(row)
+                item.pop("expected_total",None)
+                item.pop("counted_total",None)
                 item.update(_summarize(event_map[int(row["id"])],_now()))
                 latest[cid] = item
         items_by_card = {cid:[] for cid in ids}
         for item in con.execute(
           f"""SELECT id AS item_id,card_id,COALESCE(NULLIF(TRIM(reference),''),TRIM(product),'') AS reference,
-                     COALESCE(color,'') AS color,COALESCE(size,'') AS size,COALESCE(expected_qty,0) AS expected_qty,real_qty
+                     COALESCE(color,'') AS color,COALESCE(size,'') AS size
               FROM items WHERE card_id IN ({marks}) ORDER BY card_id,reference,color,size,id""",ids).fetchall():
             items_by_card[int(item["card_id"])].append(dict(item))
         result=[]
@@ -594,8 +595,14 @@ def triage_details(triage_id: int,user_id: int):
         triage=con.execute("SELECT * FROM processing_triages WHERE id=?",(triage_id,)).fetchone()
         if not triage: raise HTTPException(404,"Triagem não encontrada.")
         result=dict(triage); result.update(_summary(con,"processing_triage_events","triage_id",triage_id))
-        result["items"]=_items(con,int(triage["card_id"]))
-        result["counts"]=[dict(row) for row in con.execute("SELECT * FROM processing_triage_counts WHERE triage_id=? ORDER BY id",(triage_id,)).fetchall()]
+        reveal = triage["status"] == "CONCLUIDA"
+        items = _items(con,int(triage["card_id"]))
+        if not reveal:
+            for item in items:
+                item.pop("expected_qty",None); item.pop("real_qty",None)
+            result.pop("expected_total",None); result.pop("counted_total",None)
+        result["items"]=items
+        result["counts"]=[dict(row) for row in con.execute("SELECT * FROM processing_triage_counts WHERE triage_id=? ORDER BY id",(triage_id,)).fetchall()] if reveal else []
         return result
     finally:
         con.close()
@@ -665,7 +672,9 @@ async def triage_action(triage_id: int,action: str,request: Request):
         required_et=sum(x["counted_qty"] for x in counts if not x["is_extra"])
         allocated_et=int(total_allocated("ET",int(triage["card_id"])) or 0)
         if allocated_et < required_et:
-            raise HTTPException(409,f"Antes de concluir a Triagem, enderece toda a mercadoria em ET. Alocado: {allocated_et}; necessário: {required_et}.")
+            return {"ok":False,"requires_allocation":True,"allocation_sector":"ET",
+                    "required_total":required_et,"allocated_total":allocated_et,
+                    "detail":"Contagem validada. Enderece toda a mercadoria em ET para concluir a Triagem."}
         con.execute("INSERT INTO processing_triage_events(triage_id,event,occurred_at,user_id) VALUES(?,?,?,?)",(triage_id,"FINISH",stamp,int(actor["id"])))
         summary=_summary(con,"processing_triage_events","triage_id",triage_id,datetime.fromisoformat(stamp))
         for item in counts:
@@ -692,6 +701,7 @@ async def triage_action(triage_id: int,action: str,request: Request):
                     (target_sector,target_status,stamp,int(triage["card_id"])))
         if changed.rowcount != 1:
             raise HTTPException(409,"O Card mudou de setor durante a conclusão da Triagem; nenhuma alteração foi confirmada.")
+        deactivate_card_allocations(int(triage["card_id"]),("RM","QA","PR"))
         # Cria uma tarefa por referência após a Triagem, sem duplicar tarefas existentes.
         # A função é idempotente e roda na mesma transação da conclusão da Triagem.
         ensure_cadastro_tasks(con,int(triage["card_id"]))
@@ -745,6 +755,7 @@ def ensure_storage_entry(con,card_id,operation_id):
     return eid
 
 
+@router.post("/downstream-divergence/{operation_id}/correct")
 @router.post("/storage-divergence/{operation_id}/correct")
 async def correct_storage_divergence(operation_id: int, request: Request):
     body=await request.json(); supplied=body.get("items"); reason=str(body.get("reason") or "").strip()
@@ -753,23 +764,29 @@ async def correct_storage_divergence(operation_id: int, request: Request):
     try:
         con.execute("BEGIN"); actor=_operator(con,body.get("user_id"))
         op=con.execute("SELECT * FROM downstream_operations WHERE id=?",(operation_id,)).fetchone()
-        if not op or op["sector"]!="ESTOCAGEM": raise HTTPException(404,"Operação de Estocagem não encontrada.")
-        persistent=con.execute("""SELECT 1 FROM storage_blind_checks s WHERE s.operation_id=? AND s.matched=0 AND s.attempt>=2 LIMIT 1""",(operation_id,)).fetchone()
-        if not persistent: raise HTTPException(409,"A grade só pode ser corrigida após uma segunda conferência divergente na Estocagem.")
+        if not op or op["sector"] not in {"ETIQUETAGEM","ESTOCAGEM"}: raise HTTPException(404,"Operação com divergência não encontrada.")
+        if op["status"]!="ABERTO": raise HTTPException(409,"A operação já foi concluída e não pode mais ter a grade alterada.")
+        table="labeling_final_checks" if op["sector"]=="ETIQUETAGEM" else "storage_blind_checks"
+        rows=con.execute(f"""SELECT s.item_id FROM {table} s
+          WHERE s.operation_id=? AND s.matched=0 AND s.attempt>=2
+            AND s.id=(SELECT MAX(s2.id) FROM {table} s2 WHERE s2.operation_id=s.operation_id AND s2.item_id=s.item_id)""",
+          (operation_id,)).fetchall()
+        eligible={int(r["item_id"]) for r in rows if r["item_id"] is not None}
+        if not eligible: raise HTTPException(409,"Não existe divergência persistente aguardando correção do Processamento.")
         items={int(x["id"]):x for x in con.execute("SELECT id,reference,color,size FROM items WHERE card_id=?",(int(op["card_id"]),)).fetchall()}
         seen=set()
         for value in supplied:
             try: iid=int(value.get("item_id")); qty=_qty(value.get("quantity"),"quantidade corrigida")
             except (TypeError,ValueError,AttributeError): raise HTTPException(400,"Correção de grade inválida.") from None
-            if iid not in items or iid in seen: raise HTTPException(400,"Item inválido ou duplicado na correção.")
+            if iid not in items or iid not in eligible or iid in seen:
+                raise HTTPException(400,"Só é permitido corrigir as linhas que permaneceram divergentes após a recontagem.")
             seen.add(iid); con.execute("UPDATE items SET real_qty=? WHERE id=? AND card_id=?",(qty,iid,int(op["card_id"])))
-        if not seen: raise HTTPException(400,"Informe pelo menos uma linha para corrigir.")
-        stamp=_iso()
+        if seen != eligible:
+            raise HTTPException(400,"Corrija todas as linhas que permaneceram divergentes antes de liberar nova conferência.")
         _history(con,int(op["card_id"]),"GRADE_CORRIGIDA_PELO_PROCESSAMENTO",
-          f"{actor['name']} corrigiu {len(seen)} linha(s) da grade após divergência persistente na Estocagem. Motivo: {reason}",int(actor["id"]))
-        con.commit(); return {"ok":True,"corrected":len(seen)}
+          f"{actor['name']} corrigiu {len(seen)} linha(s) da grade após divergência persistente em {op['sector'].title()}. Motivo: {reason}",int(actor["id"]))
+        con.commit(); return {"ok":True,"corrected":len(seen),"sector":op["sector"]}
     finally: con.close()
-
 
 @router.get("/entry/queue")
 def entry_queue(user_id: int):
@@ -799,35 +816,30 @@ async def entry_confirm(entry_id: int,request: Request):
         if not entry: raise HTTPException(404,"Entrada não encontrada.")
         if entry["status"]!="PENDENTE": raise HTTPException(409,"Esta Entrada já foi confirmada.")
         current=con.execute("SELECT * FROM storage_entry_items WHERE entry_id=? ORDER BY id",(entry_id,)).fetchall()
+        if not current: raise HTTPException(409,"Esta Entrada não contém itens para confirmar.")
         supplied=body.get("items")
-        if not isinstance(supplied,list): raise HTTPException(400,"Informe as quantidades de todos os itens.")
-        by_id={int(r["id"]):r for r in current}; seen=set(); divergent=0; grade_changed=False
-        for value in supplied:
-            if not isinstance(value,dict): raise HTTPException(400,"Formato de item inválido.")
-            try: iid=int(value.get("id") or 0)
-            except (TypeError,ValueError): raise HTTPException(400,"Item inválido na Entrada.") from None
-            item=by_id.get(iid)
-            if not item or iid in seen: raise HTTPException(400,"A Entrada contém item estranho ou duplicado.")
-            seen.add(iid); stored=_qty(value.get("stored_qty"),"quantidade armazenada"); reason=str(value.get("reason") or "").strip()
-            diff=stored-int(item["triage_qty"] or 0)
-            if diff and not reason: raise HTTPException(400,f"Justifique a divergência de {item['reference']} / {item['color']} / {item['size']}.")
-            con.execute("UPDATE storage_entry_items SET stored_qty=?,diff=?,reason=? WHERE id=? AND entry_id=?",(stored,diff,reason or None,iid,entry_id))
-            if diff: divergent+=1; grade_changed=True
-            if item["is_extra"]: grade_changed=True
-        missing=set(by_id)-seen
-        if missing: raise HTTPException(400,f"Informe todas as linhas. Faltam {len(missing)}.")
-        if not current: raise HTTPException(409,"Esta Entrada não contém itens para conferir.")
+        if supplied is not None:
+            if not isinstance(supplied,list): raise HTTPException(400,"Formato de itens inválido.")
+            by_id={int(r["id"]):r for r in current}; seen=set()
+            for value in supplied:
+                try: iid=int(value.get("id") or 0); qty=_qty(value.get("stored_qty"),"quantidade da Entrada")
+                except (TypeError,ValueError,AttributeError): raise HTTPException(400,"Item inválido na Entrada.") from None
+                item=by_id.get(iid)
+                if not item or iid in seen: raise HTTPException(400,"A Entrada contém item estranho ou duplicado.")
+                if qty != int(item["stored_qty"] or 0):
+                    raise HTTPException(409,"A Entrada não altera quantidades. Divergências de grade devem ser tratadas pelo Processamento antes da conclusão da Estocagem.")
+                seen.add(iid)
+            if seen != set(by_id): raise HTTPException(400,"Confirme todas as linhas da Entrada.")
         stamp=_iso()
         changed=con.execute("""UPDATE storage_entries SET status='CONFIRMADA',concluded_by_user_id=?,concluded_by_name=?,concluded_at=?,
-          has_divergence=?,grade_changed=?,notes=? WHERE id=? AND status='PENDENTE'""",
-          (int(actor["id"]),actor["name"],stamp,1 if divergent else 0,1 if grade_changed else 0,str(body.get("notes") or "").strip() or None,entry_id))
+          has_divergence=0,grade_changed=0,notes=? WHERE id=? AND status='PENDENTE'""",
+          (int(actor["id"]),actor["name"],stamp,str(body.get("notes") or "").strip() or None,entry_id))
         if changed.rowcount!=1: raise HTTPException(409,"Esta Entrada foi confirmada por outra pessoa.")
         _history(con,int(entry["card_id"]),"ENTRADA_ESTOCAGEM_CONFIRMADA",
-          f"{actor['name']} confirmou a Entrada após a Estocagem: {divergent} linha(s) divergente(s).",int(actor["id"]))
+          f"{actor['name']} confirmou a Entrada após a Estocagem.",int(actor["id"]))
         con.commit()
-        return {"ok":True,"id":entry_id,"status":"CONFIRMADA","has_divergence":bool(divergent),"grade_changed":grade_changed,"divergent_lines":divergent}
+        return {"ok":True,"id":entry_id,"status":"CONFIRMADA","has_divergence":False,"grade_changed":False}
     finally: con.close()
-
 
 @router.get("/overview")
 def processing_flow_overview(user_id: int):
