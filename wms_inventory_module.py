@@ -175,30 +175,41 @@ def transfer(payload: TransferRequest, request: Request) -> dict[str, Any]:
 
     with pg_connect() as conn:
         with conn.cursor() as cur:
-            # A trava por alocação impede duas movimentações simultâneas da
-            # mesma linha. O destino é travado antes da checagem de 4 cores.
-            cur.execute("""SELECT a.*,i.color,c.id AS valid_card
-                FROM distrilog.card_allocations a
-                LEFT JOIN distrilog.items i ON i.id=a.item_id
-                LEFT JOIN distrilog.cards c ON c.id=a.card_id
-                WHERE a.id=%s AND a.active IS TRUE FOR UPDATE OF a""",
-                (payload.source_allocation_id,))
-            source = cur.fetchone()
-            if not source:
+            # Ordem global de travas: Card -> posições ordenadas -> alocações.
+            # É a mesma ordem usada no endpoint de alocação, evitando deadlock
+            # ao reorganizar um Card que também está sendo alocado.
+            cur.execute("""
+                SELECT card_id,address,setor FROM distrilog.card_allocations
+                WHERE id=%s AND active IS TRUE
+            """, (payload.source_allocation_id,))
+            snapshot=cur.fetchone()
+            if not snapshot:
                 raise HTTPException(409, "Este saldo foi movimentado. Atualize a posição.")
-            if not source["valid_card"]:
+            cur.execute("SELECT id FROM distrilog.cards WHERE id=%s FOR UPDATE", (snapshot["card_id"],))
+            if not cur.fetchone():
                 raise HTTPException(409, "Alocação órfã: o Card de origem não existe. Exige reconciliação.")
-            if source["item_id"] is not None and source["color"] is None:
-                cur.execute("SELECT id FROM distrilog.items WHERE id=%s", (source["item_id"],))
-                if not cur.fetchone():
-                    raise HTTPException(409, "O item desta alocação não existe. Exige reconciliação.")
-            origin = str(source["address"])
+            origin=str(snapshot["address"])
             if origin == destination:
                 raise HTTPException(400, "Origem e destino devem ser diferentes.")
             cur.execute("""SELECT address,setor FROM distrilog.sector_positions
                 WHERE address = ANY(%s) ORDER BY address FOR UPDATE""",
                 (sorted({origin, destination}),))
             places = {r["address"]: r["setor"] for r in cur.fetchall()}
+            cur.execute("""SELECT a.*,i.color,c.id AS valid_card
+                FROM distrilog.card_allocations a
+                LEFT JOIN distrilog.items i ON i.id=a.item_id
+                LEFT JOIN distrilog.cards c ON c.id=a.card_id
+                WHERE a.id=%s AND a.active IS TRUE FOR UPDATE OF a""",
+                (payload.source_allocation_id,))
+            source=cur.fetchone()
+            if (not source or source["card_id"] != snapshot["card_id"]
+                    or source["address"] != snapshot["address"]
+                    or source["setor"] != snapshot["setor"]):
+                raise HTTPException(409, "A alocação mudou durante a transferência. Atualize e tente novamente.")
+            if source["item_id"] is not None and source["color"] is None:
+                cur.execute("SELECT id FROM distrilog.items WHERE id=%s", (source["item_id"],))
+                if not cur.fetchone():
+                    raise HTTPException(409, "O item desta alocação não existe. Exige reconciliação.")
             if places.get(origin) != source["setor"]:
                 raise HTTPException(409, "A posição de origem não corresponde à alocação.")
             target_sector = places.get(destination)
