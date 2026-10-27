@@ -8,6 +8,7 @@ from pathlib import Path
 from fastapi import APIRouter, FastAPI, HTTPException, Request
 
 from supabase_module import pg_connect
+import db
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -761,45 +762,37 @@ def deactivate_card_allocations(card_id: int, sectors: list[str] | tuple[str, ..
     return changed
 
 
-def release_card_allocations(card_id: int, keep_quality_qty: int = 0) -> int:
-    """Libera o endereço do card quando a produção começa. Os 10% ficam na Qualidade
-    (registrados no setor QUALIDADE); o restante sai do endereço original."""
-    with pg_connect() as conn, conn.cursor() as cur:
-        cur.execute("SELECT COALESCE(SUM(quantidade),0) t FROM distrilog.card_allocations WHERE card_id=%s AND setor<>'QUALIDADE' AND active IS TRUE", (card_id,))
-        total = int(cur.fetchone()["t"] or 0)
-        if total <= 0:
-            return 0
-        cur.execute("UPDATE distrilog.card_allocations SET active=FALSE WHERE card_id=%s AND setor<>'QUALIDADE' AND active IS TRUE", (card_id,))
-        keep = max(0, min(int(keep_quality_qty or 0), total))
-        if keep:
-            cur.execute(
-                "INSERT INTO distrilog.card_allocations(card_id,setor,address,quantidade,responsavel,created_at,allocation_purpose) VALUES(%s,%s,%s,%s,%s,%s,%s)",
-                (card_id, "QUALIDADE", "QUALIDADE (10%)", keep, "sistema", iso_now(), "TEN_PERCENT_SAMPLE"),
-            )
-        conn.commit()
-    return total - keep
+def release_card_allocations(card_id: int, keep_quality_qty: int = 0, con: "db.Connection | None" = None) -> int:
+    """Libera somente posições pré-Processamento na transação do chamador.
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+    Nunca inventa um endereço "QUALIDADE" fora do WMS. Quando a amostra
+    ainda estiver fisicamente na QA, preserva o registro real até a
+    reconciliação da Qualidade.
+    """
+    owned = con is None
+    if owned:
+        con = db.connect()
+    try:
+        assert con is not None
+        con.execute("SELECT id FROM cards WHERE id=? FOR UPDATE", (card_id,))
+        preserve_sample = keep_quality_qty > 0
+        filter_sample = ("AND NOT (setor='QA' AND allocation_purpose='TEN_PERCENT_SAMPLE')"
+                         if preserve_sample else "")
+        where = ("card_id=? AND setor IN ('RM','QA','PR') AND active IS TRUE " + filter_sample)
+        row = con.execute("SELECT COALESCE(SUM(quantidade),0) AS qty FROM card_allocations WHERE "+where, (card_id,)).fetchone()
+        total = int(row["qty"] or 0)
+        if total:
+            con.execute("UPDATE card_allocations SET active=FALSE WHERE "+where, (card_id,))
+        if owned:
+            con.commit()
+        return total
+    except Exception:
+        if owned:
+            con.rollback()
+        raise
+    finally:
+        if owned:
+            con.close()
 
 
 def total_volume_only_allocated(setor: str, card_id: int) -> int:
@@ -842,69 +835,80 @@ def total_ten_percent_sample_in_balance(card_id: int) -> int:
 
 
 
-def move_ten_percent_sample_into_balance(card_id: int) -> dict[str, Any]:
-    """Move the physical 10% sample bag beside the Card's main stock address.
-    The sample remains tagged as an additional bag and is excluded from the received-volume quota.
+def move_ten_percent_sample_into_balance(card_id: int, con: "db.Connection | None" = None) -> dict[str, Any]:
+    """Reúne o bag físico da QA ao saldo na MESMA transação da inspeção.
+
+    Sem conexão fornecida, abre uma transação própria para chamadas legadas.
+    O bag permanece marcado TEN_PERCENT_SAMPLE (não duplica os volumes).
     """
-    with pg_connect() as con, con.cursor() as cur:
-        _card_or_404(cur, card_id, lock=True)
-        cur.execute(
-            """SELECT id,quantidade FROM distrilog.card_allocations
-               WHERE card_id=%s AND setor='QA' AND item_id IS NULL AND active IS TRUE
-                 AND allocation_purpose='TEN_PERCENT_SAMPLE'
-               ORDER BY created_at,id FOR UPDATE""",
-            (card_id,),
-        )
-        samples = cur.fetchall()
+    owned = con is None
+    if owned:
+        con = db.connect()
+    try:
+        assert con is not None
+        if not con.execute("SELECT id FROM cards WHERE id=? FOR UPDATE", (card_id,)).fetchone():
+            raise HTTPException(404, "Card não encontrado.")
+        samples = con.execute(
+            """SELECT id,quantidade FROM card_allocations WHERE card_id=?
+               AND setor='QA' AND item_id IS NULL AND active IS TRUE
+               AND allocation_purpose='TEN_PERCENT_SAMPLE'
+               ORDER BY created_at,id FOR UPDATE""", (card_id,)
+        ).fetchall()
         if not samples:
-            cur.execute(
-                """SELECT setor,address,SUM(quantidade) qty FROM distrilog.card_allocations
-                   WHERE card_id=%s AND setor = ANY(%s) AND active IS TRUE AND allocation_purpose='TEN_PERCENT_SAMPLE'
-                   GROUP BY setor,address ORDER BY MAX(created_at) DESC,address LIMIT 1""",
-                (card_id, ["RM", "PR"]),
-            )
-            previously_moved = cur.fetchone()
-            if previously_moved:
-                con.commit()
-                return {"sector": str(previously_moved["setor"]), "address": str(previously_moved["address"]), "quantity": int(previously_moved["qty"] or 0)}
-            raise HTTPException(409, "A amostra dos 10% não está endereçada na Qualidade. Retorne ao Recebimento e confira o endereço da amostra antes de concluir.")
-        sample_qty = sum(int(row["quantidade"] or 0) for row in samples)
-        if sample_qty <= 0:
-            raise HTTPException(409, "A amostra dos 10% não possui uma quantidade física válida para movimentar.")
-        cur.execute(
-            """SELECT address,SUM(quantidade) qty FROM distrilog.card_allocations
-               WHERE card_id=%s AND setor='RM' AND item_id IS NULL AND active IS TRUE
-                 AND COALESCE(allocation_purpose,'STOCK') <> 'TEN_PERCENT_SAMPLE'
+            previous = con.execute(
+                """SELECT setor,address,SUM(quantidade) AS qty FROM card_allocations
+                   WHERE card_id=? AND setor IN ('RM','PR') AND active IS TRUE
+                     AND allocation_purpose='TEN_PERCENT_SAMPLE'
+                   GROUP BY setor,address ORDER BY MAX(created_at) DESC,address LIMIT 1""", (card_id,)
+            ).fetchone()
+            if previous:
+                result = {"sector":str(previous["setor"]), "address":str(previous["address"]),
+                          "quantity":int(previous["qty"] or 0)}
+                if owned:
+                    con.commit()
+                return result
+            raise HTTPException(409, "A amostra dos 10% não está endereçada na Qualidade.")
+        count = sum(int(r["quantidade"] or 0) for r in samples)
+        if count <= 0:
+            raise HTTPException(409, "A amostra possui quantidade física inválida.")
+        destination = con.execute(
+            """SELECT address,SUM(quantidade) AS qty FROM card_allocations
+               WHERE card_id=? AND setor='RM' AND item_id IS NULL AND active IS TRUE
+                 AND allocation_purpose <> 'TEN_PERCENT_SAMPLE'
                GROUP BY address HAVING SUM(quantidade)>0
-               ORDER BY SUM(quantidade) DESC,address LIMIT 1""",
-            (card_id,),
-        )
-        destination = cur.fetchone()
-        destination_sector = "RM"
+               ORDER BY SUM(quantidade) DESC,address LIMIT 1""", (card_id,)
+        ).fetchone()
+        sector = "RM"
         if not destination:
-            cur.execute(
-                """SELECT address,SUM(quantidade) qty FROM distrilog.card_allocations
-                   WHERE card_id=%s AND setor='PR' AND active IS TRUE
-                     AND COALESCE(allocation_purpose,'STOCK') <> 'TEN_PERCENT_SAMPLE'
+            destination = con.execute(
+                """SELECT address,SUM(quantidade) AS qty FROM card_allocations
+                   WHERE card_id=? AND setor='PR' AND active IS TRUE
+                     AND allocation_purpose <> 'TEN_PERCENT_SAMPLE'
                    GROUP BY address HAVING SUM(quantidade)>0
-                   ORDER BY SUM(quantidade) DESC,address LIMIT 1""",
-                (card_id,),
-            )
-            destination = cur.fetchone()
-            destination_sector = "PR"
+                   ORDER BY SUM(quantidade) DESC,address LIMIT 1""", (card_id,)
+            ).fetchone()
+            sector = "PR"
         if not destination:
-            raise HTTPException(409, "Não foi encontrado um endereço do saldo em RM ou PR. Enderece o saldo do Card no Recebimento antes de concluir; a amostra será reunida automaticamente ao saldo nesse endereço.")
-        sample_ids = [int(row["id"]) for row in samples]
-        cur.execute("UPDATE distrilog.card_allocations SET active=FALSE WHERE card_id=%s AND id = ANY(%s) AND active IS TRUE", (card_id, sample_ids))
+            raise HTTPException(409, "Enderece o saldo do Card no RM ou PR antes de reunir a amostra.")
         address = str(destination["address"])
-        cur.execute(
-            """INSERT INTO distrilog.card_allocations(
-                   card_id,setor,address,quantidade,responsavel,created_at,item_id,allocation_purpose
-               ) VALUES(%s,%s,%s,%s,%s,%s,NULL,'TEN_PERCENT_SAMPLE')""",
-            (card_id, destination_sector, address, sample_qty, "sistema", iso_now()),
-        )
-        con.commit()
-        return {"sector": destination_sector, "address": address, "quantity": sample_qty}
+        for row in samples:
+            con.execute("UPDATE card_allocations SET active=FALSE WHERE id=? AND active IS TRUE", (row["id"],))
+            con.execute(
+                """INSERT INTO card_allocations
+                   (card_id,setor,address,quantidade,responsavel,created_at,item_id,allocation_purpose)
+                   VALUES(?,?,?,?,?,?,NULL,'TEN_PERCENT_SAMPLE')""",
+                (card_id,sector,address,int(row["quantidade"]),"sistema",iso_now())
+            )
+        if owned:
+            con.commit()
+        return {"sector": sector, "address": address, "quantity": count}
+    except Exception:
+        if owned:
+            con.rollback()
+        raise
+    finally:
+        if owned:
+            con.close()
 
 
 def register_positions_routes(app: FastAPI) -> None:
