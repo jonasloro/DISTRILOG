@@ -115,7 +115,8 @@ def init_processing_flow_db():
           id INTEGER PRIMARY KEY AUTOINCREMENT, card_id INTEGER NOT NULL, reference TEXT NOT NULL,
           status TEXT NOT NULL DEFAULT 'PENDENTE', user_id INTEGER, user_name TEXT,
           started_at TEXT, finished_at TEXT, worked_seconds INTEGER NOT NULL DEFAULT 0,
-          paused_seconds INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, UNIQUE(card_id,reference),
+          paused_seconds INTEGER NOT NULL DEFAULT 0, labels_ready INTEGER NOT NULL DEFAULT 0,
+          labels_ready_at TEXT, labels_ready_by INTEGER, created_at TEXT NOT NULL, UNIQUE(card_id,reference),
           FOREIGN KEY(card_id) REFERENCES cards(id) ON DELETE CASCADE,
           FOREIGN KEY(user_id) REFERENCES users(id)
         );
@@ -194,6 +195,9 @@ def init_processing_flow_db():
           ON processing_triages(card_id) WHERE status IN ('EM_ANDAMENTO','PAUSADA');
         """)
         con.execute("ALTER TABLE items ADD COLUMN IF NOT EXISTS real_qty INTEGER")
+        con.execute("ALTER TABLE processing_cadastro_tasks ADD COLUMN IF NOT EXISTS labels_ready INTEGER NOT NULL DEFAULT 0")
+        con.execute("ALTER TABLE processing_cadastro_tasks ADD COLUMN IF NOT EXISTS labels_ready_at TEXT")
+        con.execute("ALTER TABLE processing_cadastro_tasks ADD COLUMN IF NOT EXISTS labels_ready_by INTEGER")
         con.commit()
     finally:
         con.close()
@@ -429,6 +433,42 @@ async def cadastro_action(task_id: int,action: str,request: Request):
         con.close()
 
 
+@router.post("/cadastro/{task_id}/labels-ready")
+async def cadastro_labels_ready(task_id: int, request: Request):
+    body = await request.json()
+    con = db.connect()
+    try:
+        con.execute("BEGIN")
+        actor = _operator(con, body.get("user_id"))
+        task = con.execute("""SELECT t.*,c.current_sector,c.status AS card_status
+          FROM processing_cadastro_tasks t JOIN cards c ON c.id=t.card_id WHERE t.id=?""",(task_id,)).fetchone()
+        if not task:
+            raise HTTPException(404,"Tarefa de Cadastro não encontrada.")
+        if task["status"] != "CONCLUIDO":
+            raise HTTPException(409,"Conclua o Cadastro antes de liberar as etiquetas.")
+        if int(task["user_id"] or 0) != int(actor["id"]) and actor["role"] not in {"admin","supervisor"}:
+            raise HTTPException(403,"Somente quem assumiu o Cadastro pode liberar as etiquetas.")
+        if task["current_sector"] != "ETIQUETAGEM":
+            raise HTTPException(409,"Este Card não está aguardando Etiquetagem.")
+        stamp = _iso()
+        changed = con.execute("""UPDATE processing_cadastro_tasks SET labels_ready=1,labels_ready_at=?,labels_ready_by=?
+          WHERE id=? AND status='CONCLUIDO' AND COALESCE(labels_ready,0)=0""",(stamp,int(actor["id"]),task_id))
+        if changed.rowcount:
+            con.execute("INSERT INTO processing_cadastro_events(task_id,event,occurred_at,user_id) VALUES(?,?,?,?)",
+                        (task_id,"LABELS_READY",stamp,int(actor["id"])))
+            _history(con,int(task["card_id"]),"ETIQUETAS_DISPONIVEIS",
+                     f"{actor['name']} informou que as etiquetas da referência {task['reference']} estão disponíveis para etiquetar.",int(actor["id"]))
+        pending = int(con.execute("""SELECT COUNT(*) n FROM processing_cadastro_tasks
+          WHERE card_id=? AND status='CONCLUIDO' AND COALESCE(labels_ready,0)=0""",(int(task["card_id"]),)).fetchone()["n"] or 0)
+        if pending == 0:
+            con.execute("UPDATE cards SET status='ETIQUETAS_DISPONIVEIS',updated_at=? WHERE id=? AND current_sector='ETIQUETAGEM'",
+                        (stamp,int(task["card_id"])))
+        con.commit()
+        return {"ok":True,"id":task_id,"labels_ready":True,"card_ready":pending==0}
+    finally:
+        con.close()
+
+
 def _items(con,card_id):
     return [dict(row) for row in con.execute(
       """SELECT id AS item_id,COALESCE(NULLIF(TRIM(reference),''),TRIM(product),'') AS reference,
@@ -614,6 +654,12 @@ async def triage_action(triage_id: int,action: str,request: Request):
         missing=set(expected)-seen
         if missing: raise HTTPException(400,f"Preencha todas as linhas da grade. Faltam {len(missing)} item(ns).")
         if not counts: raise HTTPException(400,"A contagem não pode ficar vazia.")
+        divergences = [{"item_id":x["item_id"],"reference":x["reference"],"color":x["color"],"size":x["size"]}
+                       for x in counts if not x["is_extra"] and x["expected_qty"] != x["counted_qty"]]
+        extras = [{"reference":x["reference"],"color":x["color"],"size":x["size"]} for x in counts if x["is_extra"]]
+        if divergences or extras:
+            return {"ok":False,"requires_recount":True,"divergences":divergences,"extras":extras,
+                    "detail":"A conferência encontrou divergências. Reconte somente as linhas indicadas antes de concluir a Triagem."}
         con.execute("INSERT INTO processing_triage_events(triage_id,event,occurred_at,user_id) VALUES(?,?,?,?)",(triage_id,"FINISH",stamp,int(actor["id"])))
         summary=_summary(con,"processing_triage_events","triage_id",triage_id,datetime.fromisoformat(stamp))
         for item in counts:
@@ -628,7 +674,7 @@ async def triage_action(triage_id: int,action: str,request: Request):
           WHERE id=? AND status IN ('EM_ANDAMENTO','PAUSADA')""",
           (stamp,summary["worked_seconds"],summary["paused_seconds"],expected_total,counted_total,triage_id))
         target_sector = "ETIQUETAGEM" if needs_labeling else "ESTOCAGEM"
-        target_status = "AGUARDANDO_ETIQUETAGEM" if needs_labeling else "AGUARDANDO_ESTOCAGEM"
+        target_status = "AGUARDANDO_ETIQUETAS" if needs_labeling else "AGUARDANDO_ESTOCAGEM"
         changed = con.execute("""
           UPDATE processing_intake_routes
           SET destination=?,status='ENCAMINHADO',needs_labeling=?,completed_at=?,updated_at=?
