@@ -70,25 +70,31 @@ class _PooledPg:
 
 
 def pg_connect():
-    """Conexão (do pool) com o Postgres do Supabase. Lê a connection string da variável
-    de ambiente SUPABASE_DATABASE_URL."""
+    """Conexão exclusiva para autenticação no schema public.
+
+    AUTH_DATABASE_URL permite separar credenciais de autenticação das usadas
+    pelas operações. Sem ela, mantém o comportamento anterior para não
+    interromper instalações existentes. Nunca exponha essa URL ao navegador.
+    """
     global _pg_pool
-    url = os.getenv("SUPABASE_DATABASE_URL")
+    url = os.getenv("AUTH_DATABASE_URL") or os.getenv("SUPABASE_DATABASE_URL")
     if not url:
         raise RuntimeError(
-            "SUPABASE_DATABASE_URL não está configurada. Defina essa variável de "
-            "ambiente com a connection string do Supabase (Settings → Database)."
+            "Configure AUTH_DATABASE_URL ou SUPABASE_DATABASE_URL no servidor."
         )
     if _pg_pool is None:
         from psycopg_pool import ConnectionPool
-        import db
 
-        db.ensure_schema(url)
         pool = ConnectionPool(
             url,
             min_size=1,
-            max_size=int(os.getenv("PG_POOL_MAX", "8")),
-            kwargs={"row_factory": dict_row, "prepare_threshold": None, "connect_timeout": 10},
+            max_size=int(os.getenv("AUTH_PG_POOL_MAX", "4")),
+            kwargs={
+                "row_factory": dict_row,
+                "prepare_threshold": None,
+                "connect_timeout": 10,
+                "options": "-c search_path=public",
+            },
             timeout=20, max_idle=240, max_lifetime=1800, open=False,
         )
         pool.open(wait=True, timeout=20)
