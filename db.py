@@ -29,6 +29,8 @@ TABLES = {
     "card_allocations", "cards", "casulo_history", "dispatches", "downstream_assignments",
     "downstream_operation_items", "downstream_operations", "goat_imports", "goat_records",
     "history", "imports", "items", "operational_tasks", "outlog_migrations",
+    "calendar_events", "chat_messages", "chat_reads", "production_entries", "production_feedback",
+    "processing_downstream_corrections",
     "processing_item_quantities", "processing_records", "processing_timer_events",
     "processing_workers", "quality_assignments", "quality_audit_events",
     "quality_inspection_items", "quality_inspections", "quality_item_routes",
