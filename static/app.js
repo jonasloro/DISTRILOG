@@ -73,7 +73,7 @@ function fmtSeconds(value) {
 }
 
 function statusClass(status) {
-  if (["AGUARDANDO_QUALIDADE", "RETORNO_CONCLUIDO", "AGUARDANDO_INSPECAO", "AGUARDANDO_CONCLUSAO_QUALIDADE", "AGUARDANDO_PROCESSAMENTO", "AGUARDANDO_INICIO_PROCESSAMENTO", "AGUARDANDO_CONCLUSAO_PROCESSAMENTO", "AGUARDANDO_TRIAGEM", "AGUARDANDO_ETIQUETAGEM", "AGUARDANDO_ESTOCAGEM"].includes(status)) return "green";
+  if (["AGUARDANDO_QUALIDADE", "RETORNO_CONCLUIDO", "AGUARDANDO_INSPECAO", "AGUARDANDO_CONCLUSAO_QUALIDADE", "AGUARDANDO_PROCESSAMENTO", "AGUARDANDO_INICIO_PROCESSAMENTO", "AGUARDANDO_CONCLUSAO_PROCESSAMENTO", "AGUARDANDO_TRIAGEM", "AGUARDANDO_ETIQUETAS", "ETIQUETAS_DISPONIVEIS", "AGUARDANDO_ETIQUETAGEM", "AGUARDANDO_ESTOCAGEM"].includes(status)) return "green";
   if (["RECEBIMENTO_FISICO_CONCLUIDO_10_PENDENTE", "SEPARACAO_10_CONCLUIDA_RECEBIMENTO_PENDENTE", "RETORNO_FISICO_CONCLUIDO_10_PENDENTE", "SEPARACAO_RETORNO_10_CONCLUIDA_FISICO_PENDENTE", "EM_TRANSITO", "ORIGEM_TRANSITO", "AGUARDANDO_DESPACHO_COSTURA", "INSPECAO_PAUSADA", "PROCESSAMENTO_PAUSADO"].includes(status)) return "orange";
   if (status === "DESPACHO_CD02") return "red";
   if (["EM_COSTURA_CD01", "EM_INSPECAO", "EM_PROCESSAMENTO"].includes(status)) return "purple";
@@ -1939,8 +1939,10 @@ async function renderProcessingTab() {
   const sector=String(cardData.current_sector||"").toUpperCase();
   const history=cardData.history||[];
   const hasEvent=(...types)=>history.some(e=>types.includes(e.event_type));
+  let cadastroTasks=[];
+  try{cadastroTasks=await api("/api/processing/cadastro/card/"+cardData.id+"?user_id="+currentUser.id);}catch(_error){}
   const triageDone=hasEvent("TRIAGEM_CONCLUIDA") || ["ETIQUETAGEM","ESTOCAGEM","FINALIZADO"].includes(sector);
-  const cadastroDone=hasEvent("CADASTRO_CONCLUIDO","ETIQUETAS_DISPONIVEIS");
+  const cadastroDone=cadastroTasks.length>0&&cadastroTasks.every(t=>t.status==="CONCLUIDO");
   const labelingDone=hasEvent("ETIQUETAGEM_CONCLUIDA","ETIQUETAGEM_CONFERENCIA_OK") || ["ESTOCAGEM","FINALIZADO"].includes(sector);
   const storageDone=hasEvent("ESTOCAGEM_CONCLUIDA","ESTOCAGEM_CONFERENCIA_OK") || sector==="FINALIZADO";
   const entryDone=hasEvent("ENTRADA_ESTOCAGEM_CONFIRMADA");
@@ -2603,7 +2605,9 @@ if (currentUser) enterApp();
 /* V10 — endereçamento por referência + mapa visual */
 function allocationItemRows(){
   const ctx=window.allocCtx;
-  if(!ctx || !cardData) return [];
+  if(!ctx) return [];
+  if(Array.isArray(ctx.sourceItems)) return ctx.sourceItems.filter(function(i){return Number(i.expected_qty||0)>0;});
+  if(!cardData) return [];
   const opIds=(cardData.receiving?.operation_items||[]).map(function(i){return Number(i.id);}).filter(Boolean);
   const source=opIds.length
     ? (cardData.items||[]).filter(function(i){return opIds.includes(Number(i.id));})
@@ -2846,7 +2850,7 @@ async function loadReceivingAllocationStep(cardId) {
   }
 }
 
-async function loadPositionAllocator(cardId,setor,tenPercentSample=false,tenPercentTarget=0) {
+async function loadPositionAllocator(cardId,setor,tenPercentSample=false,tenPercentTarget=0,sourceItemsOverride=null,fixedDestination=false) {
   const box=$("posAllocBox");
   if(!box) return;
   const requestId=(window.positionMapRequestId||0)+1;
@@ -2865,7 +2869,8 @@ async function loadPositionAllocator(cardId,setor,tenPercentSample=false,tenPerc
     if(!positions.length) throw new Error("Nenhum endereço foi carregado. Confira a conexão com o Supabase e a tabela sector_positions.");
     const suggestion=positions.reduce((best,p)=>!best || Number(p.ocupado||0)<Number(best.ocupado||0)?p:best,null);
   const rcv=cardData?.receiving||{};
-  const items=(cardData.items||[]).filter(function(i){return Number(i.expected_qty||0)>0;});
+  const baseItems=Array.isArray(sourceItemsOverride)?sourceItemsOverride:(cardData?.items||[]);
+  const items=baseItems.filter(function(i){return Number(i.expected_qty||0)>0;});
   const opIds=(rcv.operation_items||[]).map(function(i){return Number(i.id);}).filter(Boolean);
   const isPieceSector=["ET","EC"].includes(setor);
   const isVolumeOnlyRM=setor==="RM";
@@ -2874,7 +2879,7 @@ async function loadPositionAllocator(cardId,setor,tenPercentSample=false,tenPerc
   const isVolumeOnly=isVolumeOnlyRM||isTenPercentSample;
   if(isTenPercentSample)tenPercentTarget=Number(tenPercentTarget)||(Number(rcv.volumes||0)>0?1:0);
 
-  const sectorItems=items.filter(function(i){return i.source_stage===(setor==="ET"?"ETIQUETAGEM":"ESTOCAGEM");});
+  const sectorItems=sourceItemsOverride?items:items.filter(function(i){return i.source_stage===(setor==="ET"?"ETIQUETAGEM":"ESTOCAGEM");});
 
   const sourceItems=isPieceSector?(sectorItems.length?sectorItems:items):(opIds.length?items.filter(function(i){return opIds.includes(Number(i.id));}):items);
 
@@ -2886,6 +2891,7 @@ async function loadPositionAllocator(cardId,setor,tenPercentSample=false,tenPerc
 
   window.allocCtx={
     cardId:cardId,setor:setor,sourceTotal:sourceTotal,tenPercentSample:isTenPercentSample,
+    sourceItems:sourceItems,fixedDestination:Boolean(fixedDestination),
     remaining:isTenPercentSample?Math.max(0,sourceTotal-sampleAllocated):Math.max(0,sourceTotal-Number(isPieceSector?status.total_alocado:status.global_total_alocado||0)),
     positions:positions,status:status,suggestion:suggestion,
     selectedItemId:isVolumeOnly?0:Number(firstAvailable?.id||firstAllocated?.item_id||0),
@@ -2901,6 +2907,7 @@ async function loadPositionAllocator(cardId,setor,tenPercentSample=false,tenPerc
           '<h3>'+(isTenPercentSample?"Alocar os 10% na Qualidade":({RM:"Alocar no Recebimento",QA:"Alocar na Qualidade",PR:"Alocar no Processamento",ET:"Alocar na Etiquetagem",EC:"Alocar na Estocagem"}[setor]||("Alocar no "+setor)))+'</h3>' +
           '<p>'+(isTenPercentSample?"Etapa obrigatória: enderece exatamente "+Number(tenPercentTarget).toLocaleString("pt-BR")+" volume(s) da amostra em endereços da QA antes de liberar o RM.":(isVolumeOnlyRM?"No RM, a alocação é exclusivamente por volumes, sem divisão por produto, cor ou tamanho.":("Escolha primeiro a referência, depois a posição. O controle é feito em "+(isPieceSector?"peças":"volumes")+" da referência.")))+'</p>' +
           (isTenPercentSample ? '<div class="position-dest"><b>Destino fixo: Qualidade (QA)</b><small>Os 10% são endereçados primeiro; o saldo global restante continua compartilhado entre RM, QA e PR.</small></div>' :
+          fixedDestination ? '<div class="position-dest"><b>Destino fixo: '+esc(setor==="ET"?"Etiquetagem (ET)":"Estocagem (EC)")+'</b><small>Este fechamento não permite alterar o setor de destino.</small></div>' :
           '<div class="position-dest"><label for="positionDestSetor">Destino</label>' +
             '<select id="positionDestSetor" onchange="changeAllocDestination(this.value)">'+
               (isReturnVolumeAllocation ? [["RM","Recebimento (RM)"],["QA","Qualidade (QA)"],["PR","Processamento (PR)"]] : [["RM","Recebimento (RM)"],["QA","Qualidade (QA)"],["PR","Processamento (PR)"],["ET","Etiquetagem (ET)"],["EC","Estocagem (EC)"]]).map(function(o){
@@ -2979,6 +2986,7 @@ async function loadPositionAllocator(cardId,setor,tenPercentSample=false,tenPerc
 function changeAllocDestination(setor){
   const ctx=window.allocCtx;
   if(!ctx||!setor||setor===ctx.setor) return;
+  if(ctx.fixedDestination){toast("O destino desta etapa é fixo.");return;}
   loadPositionAllocator(ctx.cardId,setor);
 }
 
