@@ -2302,6 +2302,7 @@ async function renderDownstreamTab(sector) {
     return;
   }
   const grade=op.purchase_mode==="GRADE",open=op.status==="ABERTO";
+  const storageReady=sector==="ESTOCAGEM"&&open&&Boolean(op.storage_check_complete);
   const active=(op.assignments||[]).filter(a=>!["LIBERADA","CONCLUIDA"].includes(a.status));
   const hasPending=Boolean(op.has_pending),hasUnassignedPending=Boolean(op.has_unassigned_pending);
   const groups=new Map();
@@ -2313,7 +2314,9 @@ async function renderDownstreamTab(sector) {
     const canControl=allowed&&(Number(workerId)===Number(currentUser.id)||["supervisor","admin"].includes(currentUser.role));
     return `<div class="assignment-strip"><div><b>${esc(workerName)}</b><small>${rows.length} linha(s) em execução</small></div><div><span>Tempo</span><b>${fmtSeconds(elapsed)}</b><small>${paused?"PAUSADA":"EM ANDAMENTO"}</small></div><div><span>Modo</span><b>Conferência cega</b></div><div class="actions">${canControl?`${paused?`<button class="primary small-btn" onclick="downstreamSession(${op.id},'resume','${sector}',${workerId})">Retomar</button>`:`<button class="warning small-btn" onclick="downstreamSession(${op.id},'pause','${sector}',${workerId})">Pausar</button>`}<button class="secondary small-btn" onclick="openDownstreamSplit(${op.id},'${sector}',${workerId})">Dividir Card</button><button class="secondary small-btn" onclick="openDownstreamPartialAll(${op.id},'${sector}',${workerId})">Não terminei de executar tudo</button>`:""}</div></div>`;
   }).join("");
-  const executionHtml=active.length
+  const executionHtml=storageReady
+    ? '<div class="notice success-box"><b>Conferência da Estocagem validada.</b><br>Finalize o Card para enviar os dados à Entrada do Processamento. Não é necessária nova alocação.</div>'+(allowed?'<div class="actions"><button class="success" onclick="finalizeStorageAfterAllocation('+op.id+')">Concluir Estocagem</button></div>':'')
+    : active.length
     ? `<div class="notice success-box"><b>Card em execução por ${groups.size} colaborador(es)</b><br>Cada colaborador possui sua própria fatia, tempo e histórico.</div>${executionBlocks}${hasUnassignedPending&&allowed?`<div class="notice"><b>Há saldo devolvido ainda sem responsável.</b></div><div class="downstream-picker">${downstreamWorkerSelect(sector)}<button class="primary" onclick="claimDownstreamCard(${op.id},'${sector}')">Assumir saldo pendente</button></div>`:""}<div class="actions">${allowed?`${sector==="ESTOCAGEM"?`<button class="success" onclick="openStorageBlindCheck(${op.id})">Conferir e concluir Estocagem</button>`:`<button class="success" onclick="completeDownstream(${op.id},'ETIQUETAGEM')">Conferir e concluir Etiquetagem</button>`}`:""}</div>`
     : hasPending&&open
       ? `<div class="notice"><b>Card disponível para execução</b><br>O colaborador assume a grade inteira de uma vez. As quantidades permanecem ocultas até a conferência final.</div>${allowed?`<div class="downstream-picker">${downstreamWorkerSelect(sector)}<button class="primary" onclick="claimDownstreamCard(${op.id},'${sector}')">Assumir Card e iniciar</button></div>`:""}`
