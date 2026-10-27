@@ -30,7 +30,7 @@ from processing_flow_module import init_processing_flow_db, backfill_cadastro_ta
 import db
 from sample_math import proportional_allocation
 from concurrent.futures import ThreadPoolExecutor
-from supabase_module import verificar_login_supabase, seed_usuarios_supabase
+from supabase_module import verificar_login_supabase, seed_usuarios_supabase, change_password_supabase, create_operator_supabase, ALLOWED_ROLES
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = Path(os.getenv("OUTLOG_DATA_DIR", str(BASE_DIR / "data"))).resolve()
@@ -1340,7 +1340,48 @@ async def login(request: Request):
     con.close()
     if not user:
         raise HTTPException(401, "Usuário existe no Supabase mas não está cadastrado localmente — fale com o administrador.")
-    return dict(user)
+    return {**dict(user), "must_change_password": confirmado["must_change_password"]}
+
+
+@app.post("/api/auth/change-password")
+async def change_login_password(request: Request):
+    payload=await request.json()
+    try:
+        change_password_supabase(str(payload.get("username") or ""),str(payload.get("current_password") or ""),str(payload.get("new_password") or ""))
+    except ValueError as exc:
+        raise HTTPException(400,str(exc)) from None
+    return {"ok":True}
+
+
+@app.post("/api/admin/users")
+async def admin_create_login(request: Request):
+    payload=await request.json()
+    username=str(payload.get("username") or "").strip().lower()
+    name=str(payload.get("name") or "").strip()
+    role=str(payload.get("role") or "").strip().lower()
+    if role not in ALLOWED_ROLES:
+        raise HTTPException(400,"Função inválida.")
+    con=db_connect()
+    try:
+        if con.execute("SELECT 1 FROM users WHERE username=?",(username,)).fetchone():
+            raise HTTPException(409,"Este usuário já existe.")
+        # A autenticação do administrador é conferida no banco de credenciais,
+        # não por um user_id fornecido pelo navegador.
+        try:
+            create_operator_supabase(str(payload.get("admin_username") or ""),str(payload.get("admin_password") or ""),username,name,role,str(payload.get("temporary_password") or ""))
+        except PermissionError as exc:
+            raise HTTPException(403,str(exc)) from None
+        except ValueError as exc:
+            raise HTTPException(400,str(exc)) from None
+        except Exception as exc:
+            if "unique" in str(exc).lower() or "duplicate" in str(exc).lower():
+                raise HTTPException(409,"Este usuário já existe.") from None
+            raise
+        con.execute("INSERT INTO users(username,password,name,role) VALUES(?,?,?,?)",(username,"!supabase-auth-only",name,role))
+        con.commit()
+        return {"ok":True,"username":username,"role":role}
+    finally:
+        con.close()
 
 
 @app.get("/api/users")
