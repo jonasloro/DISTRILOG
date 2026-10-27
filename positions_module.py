@@ -73,6 +73,9 @@ def init_positions_db() -> None:
                     "ALTER TABLE distrilog.card_allocations ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT TRUE"
                 )
                 cur.execute(
+                    "ALTER TABLE distrilog.card_allocations ADD COLUMN IF NOT EXISTS box_count INTEGER NOT NULL DEFAULT 0"
+                )
+                cur.execute(
                     """UPDATE distrilog.card_allocations SET allocation_purpose='TEN_PERCENT_SAMPLE'
                        WHERE setor='QA' AND item_id IS NULL AND allocation_purpose='STOCK'"""
                 )
@@ -146,7 +149,7 @@ def list_positions(setor: str, zona: Optional[str] = None) -> list[dict[str, Any
         with pg_connect() as con:
             with con.cursor() as cur:
                 sql = """SELECT p.address,p.setor,p.zona,p.casulo,p.nivel,
-                         COALESCE(SUM(a.quantidade),0) AS ocupado,
+                         COALESCE(SUM(CASE WHEN p.setor IN ('ET','EC') THEN a.box_count ELSE a.quantidade END),0) AS ocupado,
                          COUNT(DISTINCT NULLIF(TRIM(i.color),'')) AS color_count,
                          COALESCE(STRING_AGG(DISTINCT NULLIF(TRIM(i.color),''), ', ' ORDER BY NULLIF(TRIM(i.color),'')), '') AS colors
                          FROM distrilog.sector_positions p
