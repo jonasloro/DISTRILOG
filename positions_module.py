@@ -403,7 +403,7 @@ def allocate(card_id: int, payload: dict[str, Any]) -> dict[str, Any]:
                         if item_id <= 0:
                             raise HTTPException(400, "Selecione a referência antes de alocar.")
                         cur.execute(
-                            "SELECT id,expected_qty,product,reference,sku,color,size FROM distrilog.items WHERE id=%s AND card_id=%s",
+                            "SELECT id,expected_qty,real_qty,product,reference,sku,color,size FROM distrilog.items WHERE id=%s AND card_id=%s",
                             (item_id, card_id),
                         )
                         item = cur.fetchone()
@@ -428,7 +428,7 @@ def allocate(card_id: int, payload: dict[str, Any]) -> dict[str, Any]:
                             (card_id, setor, item_id),
                         )
                         already = int(cur.fetchone()["qty"] or 0)
-                        expected = int(item["expected_qty"] or 0)
+                        expected = int(item["real_qty"] if item.get("real_qty") is not None else item["expected_qty"] or 0)
                         if already + qty > expected:
                             label = item["reference"] or item["sku"] or item["product"] or str(item_id)
                             raise HTTPException(
