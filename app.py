@@ -1434,7 +1434,7 @@ async def login(request: Request):
         raise HTTPException(401, "Usuário desativado ou não cadastrado. Contate o administrador.")
     if user["role"] != confirmado["papel"]:
         raise HTTPException(403, "Função divergente entre os cadastros de autenticação e operação. Contate o administrador.")
-    response = JSONResponse({**dict(user), "must_change_password": confirmado["must_change_password"]})
+    response = JSONResponse({**dict(user), "must_change_password": confirmado["must_change_password"], "language": confirmado["language"]})
     if not confirmado["must_change_password"]:
         response.set_cookie(_SESSION_COOKIE, _sign_session(int(user["id"])), httponly=True, secure=True, samesite="strict", max_age=_SESSION_TTL, path="/")
     return response
@@ -1459,6 +1459,28 @@ async def change_login_password(request: Request):
     finally:
         con.close()
     return {"ok":True}
+
+
+@app.patch("/api/account/language")
+async def update_account_language(request: Request):
+    """Persist per-account display language; never change operational data."""
+    language = (await request.json()).get("language")
+    if language not in ("pt-BR", "es"):
+        raise HTTPException(422, "Idioma não suportado.")
+    user_id = request.state.auth_user_id
+    con = db_connect()
+    try:
+        user = con.execute("SELECT username FROM users WHERE id=? AND is_active=TRUE", (user_id,)).fetchone()
+    finally:
+        con.close()
+    if not user:
+        raise HTTPException(401, "Sessão inválida.")
+    with pg_connect() as auth_con:
+        with auth_con.cursor() as cur:
+            cur.execute("UPDATE public.usuarios SET idioma_preferido=%s WHERE usuario=%s RETURNING usuario", (language, user["username"]))
+            if not cur.fetchone():
+                raise HTTPException(401, "Usuário não encontrado.")
+    return {"language": language}
 
 
 @app.post("/api/auth/logout")
