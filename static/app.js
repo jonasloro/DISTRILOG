@@ -360,7 +360,7 @@ function renderAddressMapGrid() {
       (state.status === "FREE" && occupied === 0) ||
       (state.status === "OCCUPIED" && occupied > 0);
     const searchMatches = !normalizedTerm ||
-      normalizeSearch([p.address, p.setor, p.zona, p.zona_label, p.casulo, p.nivel].join(" ")).includes(normalizedTerm);
+      normalizeSearch([p.address, p.setor, p.zona, p.zona_label, p.casulo, p.nivel, p.colors].join(" ")).includes(normalizedTerm);
     return zoneMatches && statusMatches && searchMatches;
   });
 
@@ -387,18 +387,23 @@ function renderAddressMapGrid() {
       const zoneLabel = zoneRows[0]?.zona_label || ("Zona " + zoneKey);
       const casuloHtml = [...casulos.entries()]
         .sort((a, b) => a[0].localeCompare(b[0], "pt-BR", { numeric: true }))
-        .map(([casulo, rows]) =>
-          '<div class="position-casulo"><div class="position-casulo-head"><span>CASULO</span><b>' + esc(casulo) + '</b></div><div class="position-levels">' +
-          rows.sort((a, b) => String(a.nivel).localeCompare(String(b.nivel))).map((p) => {
-            const quantity = Math.max(0, Number(p.ocupado || 0));
-            const statusClassName = quantity > 0 ? "is-occupied" : "is-free";
-            const title = p.address + " • " + (quantity > 0 ? quantity.toLocaleString("pt-BR") + " unidade(s) alocada(s)" : "Livre");
-            return '<div class="position-cell ' + statusClassName + '" title="' + esc(title) + '" aria-label="' + esc(title) + '">' +
-              '<span class="position-level">' + esc(p.nivel) + '</span><strong>' + esc(p.address) + '</strong>' +
-              '<small>' + (quantity > 0 ? quantity.toLocaleString("pt-BR") + ' alocado(s)' : 'Livre') + '</small></div>';
-          }).join("") +
-          '</div></div>'
-        ).join("");
+        .map(([casulo, rows]) => {
+          if (["ET","EC"].includes(state.sector)) {
+            const p=rows[0],boxes=Math.max(0,Number(p?.ocupado||0)),colors=String(p?.colors||"").split(",").map(x=>x.trim()).filter(Boolean),used=Math.min(4,Number(p?.color_count||colors.length||0));
+            const slots=Array.from({length:4},(_,idx)=>'<span class="position-color-slot '+(idx<used?'filled':'')+'">'+(colors[idx]?esc(colors[idx]):(idx<used?'Ocupada':'Livre'))+'</span>').join("");
+            const title=(p?.address||casulo)+' • '+used+'/4 cores • '+boxes+' caixas pretas';
+            return '<div class="position-casulo flat-casulo" title="'+esc(title)+'"><div class="position-casulo-head"><span>CASULO</span><b>'+esc(p?.address||casulo)+'</b></div><div class="position-color-slots">'+slots+'</div><div class="position-flat-summary"><b>'+used+'/4 cores</b><span>'+boxes.toLocaleString("pt-BR")+' caixas pretas</span></div></div>';
+          }
+          return '<div class="position-casulo"><div class="position-casulo-head"><span>CASULO</span><b>' + esc(casulo) + '</b></div><div class="position-levels">' +
+            rows.sort((a, b) => String(a.nivel).localeCompare(String(b.nivel))).map((p) => {
+              const quantity = Math.max(0, Number(p.ocupado || 0));
+              const statusClassName = quantity > 0 ? "is-occupied" : "is-free";
+              const title = p.address + " • " + (quantity > 0 ? quantity.toLocaleString("pt-BR") + " unidade(s) alocada(s)" : "Livre");
+              return '<div class="position-cell ' + statusClassName + '" title="' + esc(title) + '" aria-label="' + esc(title) + '">' +
+                '<span class="position-level">' + esc(p.nivel) + '</span><strong>' + esc(p.address) + '</strong>' +
+                '<small>' + (quantity > 0 ? quantity.toLocaleString("pt-BR") + ' alocado(s)' : 'Livre') + '</small></div>';
+            }).join("") + '</div></div>';
+        }).join("");
       return '<section class="position-zone"><div class="position-zone-head"><div><b>' + esc(zoneLabel) + '</b><span>' + casulos.size + ' casulo(s) visível(is)</span></div><small>' + visibleCount + ' posições</small></div><div class="position-casulo-grid address-map-casulos">' + casuloHtml + '</div></section>';
     }).join("");
 
