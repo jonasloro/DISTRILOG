@@ -159,8 +159,12 @@ def downstream_card_data(con: "db.Connection", card_id: int, sector: str, reveal
     assigned = sum(int(a["completed_qty"] if a["status"]=="LIBERADA" else a["assigned_qty"] or 0) for a in assignments)
     completed = sum(int(a["completed_qty"] or 0) for a in assignments)
     has_pending = any(int(i["completed_qty"] or 0) < int(i["expected_qty"] or 0) for i in items)
+    if card["purchase_mode"]=="GRADE":
+        has_unassigned_pending = any(int(i["assigned_qty"] or 0) < int(i["expected_qty"] or 0) for i in items)
+    else:
+        has_unassigned_pending = assigned < expected
     result = dict(op)
-    result.update({"items": items, "assignments": assignments, "has_pending": has_pending,
+    result.update({"items": items, "assignments": assignments, "has_pending": has_pending, "has_unassigned_pending": has_unassigned_pending,
                    "totals": {"expected": expected, "assigned": assigned, "completed": completed, "available": max(0, expected-assigned)}})
     if not reveal_expected:
         for item in result["items"]:
@@ -228,25 +232,22 @@ async def claim_all(operation_id: int, request: Request):
         actor=user(con,uid,op["sector"])
         worker=con.execute("SELECT * FROM users WHERE id=? AND role=?",(worker_id,op["sector"].lower())).fetchone()
         if not worker: raise HTTPException(400,"Selecione um colaborador do setor.")
-        active=con.execute("""SELECT COUNT(*) n FROM downstream_assignments
-          WHERE operation_id=? AND status NOT IN ('LIBERADA','CONCLUIDA')""",(operation_id,)).fetchone()["n"]
-        if int(active or 0)>0: raise HTTPException(409,"Este Card já está em execução.")
         stamp=now(); created=0
         if op["purchase_mode"]=="GRADE":
             expected=_operation_expected_by_item(con,op)
             for item_id,total in expected.items():
-                done=int(con.execute("""SELECT COALESCE(SUM(completed_qty),0) n FROM downstream_assignments
-                  WHERE operation_id=? AND item_id=? AND status IN ('LIBERADA','CONCLUIDA')""",(operation_id,item_id)).fetchone()["n"] or 0)
-                remaining=max(0,int(total)-done)
+                consumed=int(con.execute("""SELECT COALESCE(SUM(CASE WHEN status IN ('LIBERADA','CONCLUIDA') THEN completed_qty ELSE assigned_qty END),0) n
+                  FROM downstream_assignments WHERE operation_id=? AND item_id=?""",(operation_id,item_id)).fetchone()["n"] or 0)
+                remaining=max(0,int(total)-consumed)
                 if remaining<=0: continue
                 con.execute("""INSERT INTO downstream_assignments(operation_id,item_id,worker_user_id,assigned_qty,status,timer_state,timer_started_at,created_at)
                   VALUES(?,?,?,?, 'EM_EXECUCAO','EM_ANDAMENTO',?,?)""",(operation_id,item_id,worker_id,remaining,stamp,stamp))
                 created+=1
         else:
             total=sum(_operation_expected_by_item(con,op).values())
-            done=int(con.execute("""SELECT COALESCE(SUM(completed_qty),0) n FROM downstream_assignments
-              WHERE operation_id=? AND status IN ('LIBERADA','CONCLUIDA')""",(operation_id,)).fetchone()["n"] or 0)
-            remaining=max(0,int(total)-done)
+            consumed=int(con.execute("""SELECT COALESCE(SUM(CASE WHEN status IN ('LIBERADA','CONCLUIDA') THEN completed_qty ELSE assigned_qty END),0) n
+              FROM downstream_assignments WHERE operation_id=?""",(operation_id,)).fetchone()["n"] or 0)
+            remaining=max(0,int(total)-consumed)
             if remaining>0:
                 con.execute("""INSERT INTO downstream_assignments(operation_id,item_id,worker_user_id,assigned_qty,status,timer_state,timer_started_at,created_at)
                   VALUES(?,NULL,?,?, 'EM_EXECUCAO','EM_ANDAMENTO',?,?)""",(operation_id,worker_id,remaining,stamp,stamp))
