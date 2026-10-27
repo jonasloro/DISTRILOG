@@ -13,6 +13,7 @@ import unicodedata
 import uuid
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
+from urllib.parse import urlsplit
 from typing import Any, Optional
 
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
@@ -108,7 +109,7 @@ async def require_authenticated_session(request: Request, call_next):
     request.state.auth_role = user["role"]
     if request.method not in ("GET", "HEAD", "OPTIONS"):
         origin = request.headers.get("origin")
-        if origin and origin != str(request.base_url).rstrip("/"):
+        if origin and urlsplit(origin).netloc.lower() != request.headers.get("host", "").lower():
             return JSONResponse({"detail": "Origem não autorizada."}, status_code=403)
         # Identificadores de autor enviados pelo cliente nunca podem substituir
         # a identidade da sessão. Para fluxos de supervisão, permissões próprias
