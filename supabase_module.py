@@ -209,3 +209,27 @@ def create_operator_supabase(admin_username: str, admin_password: str, username:
                 raise PermissionError("Autenticação de administrador inválida.")
             cur.execute("INSERT INTO usuarios(usuario,senha_hash,papel,must_change_password) VALUES(%s,%s,%s,TRUE)",
                         (username,gerar_hash_senha(temporary_password),role))
+
+def reset_operator_password_supabase(admin_username: str, admin_password: str,
+                                     target_username: str, temporary_password: str) -> None:
+    """Administratively reset an existing operator to a one-time strong password.
+
+    A separate verification of the administrator's current password prevents
+    stolen browser sessions alone from resetting credentials.
+    """
+    validate_new_password(temporary_password)
+    if target_username == admin_username:
+        raise ValueError("Use a troca de senha para alterar sua própria conta.")
+    with pg_connect() as con:
+        with con.cursor() as cur:
+            cur.execute("SELECT senha_hash,papel,must_change_password FROM usuarios WHERE usuario=%s FOR UPDATE", (admin_username,))
+            admin = cur.fetchone()
+            if not admin or admin["papel"] != "admin" or admin["must_change_password"] or not verificar_senha(admin_password,admin["senha_hash"]):
+                raise PermissionError("Senha atual do administrador inválida.")
+            cur.execute("SELECT usuario FROM usuarios WHERE usuario=%s FOR UPDATE", (target_username,))
+            if not cur.fetchone():
+                raise ValueError("Conta de operador não encontrada.")
+            cur.execute(
+                "UPDATE usuarios SET senha_hash=%s,must_change_password=TRUE WHERE usuario=%s",
+                (gerar_hash_senha(temporary_password), target_username),
+            )
