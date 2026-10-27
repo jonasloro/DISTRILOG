@@ -2983,7 +2983,8 @@ async function importStockGroupReport(input){if(!input.files?.[0])return;const f
 async function renderRegistrations(){
   setPage("Cadastros","");
   const [users,analytics]=await Promise.all([
-    safeApi("/api/users",[]),
+    // A lista é autoritativa: não mascarar falha do Supabase como "zero usuários".
+    api("/api/users", {cache:"no-store"}),
     safeApi("/api/unified/stock-group-report/analytics",{groups:[],latest_report:null})
   ]);
   const usersMeta = `<span class="panel-count">${users.length}</span>`;
