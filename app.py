@@ -31,6 +31,7 @@ from processing_module import ensure_worker_function_column
 from goat_module import init_goat_db, register_goat_routes
 from positions_module import init_positions_db, register_positions_routes, total_allocated, item_allocation_totals
 from wms_inventory_module import init_inventory_db, register_inventory_routes
+from mission_module import register_mission_routes
 from collab_module import init_collab_db, register_collab_routes
 from unified_module import init_unified_db, register_unified_routes
 from cleaning_module import init_cleaning_db, register_cleaning_routes
@@ -2796,6 +2797,7 @@ register_production_routes(app)
 register_goat_routes(app)
 register_positions_routes(app)
 register_inventory_routes(app)
+register_mission_routes(app)
 register_unified_routes(app)
 register_cleaning_routes(app)
 register_collab_routes(app)
