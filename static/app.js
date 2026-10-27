@@ -93,13 +93,34 @@ async function doLogin() {
       method: "POST",
       body: JSON.stringify({ username: $("loginUsername").value, password: $("loginPassword").value }),
     });
-    localStorage.setItem("cl_recebimento_user", JSON.stringify(currentUser));
     $("loginError").textContent = "";
+    if(currentUser.must_change_password){
+      $("loginScreen").classList.add("hidden");
+      $("passwordChangeScreen").classList.remove("hidden");
+      return;
+    }
+    localStorage.setItem("cl_recebimento_user", JSON.stringify(currentUser));
     enterApp();
   } catch (error) {
     $("loginError").textContent = error.message;
   }
 }
+
+async function submitFirstPasswordChange(){
+  const next=$("newLoginPassword").value,again=$("confirmLoginPassword").value;
+  if(next!==again){$("passwordChangeError").textContent="As senhas não coincidem.";return;}
+  try{
+    await api("/api/auth/change-password",{method:"POST",body:JSON.stringify({
+      username:currentUser.username,current_password:$("loginPassword").value,new_password:next
+    })});
+    currentUser.must_change_password=false;
+    localStorage.setItem("cl_recebimento_user",JSON.stringify(currentUser));
+    $("loginPassword").value="";$("newLoginPassword").value="";$("confirmLoginPassword").value="";
+    $("passwordChangeScreen").classList.add("hidden");
+    enterApp();
+  }catch(e){$("passwordChangeError").textContent=e.message;}
+}
+function cancelFirstPasswordChange(){localStorage.removeItem("cl_recebimento_user");location.reload();}
 
 function enterApp() {
   $("loginScreen").classList.add("hidden");
@@ -2802,9 +2823,22 @@ async function renderRegistrations(){
   ]);
   const usersMeta = `<span class="panel-count">${users.length}</span>`;
   const usersTable = `<table class="dash-table"><thead><tr><th>Nome</th><th>Usuário</th><th>Perfil</th></tr></thead><tbody>${users.map(u => `<tr><td>${esc(u.name)}</td><td>${esc(u.username)}</td><td>${statusBadge(u.role)}</td></tr>`).join("")}</tbody></table>`;
+  const adminPanel=currentUser.role==="admin"?`<section class="panel" style="margin-top:16px"><div class="panel-body"><h3 class="section-heading">Criar login de operador</h3><p>O colaborador deverá trocar a senha temporária no primeiro acesso.</p><div class="shipping-form-grid"><div class="field"><label>Nome</label><input id="newOperatorName" maxlength="100"></div><div class="field"><label>Usuário</label><input id="newOperatorUsername" maxlength="40" autocomplete="off"></div><div class="field"><label>Função / setor</label><select id="newOperatorRole">${["recebimento","qualidade","processamento","etiquetagem","estocagem","expedicao","devolucoes","planejamento","supervisor","consulta","admin"].map(r=>'<option value="'+r+'">'+r+'</option>').join("")}</select></div><div class="field"><label>Senha temporária (12+ caracteres, letras e números)</label><input id="newOperatorPassword" type="password" autocomplete="new-password"></div><div class="field"><label>Confirme sua senha de administrador</label><input id="adminConfirmPassword" type="password" autocomplete="current-password"></div></div><div class="actions"><button class="primary" onclick="createOperatorLogin()">Criar login</button></div></div></section>`:"";
   const reportTitle = analytics.latest_report ? esc(analytics.latest_report.filename) : "Sem relatório";
   const reportBody = analyticsBarsBody((analytics.groups||[]).map(g => ({label:g.group_name,value:g.quantity,hint:g.gender})));
-  $("mainContent").innerHTML = `<div class="actions" style="margin-bottom:12px"><button class="primary" onclick="openGoatCardModal()">+ Criar Card</button></div><div class="dash-row registrations-grid">${dashboardPanel("♙","Usuários e perfis",usersMeta,usersTable)}${dashboardPanel("▣","Grupos do último relatório",reportTitle,reportBody)}</div>`;
+  $("mainContent").innerHTML = `<div class="actions" style="margin-bottom:12px"><button class="primary" onclick="openGoatCardModal()">+ Criar Card</button></div><div class="dash-row registrations-grid">${dashboardPanel("♙","Usuários e perfis",usersMeta,usersTable)}${dashboardPanel("▣","Grupos do último relatório",reportTitle,reportBody)}</div>${adminPanel}`;
+}
+
+async function createOperatorLogin(){
+  try{
+    await api("/api/admin/users",{method:"POST",body:JSON.stringify({
+      admin_username:currentUser.username,admin_password:$("adminConfirmPassword").value,
+      username:$("newOperatorUsername").value.trim().toLowerCase(),name:$("newOperatorName").value.trim(),
+      role:$("newOperatorRole").value,temporary_password:$("newOperatorPassword").value
+    })});
+    toast("Login criado. Entregue a senha temporária ao operador por canal seguro.");
+    await renderRegistrations();
+  }catch(e){toast(e.message);}
 }
 
 async function renderSettings(){setPage("Configurações","");$("mainContent").innerHTML=`<div class="settings-grid"><button onclick="goTo('import')"><b>⇧</b><strong>Importar compras</strong><span>Atualizar Cards a partir do relatório Excel.</span></button><button onclick="goTo('tasks')"><b>☑</b><strong>Quadro de tarefas</strong><span>Responsáveis, prioridades e andamento.</span></button><button onclick="goTo('test')"><b>⚙</b><strong>Administração e testes</strong><span>Ferramentas controladas para validação.</span></button><button onclick="goTo('history')"><b>◷</b><strong>Histórico global</strong><span>Rastreabilidade das movimentações.</span></button></div><div class="state-panel"><b>DistriLog V3</b><span>Uma interface, um backend e uma base SQLite. As regras congeladas de Recebimento, Qualidade e Processamento permanecem no motor operacional.</span></div>`;}
