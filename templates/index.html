@@ -15,19 +15,33 @@
       <h1>DISTRILOG</h1>
       <p>Produção, estoque, expedição e devoluções em um só lugar</p>
       <label>Usuário</label>
-      <input id="loginUsername" autocomplete="username">
+      <input id="loginUsername" autocomplete="username" onkeydown="if(event.key==='Enter'){event.preventDefault();doLogin();}">
       <label>Senha</label>
-      <input id="loginPassword" type="password" autocomplete="current-password">
+      <input id="loginPassword" type="password" autocomplete="current-password" onkeydown="if(event.key==='Enter'){event.preventDefault();doLogin();}">
       <button class="primary full" onclick="doLogin()">Entrar</button>
       <div id="loginError" class="error-message"></div>
     </div>
   </section>
 
+  <section id="passwordChangeScreen" class="login-screen hidden">
+    <div class="login-panel">
+      <div class="login-logo">DL</div>
+      <h1>Defina sua senha</h1>
+      <p>Troque a senha temporária antes de acessar o DISTRILOG.</p>
+      <label>Nova senha (12+ caracteres, letras e números)</label>
+      <input id="newLoginPassword" type="password" autocomplete="new-password">
+      <label>Confirme a nova senha</label>
+      <input id="confirmLoginPassword" type="password" autocomplete="new-password">
+      <button class="primary full" onclick="submitFirstPasswordChange()">Salvar senha e entrar</button>
+      <button class="secondary full" onclick="cancelFirstPasswordChange()">Cancelar</button>
+      <div id="passwordChangeError" class="error-message"></div>
+    </div>
+  </section>
   <div id="appShell" class="app-shell hidden">
     <aside class="sidebar">
       <div class="brand-block">
         <div class="brand-logo">DL</div>
-        <div><strong>DISTRI</strong><br>LOG <small>V3.1</small></div>
+        <div><strong>DISTRILOG</strong></div>
       </div>
       <nav>
         <div class="nav-group">Operação</div>
@@ -82,6 +96,6 @@
 
   <div id="toast" class="toast hidden"></div>
   <script src="/static/collab.js?v=1.0.0"></script>
-  <script src="/static/app.js?v=4.5.1"></script>
+  <script src="/static/app.js?v=4.5.2"></script>
 </body>
 </html>
