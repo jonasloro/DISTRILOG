@@ -309,7 +309,7 @@ def register_unified_routes(app) -> None:
 
     @app.post("/api/unified/sgo/import")
     async def import_sgo(user_id: int, file: UploadFile = File(...)):
-        con=db_connect();require_user(con,user_id,{"admin","supervisor","planejamento"});con.close()
+        con=db_connect();require_user(con,user_id,{"admin","supervisor","recebimento","planejamento"});con.close()
         raw = await read_limited_upload(file,pdf=False)
         try:
             wb = load_workbook(io.BytesIO(raw), read_only=True, data_only=True)
