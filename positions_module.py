@@ -26,6 +26,7 @@ SECTOR_ZONES: dict[str, list[str]] = {
 ZONE_LABELS: dict[str, str] = {"EC:1": "Feminino", "EC:2": "Masculino"}
 CASULOS = [f"{i:02d}" for i in range(1, 21)]
 NIVEIS = ["A", "B", "C"]
+FLAT_SECTORS = {"ET", "EC"}
 
 
 def iso_now() -> str:
@@ -120,19 +121,19 @@ def init_positions_db() -> None:
                          )""",
                     (["RM", "QA", "PR"],),
                 )
-                cur.execute("SELECT COUNT(*) c FROM distrilog.sector_positions")
-                if cur.fetchone()["c"] == 0:
-                    rows = []
-                    for setor, zonas in SECTOR_ZONES.items():
-                        for zona in zonas:
-                            for casulo in CASULOS:
-                                for nivel in NIVEIS:
-                                    address = f"{zona}{setor}{casulo}{nivel}"
-                                    rows.append((address, setor, zona, casulo, nivel))
-                    cur.executemany(
-                        "INSERT INTO distrilog.sector_positions(address,setor,zona,casulo,nivel) VALUES(%s,%s,%s,%s,%s) ON CONFLICT (address) DO NOTHING",
-                        rows,
-                    )
+                rows = []
+                for setor, zonas in SECTOR_ZONES.items():
+                    for zona in zonas:
+                        for casulo in CASULOS:
+                            niveis = [""] if setor in FLAT_SECTORS else NIVEIS
+                            for nivel in niveis:
+                                address = f"{zona}{setor}{casulo}{nivel}"
+                                rows.append((address, setor, zona, casulo, nivel))
+                cur.executemany(
+                    "INSERT INTO distrilog.sector_positions(address,setor,zona,casulo,nivel) VALUES(%s,%s,%s,%s,%s) ON CONFLICT (address) DO NOTHING",
+                    rows,
+                )
+                cur.execute("DELETE FROM distrilog.sector_positions WHERE setor = ANY(%s) AND nivel<>''", (list(FLAT_SECTORS),))
             con.commit()
     except RuntimeError as e:
         print(f"[aviso] Endereçamento: {e}")
@@ -145,9 +146,12 @@ def list_positions(setor: str, zona: Optional[str] = None) -> list[dict[str, Any
         with pg_connect() as con:
             with con.cursor() as cur:
                 sql = """SELECT p.address,p.setor,p.zona,p.casulo,p.nivel,
-                         COALESCE(SUM(a.quantidade),0) AS ocupado
+                         COALESCE(SUM(a.quantidade),0) AS ocupado,
+                         COUNT(DISTINCT NULLIF(TRIM(i.color),'')) AS color_count,
+                         COALESCE(STRING_AGG(DISTINCT NULLIF(TRIM(i.color),''), ', ' ORDER BY NULLIF(TRIM(i.color),'')), '') AS colors
                          FROM distrilog.sector_positions p
                          LEFT JOIN distrilog.card_allocations a ON a.address=p.address AND a.setor=p.setor AND a.active IS TRUE
+                         LEFT JOIN distrilog.items i ON i.id=a.item_id
                          WHERE p.setor=%s"""
                 args: list[Any] = [setor]
                 if zona:
@@ -163,6 +167,7 @@ def list_positions(setor: str, zona: Optional[str] = None) -> list[dict[str, Any
             "address": r["address"], "setor": r["setor"], "zona": r["zona"],
             "zona_label": ZONE_LABELS.get(f"{r['setor']}:{r['zona']}"),
             "casulo": r["casulo"], "nivel": r["nivel"], "ocupado": int(r["ocupado"] or 0),
+            "color_count": int(r.get("color_count") or 0), "colors": r.get("colors") or "",
         }
         for r in rows
     ]
@@ -397,6 +402,18 @@ def allocate(card_id: int, payload: dict[str, Any]) -> dict[str, Any]:
 
                     if address not in valid:
                         raise HTTPException(400, f"Posição {address} não pertence ao setor {setor}.")
+                    if setor in FLAT_SECTORS:
+                        item_id_check = int(a.get("item_id") or 0)
+                        cur.execute("SELECT COALESCE(NULLIF(TRIM(color),''),'SEM COR') color FROM distrilog.items WHERE id=%s AND card_id=%s",(item_id_check,card_id))
+                        color_row=cur.fetchone()
+                        if not color_row: raise HTTPException(400,"Selecione uma cor válida do Card.")
+                        cur.execute("""SELECT COUNT(DISTINCT COALESCE(NULLIF(TRIM(i.color),''),'SEM COR')) n
+                          FROM distrilog.card_allocations ca JOIN distrilog.items i ON i.id=ca.item_id
+                          WHERE ca.address=%s AND ca.setor=%s AND ca.active IS TRUE
+                            AND COALESCE(NULLIF(TRIM(i.color),''),'SEM COR')<>%s""",(address,setor,color_row["color"]))
+                        other_colors=int(cur.fetchone()["n"] or 0)
+                        if other_colors>=4:
+                            raise HTTPException(409,"Este casulo já possui 4 cores no chão. Escolha outro casulo.")
                     if qty <= 0:
                         raise HTTPException(400, "Quantidade precisa ser maior que zero.")
 
