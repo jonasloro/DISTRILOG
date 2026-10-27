@@ -6,6 +6,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 from fastapi import APIRouter, HTTPException, Request
 import db
+from positions_module import total_allocated
 
 router = APIRouter(prefix="/api/processing", tags=["Processamento - fluxo"])
 PROCESSING_ROLES = {"processamento", "supervisor", "admin"}
@@ -661,6 +662,10 @@ async def triage_action(triage_id: int,action: str,request: Request):
         if divergences or extras:
             return {"ok":False,"requires_recount":True,"divergences":divergences,"extras":extras,
                     "detail":"A conferência encontrou divergências. Reconte somente as linhas indicadas antes de concluir a Triagem."}
+        required_et=sum(x["counted_qty"] for x in counts if not x["is_extra"])
+        allocated_et=int(total_allocated("ET",int(triage["card_id"])) or 0)
+        if allocated_et < required_et:
+            raise HTTPException(409,f"Antes de concluir a Triagem, enderece toda a mercadoria em ET. Alocado: {allocated_et}; necessário: {required_et}.")
         con.execute("INSERT INTO processing_triage_events(triage_id,event,occurred_at,user_id) VALUES(?,?,?,?)",(triage_id,"FINISH",stamp,int(actor["id"])))
         summary=_summary(con,"processing_triage_events","triage_id",triage_id,datetime.fromisoformat(stamp))
         for item in counts:
