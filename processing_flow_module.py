@@ -862,6 +862,16 @@ def entry_queue(user_id: int):
     con=db.connect()
     try:
         _operator(con,user_id)
+        # Reconcilia operações já concluídas que ainda não possuem Entrada.
+        # Idempotente: ensure_storage_entry reutiliza a Entrada existente.
+        missing=con.execute("""SELECT o.card_id,o.id FROM downstream_operations o
+          LEFT JOIN storage_entries se ON se.downstream_operation_id=o.id
+          WHERE o.sector='ESTOCAGEM' AND o.status='CONCLUIDO' AND se.id IS NULL
+          ORDER BY o.id""").fetchall()
+        for operation in missing:
+            ensure_storage_entry(con,int(operation["card_id"]),int(operation["id"]))
+        if missing:
+            con.commit()
         rows=con.execute("""SELECT se.*,c.purchase_id,c.supplier,c.brand FROM storage_entries se
           JOIN cards c ON c.id=se.card_id ORDER BY CASE se.status WHEN 'PENDENTE' THEN 0 ELSE 1 END,se.created_at DESC,se.id DESC""").fetchall()
         if not rows: return {"pending":[],"recent":[]}
