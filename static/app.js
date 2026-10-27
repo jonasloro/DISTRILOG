@@ -12,6 +12,50 @@ let unifiedCache = {sgo:[],tasks:[],shipments:[],returns:[]};
 
 const $ = (id) => document.getElementById(id);
 
+const LANGUAGE_LABELS = Object.freeze({
+  "Central de Operações":"Centro de Operaciones","Visão da Missão":"Visión de la Misión",
+  "Recebimento":"Recepción","Qualidade":"Calidad","Processamento":"Procesamiento",
+  "Etiquetagem":"Etiquetado","Estocagem":"Almacenamiento",
+  "Mapa de endereçamento":"Mapa de ubicaciones","Expedição":"Despacho",
+  "Devoluções":"Devoluciones","Conversas":"Conversaciones",
+  "Calendário":"Calendario","Cadastros":"Registros",
+  "Cards de teste":"Tarjetas de prueba","Sair":"Salir",
+  "Operação":"Operación","Saída e retorno":"Salida y devolución",
+  "Equipe":"Equipo","Gestão":"Gestión",
+  "Usuário":"Usuario","Senha":"Contraseña","Entrar":"Ingresar",
+  "Atualizar":"Actualizar","Ajuda":"Ayuda"
+});
+function applyUserLanguage(language) {
+  const selected = language === "es" ? "es" : "pt-BR";
+  document.documentElement.lang = selected;
+  const picker = document.getElementById("userLanguage");
+  if (picker) picker.value = selected;
+  document.querySelectorAll(".sidebar nav .nav-group, .sidebar nav .nav-item, .sidebar-footer button, #loginScreen label, #loginScreen button").forEach(node => {
+    if (!node.dataset.originalLabel) {
+      const textNode = Array.from(node.childNodes).find(n => n.nodeType === Node.TEXT_NODE && n.textContent.trim());
+      if (textNode) node.dataset.originalLabel = textNode.textContent.trim();
+    }
+    const textNode = Array.from(node.childNodes).find(n => n.nodeType === Node.TEXT_NODE && n.textContent.trim());
+    if (textNode && node.dataset.originalLabel) {
+      const original = node.dataset.originalLabel;
+      textNode.textContent = selected === "es" ? (LANGUAGE_LABELS[original] || original) : original;
+    }
+  });
+}
+async function changeUserLanguage(language) {
+  if (!currentUser) return;
+  const previous = currentUser.language || "pt-BR";
+  try {
+    const updated = await api("/api/account/language", {method:"PATCH",body:JSON.stringify({language})});
+    currentUser.language = updated.language;
+    applyUserLanguage(updated.language);
+  } catch (error) {
+    applyUserLanguage(previous);
+    alert(error.message);
+  }
+}
+
+
 async function api(url, options = {}) {
   const headers = { ...(options.headers || {}) };
   if (!(options.body instanceof FormData)) headers["Content-Type"] = "application/json";
@@ -113,6 +157,7 @@ async function doLogin() {
       body: JSON.stringify({ username: $("loginUsername").value, password: $("loginPassword").value }),
     });
     $("loginError").textContent = "";
+    applyUserLanguage(currentUser.language);
     if(currentUser.must_change_password){
       $("loginScreen").classList.add("hidden");
       $("passwordChangeScreen").classList.remove("hidden");
@@ -142,6 +187,7 @@ async function submitFirstPasswordChange(){
 function cancelFirstPasswordChange(){localStorage.removeItem("cl_recebimento_user");location.reload();}
 
 function enterApp() {
+  applyUserLanguage(currentUser?.language);
   $("loginScreen").classList.add("hidden");
   $("appShell").classList.remove("hidden");
   $("currentUser").innerHTML = `<strong>${esc(currentUser.name)}</strong><br>${esc(currentUser.role)}`;
