@@ -3336,6 +3336,8 @@ async function renderProcessingRegister() {
       else if(owner&&t.status==="EM_ANDAMENTO") actions='<button class="secondary small-btn" onclick="processingCadastroAction('+t.id+',\'pause\')">Pausar</button><button class="success small-btn" onclick="processingCadastroAction('+t.id+',\'finish\')">Concluir</button>';
       else if(owner&&t.status==="PAUSADA") actions='<button class="primary small-btn" onclick="processingCadastroAction('+t.id+',\'resume\')">Retomar</button><button class="success small-btn" onclick="processingCadastroAction('+t.id+',\'finish\')">Concluir</button>';
       else if(["EM_ANDAMENTO","PAUSADA"].includes(t.status)) actions='<small>Em andamento com '+esc(t.user_name||"outra pessoa")+'</small>';
+      else if(t.status==="CONCLUIDO" && Number(t.labels_ready||0)!==1 && t.card_current_sector==="ETIQUETAGEM" && owner) actions='<button class="success small-btn" onclick="processingLabelsReady('+t.id+')">Etiquetas disponíveis para etiquetar</button>';
+      else if(t.status==="CONCLUIDO" && Number(t.labels_ready||0)===1) actions='<span class="badge">Etiquetas disponíveis</span>';
       const status=processingStatusLabel(t.status);
       return '<article class="processing-cadastro-card"><div class="processing-cadastro-main"><div class="processing-cadastro-reference">'+esc(t.reference||"Referência não informada")+'</div><div class="processing-cadastro-meta">'+esc(t.supplier||"Fornecedor não informado")+' · '+Number(t.reference_qty||0).toLocaleString("pt-BR")+' peças</div></div><div class="processing-cadastro-state"><span class="badge">'+esc(status)+'</span><small>'+esc(t.card_sector_label||"")+'</small>'+((t.user_name&&t.status!=="PENDENTE")?'<small>Responsável: '+esc(t.user_name)+'</small>':'')+'</div><div class="processing-cadastro-timer">'+(["EM_ANDAMENTO","PAUSADA","CONCLUIDO"].includes(t.status)?processingTimerHtml(t):"")+'</div><div class="processing-cadastro-actions">'+actions+'</div></article>';
     };
@@ -3355,6 +3357,13 @@ async function processingCadastroAction(id,action) {
   try {
     await api("/api/processing/cadastro/" + id + "/" + action,{method:"POST",body:JSON.stringify({user_id:currentUser.id})});
     toast(action === "start" ? "Cadastro iniciado." : action === "pause" ? "Cadastro pausado." : action === "resume" ? "Cadastro retomado." : "Cadastro concluído.");
+    await renderProcessingRegister();
+  } catch(error) { toast(error.message); }
+}
+async function processingLabelsReady(id) {
+  try {
+    const result=await api("/api/processing/cadastro/"+id+"/labels-ready",{method:"POST",body:JSON.stringify({user_id:currentUser.id})});
+    toast(result.card_ready?"Etiquetas liberadas. Card disponível para Etiquetagem.":"Etiquetas desta referência liberadas.");
     await renderProcessingRegister();
   } catch(error) { toast(error.message); }
 }
@@ -3380,11 +3389,11 @@ async function renderProcessingTriage() {
         }
       }
       return '<tr><td><b>' + esc(refLabel(c)) + '</b><small>' + esc(c.purchase_id || ("Card " + c.id)) + '</small></td><td>' + esc(c.supplier || "—") + '</td><td>' +
-        Number(c.expected_total || 0).toLocaleString("pt-BR") + '</td><td><span class="badge">' + esc(status) + '</span><small>' + (t ? "Responsável: " + esc(t.user_name) : "Aguardando início") +
+        '<span class="muted">Conferência cega</span></td><td><span class="badge">' + esc(status) + '</span><small>' + (t ? "Responsável: " + esc(t.user_name) : "Aguardando início") +
         '</small></td><td>' + timer + '</td><td><div class="actions">' + actions + '</div></td></tr>';
     }).join("");
     $("mainContent").innerHTML = processingTabs("processing-triage") + '<section class="panel"><div class="panel-body"><h3 class="section-heading">Cards aguardando triagem</h3>' +
-      '<div class="notice">Preencha todas as linhas, inclusive zero. A contagem é gravada em <b>real_qty</b>; <b>expected_qty</b> fica preservada. Combinações extras são auditadas sem criar itens automaticamente.</div><div class="table-wrap"><table class="compact-table"><thead><tr><th>Compra / referência</th><th>Fornecedor</th><th>Previsto</th><th>Status</th><th>Tempo</th><th>Ações</th></tr></thead><tbody>' +
+      '<div class="notice"><b>Conferência cega:</b> a quantidade prevista não é exibida durante a Triagem. Se alguma linha divergir, somente ela será indicada para recontagem antes da conclusão.</div><div class="table-wrap"><table class="compact-table"><thead><tr><th>Compra / referência</th><th>Fornecedor</th><th>Conferência</th><th>Status</th><th>Tempo</th><th>Ações</th></tr></thead><tbody>' +
       (rows || emptyRows(6,"Nenhum Card no setor Processamento.")) + '</tbody></table></div></div></section>';
     startProcessingFlowTicker();
   } catch(error) { $("mainContent").innerHTML = processingTabs("processing-triage") + '<div class="notice error">' + esc(error.message) + '</div>'; toast(error.message); }
@@ -3405,7 +3414,7 @@ async function openTriageCountModal(id,cardId,readOnly) {
     const rows = (t.items || []).map(item => {
       const val = saved.has(Number(item.item_id)) ? Number(saved.get(Number(item.item_id)).counted_qty) : "";
       return '<tr><td><b>' + esc(item.reference || "—") + '</b></td><td>' + esc(item.color || "—") + '</td><td>' + esc(item.size || "—") + '</td><td>' +
-        Number(item.expected_qty || 0).toLocaleString("pt-BR") + '</td><td><input class="triage-count-value" type="number" min="0" step="1" data-item-id="' + item.item_id + '" value="' + val + '" placeholder="Contado" ' + (readOnly?"disabled":"required") + '></td></tr>';
+        '<span class="muted">Oculto</span></td><td><input class="triage-count-value" type="number" min="0" step="1" data-item-id="' + item.item_id + '" value="' + val + '" placeholder="Contado" ' + (readOnly?"disabled":"required") + '></td></tr>';
     }).join("");
     const extras = (t.counts || []).filter(x=>Number(x.is_extra)===1).map(x => '<tr><td>'+esc(x.reference)+'</td><td>'+esc(x.color)+'</td><td>'+esc(x.size)+'</td><td>'+Number(x.counted_qty||0)+'</td><td>Extra</td></tr>').join("");
     $("modalBody").innerHTML = '<div class="card-title"><div><h2>Contagem da Triagem</h2><div class="card-subtitle">' + esc(t.user_name || "") + ' · ' + fmtSeconds(t.worked_seconds || 0) + ' trabalhados</div></div></div>' +
@@ -3435,8 +3444,19 @@ async function finishProcessingTriage(id) {
     const labelingValue=$("triageNeedsLabeling")?.value;
     if(labelingValue!=="0"&&labelingValue!=="1")throw new Error("Informe se o Card precisa de Etiquetagem.");
     const result=await api("/api/processing/triage/"+id+"/finish",{method:"POST",body:JSON.stringify({user_id:currentUser.id,counts,needs_labeling:labelingValue==="1"})});
+    if(result.requires_recount){
+      const divergentIds=new Set((result.divergences||[]).map(x=>Number(x.item_id)));
+      document.querySelectorAll(".triage-count-value").forEach(input=>{
+        const wrong=divergentIds.has(Number(input.dataset.itemId));
+        input.closest("tr")?.classList.toggle("triage-recount-required",wrong);
+        if(wrong){ input.value=""; input.focus(); }
+      });
+      const labels=(result.divergences||[]).map(x=>[x.reference,x.color,x.size].filter(Boolean).join(" · ")).join("; ");
+      toast("Recontagem obrigatória: "+(labels||"há divergências na conferência."));
+      return;
+    }
     closeModal();
-    toast("Triagem concluída. Card encaminhado para "+(result.destination==="ETIQUETAGEM"?"Etiquetagem":"Estocagem")+".");
+    toast("Triagem concluída. Card encaminhado para "+(result.destination==="ETIQUETAGEM"?"Etiquetagem — aguardando etiquetas":"Estocagem")+".");
     await renderProcessingTriage();
   } catch(error) { toast(error.message); }
 }
