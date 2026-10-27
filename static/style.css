@@ -1416,3 +1416,30 @@ input:disabled,select:disabled,textarea:disabled{
   .mission-week-trend>small{display:none}
   .mission-board-hint{display:none}
 }
+
+
+/* Layout da planilha QUADRO: semanas em linhas, setores nas colunas. */
+.mission-board-horizontal{min-width:1370px}
+.mission-board-horizontal thead th{background:#2b3830;color:#d4e8d9;white-space:normal;text-align:center}
+.mission-board-horizontal .mission-week-head,.mission-board-horizontal .mission-week-cell{min-width:133px;width:133px;max-width:133px}
+.mission-board-horizontal .mission-indicator-head,.mission-board-horizontal .mission-metric-cell{min-width:108px;width:108px;max-width:108px}
+.mission-board-horizontal thead .mission-week-head{position:sticky;left:0;z-index:5;text-align:left}
+.mission-board-horizontal thead .mission-indicator-head{position:sticky;left:133px;z-index:5;text-align:left}
+.mission-board-horizontal tbody .mission-week-cell{position:sticky;left:0;z-index:4;color:#e7f5e9;background:#27402d!important;vertical-align:middle}
+.mission-board-horizontal tbody .mission-week-cell b{display:block;font-size:12px;letter-spacing:.06em}
+.mission-board-horizontal tbody .mission-week-cell small{display:block;font-size:10px;line-height:1.5;letter-spacing:0;color:#b5ccbb}
+.mission-board-horizontal tbody .mission-metric-cell{position:sticky;left:133px;z-index:3;text-align:left;letter-spacing:.04em;font-size:10px}
+.mission-board-horizontal tbody .mission-matrix-row.is-backlog .mission-metric-cell{background:#39382b!important;color:#ebd09b}
+.mission-board-horizontal tbody .mission-matrix-row.is-produced .mission-metric-cell{background:#24412e!important;color:#b0e5bd}
+.mission-board-horizontal .mission-sector-head{min-width:108px;max-width:120px;font-size:10px;line-height:1.5;letter-spacing:.02em}
+.mission-board-horizontal tbody .mission-matrix-row.is-backlog td{background:#282820}
+.mission-board-horizontal tbody .mission-matrix-row.is-produced td{background:#1f3023}
+.mission-board-horizontal tbody .mission-matrix-row:hover td{filter:brightness(1.15)}
+.mission-board-horizontal tbody .mission-matrix-row td{min-width:108px;text-align:right;font-variant-numeric:tabular-nums}
+.mission-board-horizontal tbody .mission-matrix-row td.mission-total{background:#35503b!important;border-left:2px solid #6c9075}
+.mission-board-horizontal tbody .mission-matrix-row td.mission-total small{color:#bad2c1}
+.mission-board-horizontal thead .mission-total-head{min-width:132px;max-width:132px}
+@media(max-width:800px){
+ .mission-board-horizontal thead .mission-week-head,.mission-board-horizontal tbody .mission-week-cell{min-width:108px;width:108px;max-width:108px}
+ .mission-board-horizontal thead .mission-indicator-head,.mission-board-horizontal tbody .mission-metric-cell{min-width:92px;width:92px;max-width:92px;left:108px}
+}
