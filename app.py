@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import binascii
 import base64
 import hashlib
 import hmac
@@ -17,7 +18,7 @@ from urllib.parse import urlsplit
 from typing import Any, Optional
 
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
+from fastapi.responses import HTMLResponse, JSONResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from openpyxl import load_workbook
@@ -39,7 +40,7 @@ from sample_math import proportional_allocation
 from concurrent.futures import ThreadPoolExecutor
 from collections import defaultdict
 from threading import Lock
-from supabase_module import verificar_login_supabase, seed_usuarios_supabase, change_password_supabase, create_operator_supabase, reset_operator_password_supabase, ALLOWED_ROLES
+from supabase_module import pg_connect, verificar_login_supabase, seed_usuarios_supabase, change_password_supabase, create_operator_supabase, reset_operator_password_supabase, ALLOWED_ROLES
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = Path(os.getenv("OUTLOG_DATA_DIR", str(BASE_DIR / "data"))).resolve()
@@ -100,7 +101,9 @@ def _sign_session(user_id: int) -> str:
     signature = hmac.new(_session_secret(), encoded.encode(), hashlib.sha256).hexdigest()
     return encoded + "." + signature
 
-def _read_session(token: str) -> int | None:
+def _read_session(token: str) -> tuple[int, int] | None:
+    if len(token) > 512:
+        return None
     try:
         encoded, signature = token.split(".", 1)
         expected = hmac.new(_session_secret(), encoded.encode(), hashlib.sha256).hexdigest()
@@ -111,7 +114,7 @@ def _read_session(token: str) -> int | None:
         if int(expires) < clock_time.time() or len(nonce) != 32:
             return None
         return int(uid), int(issued_ns)
-    except (ValueError, UnicodeError, TypeError):
+    except (ValueError, UnicodeError, TypeError, OverflowError, binascii.Error):
         return None
 
 @app.middleware("http")
@@ -1362,6 +1365,7 @@ def startup() -> None:
     init_goat_db()
     init_positions_db()
     init_inventory_db()
+    init_generic_uploads_db()
     init_collab_db()
     init_unified_db()
     init_cleaning_db()
@@ -1560,6 +1564,24 @@ def list_users():
     return [dict(r) for r in rows]
 
 
+def init_generic_uploads_db() -> None:
+    """Persistência segura de anexos; arquivos não dependem do disco do Render."""
+    with pg_connect() as con:
+        with con.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS distrilog.generic_uploads (
+                    filename TEXT PRIMARY KEY,
+                    content BYTEA NOT NULL,
+                    media_type TEXT NOT NULL,
+                    size_bytes INTEGER NOT NULL CHECK (size_bytes BETWEEN 1 AND 10485760),
+                    uploaded_by BIGINT,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+            """)
+            cur.execute("ALTER TABLE distrilog.generic_uploads ENABLE ROW LEVEL SECURITY")
+        con.commit()
+
+
 @app.get("/uploads/{filename}")
 def protected_upload(filename: str, request: Request):
     """Uploaded evidence requires an authenticated browser session."""
@@ -1578,39 +1600,53 @@ def protected_upload(filename: str, request: Request):
         raise HTTPException(401, "Sessão expirada.")
     if not re.fullmatch(r"[0-9]{8}_[0-9]{6}_[0-9a-f]{8}\.(?:jpg|jpeg|png|webp|gif|bmp|pdf)", filename):
         raise HTTPException(404, "Arquivo não encontrado.")
+    with pg_connect() as connection:
+        with connection.cursor() as cur:
+            cur.execute("SELECT content,media_type FROM distrilog.generic_uploads WHERE filename=%s", (filename,))
+            stored = cur.fetchone()
+    if stored:
+        return Response(content=bytes(stored["content"]), media_type=stored["media_type"],
+                        headers={"Cache-Control": "private, no-store",
+                                 "X-Content-Type-Options": "nosniff"})
+    # Compatibilidade com anexos já armazenados no filesystem anterior.
     path = UPLOAD_DIR / filename
     if not path.is_file():
         raise HTTPException(404, "Arquivo não encontrado.")
-    return FileResponse(path, headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"})
+    return FileResponse(path, headers={"Cache-Control": "private, no-store",
+                                       "X-Content-Type-Options": "nosniff"})
 
 
 @app.post("/api/uploads")
-async def upload_files(files: list[UploadFile] = File(...)) -> dict[str, list[str]]:
+async def upload_files(request: Request, files: list[UploadFile] = File(...)) -> dict[str, list[str]]:
     if not files or len(files) > 10:
         raise HTTPException(400, "Envie entre 1 e 10 arquivos.")
     allowed = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".pdf"}
-    saved: list[str] = []
+    content_types = {".jpg":"image/jpeg", ".jpeg":"image/jpeg", ".png":"image/png",
+                     ".webp":"image/webp", ".gif":"image/gif", ".bmp":"image/bmp",
+                     ".pdf":"application/pdf"}
+    prepared: list[tuple[str, bytes, str, int]] = []
     total_bytes = 0
-    try:
-        for file in files:
-            suffix = Path(file.filename or "").suffix.lower()
-            if suffix not in allowed:
-                raise HTTPException(415, "Formato não permitido para evidência.")
-            content = await file.read(10 * 1024 * 1024 + 1)
-            if not content or len(content) > 10 * 1024 * 1024:
-                raise HTTPException(413, "Cada arquivo deve ter entre 1 byte e 10 MB.")
-            total_bytes += len(content)
-            if total_bytes > 25 * 1024 * 1024:
-                raise HTTPException(413, "O total de arquivos não pode ultrapassar 25 MB.")
-            safe = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}{suffix}"
-            path = UPLOAD_DIR / safe
-            path.write_bytes(content)
-            saved.append(f"/uploads/{safe}")
-    except Exception:
-        for url in saved:
-            (UPLOAD_DIR / url.rsplit("/", 1)[-1]).unlink(missing_ok=True)
-        raise
-    return {"paths": saved}
+    for file in files:
+        suffix = Path(file.filename or "").suffix.lower()
+        if suffix not in allowed:
+            raise HTTPException(415, "Formato não permitido para evidência.")
+        content = await file.read(10 * 1024 * 1024 + 1)
+        if not content or len(content) > 10 * 1024 * 1024:
+            raise HTTPException(413, "Cada arquivo deve ter entre 1 byte e 10 MB.")
+        total_bytes += len(content)
+        if total_bytes > 25 * 1024 * 1024:
+            raise HTTPException(413, "O total de arquivos não pode ultrapassar 25 MB.")
+        safe = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}{suffix}"
+        prepared.append((safe, content, content_types[suffix], request.state.auth_user_id))
+    with pg_connect() as connection:
+        with connection.cursor() as cur:
+            cur.executemany("""INSERT INTO distrilog.generic_uploads
+                (filename,content,media_type,size_bytes,uploaded_by)
+                VALUES(%s,%s,%s,%s,%s)""",
+                [(name,data,mime,len(data),uid) for name,data,mime,uid in prepared])
+        connection.commit()
+    return {"paths": ["/uploads/" + name for name,_,_,_ in prepared]}
+
 
 @app.post("/api/import-excel")
 async def import_excel(request: Request, file: UploadFile = File(...)):
