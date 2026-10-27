@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import db
-from positions_module import item_allocation_totals, deactivate_card_allocations
+from positions_module import item_allocation_totals
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -393,7 +393,13 @@ async def complete(operation_id: int, request: Request):
         con.execute("UPDATE cards SET current_sector=?,status=?,updated_at=? WHERE id=?",(nxt,status,now(),op["card_id"]))
     moved_item_ids = [int(r["item_id"]) for r in con.execute(
         "SELECT item_id FROM downstream_operation_items WHERE operation_id=?",(operation_id,)).fetchall()] if op["source_subset"] else None
-    deactivate_card_allocations(int(op["card_id"]),("ET",),moved_item_ids)
+    if moved_item_ids is None:
+        con.execute("UPDATE card_allocations SET active=0 WHERE card_id=? AND setor='ET' AND active=1",(int(op["card_id"]),))
+    elif moved_item_ids:
+        marks_move=",".join("?" for _ in moved_item_ids)
+        con.execute(f"""UPDATE card_allocations SET active=0
+          WHERE card_id=? AND setor='ET' AND active=1 AND item_id IN ({marks_move})""",
+          (int(op["card_id"]),*moved_item_ids))
     if op["sector"] == "ESTOCAGEM":
         from processing_flow_module import ensure_storage_entry
         ensure_storage_entry(con,int(op["card_id"]),int(operation_id))
