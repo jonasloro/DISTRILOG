@@ -197,8 +197,10 @@ def change_password_supabase(username: str, current_password: str, new_password:
             cur.execute("UPDATE usuarios SET senha_hash=%s,must_change_password=FALSE WHERE usuario=%s",
                         (gerar_hash_senha(new_password),username))
 
-def create_operator_supabase(admin_username: str, admin_password: str, username: str, name: str, role: str, temporary_password: str) -> None:
+def create_operator_supabase(admin_username: str, admin_password: str, username: str, name: str, role: str, temporary_password: str, language: str = "pt-BR") -> None:
     validate_new_password(temporary_password)
+    if language not in ("pt-BR", "es"):
+        raise ValueError("Idioma não suportado.")
     if not re.fullmatch(r"[a-z0-9_.-]{3,40}",username):
         raise ValueError("Usuário inválido: use 3 a 40 letras minúsculas, números, ponto, traço ou sublinhado.")
     if not 2 <= len(name.strip()) <= 100 or role not in ALLOWED_ROLES:
@@ -209,8 +211,8 @@ def create_operator_supabase(admin_username: str, admin_password: str, username:
             admin=cur.fetchone()
             if not admin or admin["papel"]!="admin" or admin["must_change_password"] or not verificar_senha(admin_password,admin["senha_hash"]):
                 raise PermissionError("Autenticação de administrador inválida.")
-            cur.execute("INSERT INTO usuarios(usuario,senha_hash,papel,must_change_password) VALUES(%s,%s,%s,TRUE)",
-                        (username,gerar_hash_senha(temporary_password),role))
+            cur.execute("INSERT INTO usuarios(usuario,senha_hash,papel,must_change_password,idioma_preferido) VALUES(%s,%s,%s,TRUE,%s)",
+                        (username,gerar_hash_senha(temporary_password),role,language))
 
 def reset_operator_password_supabase(admin_username: str, admin_password: str,
                                      target_username: str, temporary_password: str) -> None:

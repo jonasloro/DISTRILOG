@@ -1504,6 +1504,9 @@ async def admin_create_login(request: Request):
     username=str(payload.get("username") or "").strip().lower()
     name=str(payload.get("name") or "").strip()
     role=str(payload.get("role") or "").strip().lower()
+    language=payload.get("language", "pt-BR")
+    if language not in ("pt-BR", "es"):
+        raise HTTPException(422, "Idioma não suportado.")
     if role not in ALLOWED_ROLES:
         raise HTTPException(400,"Função inválida.")
     con=db_connect()
@@ -1513,7 +1516,7 @@ async def admin_create_login(request: Request):
         # A autenticação do administrador é conferida no banco de credenciais,
         # não por um user_id fornecido pelo navegador.
         try:
-            create_operator_supabase(str(payload.get("admin_username") or ""),str(payload.get("admin_password") or ""),username,name,role,str(payload.get("temporary_password") or ""))
+            create_operator_supabase(str(payload.get("admin_username") or ""),str(payload.get("admin_password") or ""),username,name,role,str(payload.get("temporary_password") or ""),language)
         except PermissionError as exc:
             raise HTTPException(403,str(exc)) from None
         except ValueError as exc:
@@ -1527,6 +1530,26 @@ async def admin_create_login(request: Request):
         return {"ok":True,"username":username,"role":role}
     finally:
         con.close()
+
+
+@app.patch("/api/admin/users/{username}/language")
+async def admin_update_user_language(username: str, request: Request):
+    """Assign a preferred language to an operator (administrator only)."""
+    if request.state.auth_role != "admin":
+        raise HTTPException(403, "Apenas administradores podem alterar o idioma de outro usuário.")
+    payload = await request.json()
+    language = payload.get("language") if isinstance(payload, dict) else None
+    if language not in ("pt-BR", "es"):
+        raise HTTPException(422, "Idioma não suportado.")
+    with pg_connect() as auth_con:
+        with auth_con.cursor() as cur:
+            cur.execute(
+                "UPDATE public.usuarios SET idioma_preferido=%s WHERE usuario=%s RETURNING usuario",
+                (language, username),
+            )
+            if not cur.fetchone():
+                raise HTTPException(404, "Usuário não encontrado.")
+    return {"username": username, "language": language}
 
 
 @app.post("/api/admin/users/{username}/reset-password")
@@ -1572,7 +1595,7 @@ def list_users(response: Response):
     con = db_connect()
     try:
         rows = con.execute(
-            """SELECT u.id,u.username,u.name,u.role
+            """SELECT u.id,u.username,u.name,u.role,credentials.idioma_preferido AS language
                FROM distrilog.users u
                JOIN public.usuarios credentials
                  ON credentials.usuario=u.username AND credentials.papel=u.role

@@ -46,7 +46,7 @@ function missionMoveMonth(change) {
 }
 function missionValue(value, qualifier="") {
   if (value===null || value===undefined) return '<span class="mission-nodata">—</span>';
-  return '<strong class="mission-cell-value '+qualifier+'">'+Number(value).toLocaleString("pt-BR")+'</strong>';
+  return '<strong class="mission-cell-value '+qualifier+'">'+Number(value).toLocaleString(DISTRILOG_I18N.getLanguage())+'</strong>';
 }
 function missionMetricTotal(rows, key) {
   const valid = rows.map(r=>r[key]).filter(n=>Number.isFinite(n));
@@ -97,7 +97,7 @@ async function showMissionWeekly(){
     first.filter(r=>r.produced===null).length:0;
   const percent=totalBacklog>0 && totalProduced!==null?Math.round(totalProduced/totalBacklog*1000)/10:null;
   const [yy,mm]=selectedMonth.split("-").map(Number);
-  const monthLabel=new Date(Date.UTC(yy,mm-1,15)).toLocaleDateString("pt-BR",{month:"long",year:"numeric",timeZone:"UTC"});
+  const monthLabel=new Date(Date.UTC(yy,mm-1,15)).toLocaleDateString(DISTRILOG_I18N.getLanguage(),{month:"long",year:"numeric",timeZone:"UTC"});
 
   const tableHeader='<tr><th class="mission-week-head">SEMANA</th><th class="mission-indicator-head">INDICADOR</th>'+
     sectors.map(s=>'<th class="mission-sector-head">'+esc(s)+'</th>').join("")+
@@ -153,7 +153,7 @@ async function showMissionWeekly(){
       '<small>'+(active?.slots.FRI.status==="captured"?"Fechado na sexta, 16h":
         active?.slots.WED.status==="captured"?"Prévia de quarta, 12h":"Aguardando o primeiro corte")+
         (incompleteSectors?" · Soma parcial ("+incompleteSectors+" sem fonte)":"")+'</small></div>'+
-    '<div class="missao-kpi"><span>Entrega sobre backlog</span><strong>'+(percent===null?'—':percent.toLocaleString("pt-BR")+"%")+'</strong>'+
+    '<div class="missao-kpi"><span>Entrega sobre backlog</span><strong>'+(percent===null?'—':percent.toLocaleString(DISTRILOG_I18N.getLanguage())+"%")+'</strong>'+
        '<small>Pode superar 100% · não é limite</small></div>'+
     '<div class="missao-kpi"><span>Horários oficiais</span><strong class="mission-cutoff-clock">08h10 · 12h · 16h</strong>'+
        '<small>Segunda · quarta · sexta</small></div></div>'+

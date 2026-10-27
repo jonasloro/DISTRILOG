@@ -172,7 +172,7 @@ async function renderCalendar() {
   const first = new Date(calState.y, calState.m, 1), start = new Date(first); start.setDate(1 - first.getDay());
   const end = new Date(start); end.setDate(start.getDate() + 42);
   calState.events = await api(`/api/calendar/events?user_id=${currentUser.id}&start=${ymd(start)}T00:00&end=${ymd(end)}T00:00`);
-  const todayStr = ymd(new Date()), monthName = first.toLocaleDateString("pt-BR", { month: "long", year: "numeric" });
+  const todayStr = ymd(new Date()), monthName = first.toLocaleDateString(DISTRILOG_I18N.getLanguage(), { month: "long", year: "numeric" });
   const cells = [];
   for (let i = 0; i < 42; i++) {
     const d = new Date(start); d.setDate(start.getDate() + i); const ds = ymd(d);
@@ -192,7 +192,7 @@ function calNav(dir) {
 function selectCalDay(ds) { calState.sel = ds; calState.editing = null; renderCalendar(); }
 function renderCalDay() {
   const ds = calState.sel, evs = calState.events.filter((e) => e.start_at.slice(0, 10) <= ds && e.end_at.slice(0, 10) >= ds);
-  const label = new Date(ds + "T12:00").toLocaleDateString("pt-BR", { weekday: "long", day: "numeric", month: "long" });
+  const label = new Date(ds + "T12:00").toLocaleDateString(DISTRILOG_I18N.getLanguage(), { weekday: "long", day: "numeric", month: "long" });
   const who = (e) => (e.attendee_ids.length ? e.attendee_ids.map((id) => calState.users.find((u) => u.id === id)?.name || "?").join(", ") : "Toda a equipe");
   $("calPanel").innerHTML = `<h3>${esc(label)}</h3>` + (evs.length ? evs.map((e) => `<div class="collab-event k-${e.kind}"><div><b>${esc(e.title)}</b> <small>${KIND_LABEL[e.kind]} · ${e.all_day ? "dia inteiro" : e.start_at.slice(11, 16) + "–" + e.end_at.slice(11, 16)}</small><br><small>Criado por ${esc(e.created_by_name)} · Participantes: ${esc(who(e))}</small>${e.description ? `<p>${esc(e.description)}</p>` : ""}</div>${e.created_by === currentUser.id || currentUser.role === "admin" ? `<div class="actions"><button onclick="calForm(${e.id},'${ds}')">Editar</button><button onclick="calDelete(${e.id})">Excluir</button></div>` : ""}</div>`).join("") : '<div class="collab-empty">Nada marcado para este dia.</div>') + '<div id="calFormBox"></div>';
 }

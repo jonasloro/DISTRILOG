@@ -222,7 +222,7 @@ function updateManualGradeTotal() {
     });
     grand += row;
     const rowEl = document.getElementById('row_total_' + color.id);
-    if (rowEl) rowEl.textContent = row.toLocaleString('pt-BR');
+    if (rowEl) rowEl.textContent = row.toLocaleString(DISTRILOG_I18N.getLanguage());
   });
 
   manualGradeSizes.forEach((size) => {
@@ -230,14 +230,14 @@ function updateManualGradeTotal() {
       return sum + getManualGradeQuantity(color.id, size.id);
     }, 0);
     const col = document.getElementById('col_total_' + size.id);
-    if (col) col.textContent = total.toLocaleString('pt-BR');
+    if (col) col.textContent = total.toLocaleString(DISTRILOG_I18N.getLanguage());
   });
 
   const totalEl = document.getElementById('grand_total');
-  if (totalEl) totalEl.textContent = grand.toLocaleString('pt-BR');
+  if (totalEl) totalEl.textContent = grand.toLocaleString(DISTRILOG_I18N.getLanguage());
 
   const notice = document.getElementById('manualGradeTotal');
-  if (notice) notice.innerHTML = 'Total da referência: <b>' + grand.toLocaleString('pt-BR') + '</b> peças';
+  if (notice) notice.innerHTML = 'Total da referência: <b>' + grand.toLocaleString(DISTRILOG_I18N.getLanguage()) + '</b> peças';
 }
 
 function collectManualGrade() {
@@ -278,7 +278,7 @@ async function processManualCard(isTest = false) {
       method: "POST",
       body: JSON.stringify({ reference, supplier, nf, lot, grade, ...(isTest ? { target_sector } : {}) })
     });
-    say((isTest ? "Card de teste criado em " + target_sector : "Card criado no fluxo normal de Recebimento") + " para a referência " + d.reference + " (" + Number(d.expected_total || 0).toLocaleString("pt-BR") + " peças).");
+    say((isTest ? "Card de teste criado em " + target_sector : "Card criado no fluxo normal de Recebimento") + " para a referência " + d.reference + " (" + Number(d.expected_total || 0).toLocaleString(DISTRILOG_I18N.getLanguage()) + " peças).");
     closeGoatModal();
     const destinationPage = ({
       RECEBIMENTO: "receiving",

@@ -12,36 +12,10 @@ let unifiedCache = {sgo:[],tasks:[],shipments:[],returns:[]};
 
 const $ = (id) => document.getElementById(id);
 
-const LANGUAGE_LABELS = Object.freeze({
-  "Central de Operações":"Centro de Operaciones","Visão da Missão":"Visión de la Misión",
-  "Recebimento":"Recepción","Qualidade":"Calidad","Processamento":"Procesamiento",
-  "Etiquetagem":"Etiquetado","Estocagem":"Almacenamiento",
-  "Mapa de endereçamento":"Mapa de ubicaciones","Expedição":"Despacho",
-  "Devoluções":"Devoluciones","Conversas":"Conversaciones",
-  "Calendário":"Calendario","Cadastros":"Registros",
-  "Cards de teste":"Tarjetas de prueba","Sair":"Salir",
-  "Operação":"Operación","Saída e retorno":"Salida y devolución",
-  "Equipe":"Equipo","Gestão":"Gestión",
-  "Usuário":"Usuario","Senha":"Contraseña","Entrar":"Ingresar",
-  "Atualizar":"Actualizar","Ajuda":"Ayuda"
-});
 function applyUserLanguage(language) {
-  const selected = language === "es" ? "es" : "pt-BR";
-  document.documentElement.lang = selected;
-  const picker = document.getElementById("userLanguage");
-  if (picker) picker.value = selected;
-  document.querySelectorAll(".sidebar nav .nav-group, .sidebar nav .nav-item, .sidebar-footer button, #loginScreen label, #loginScreen button").forEach(node => {
-    if (!node.dataset.originalLabel) {
-      const textNode = Array.from(node.childNodes).find(n => n.nodeType === Node.TEXT_NODE && n.textContent.trim());
-      if (textNode) node.dataset.originalLabel = textNode.textContent.trim();
-    }
-    const textNode = Array.from(node.childNodes).find(n => n.nodeType === Node.TEXT_NODE && n.textContent.trim());
-    if (textNode && node.dataset.originalLabel) {
-      const original = node.dataset.originalLabel;
-      textNode.textContent = selected === "es" ? (LANGUAGE_LABELS[original] || original) : original;
-    }
-  });
+  return DISTRILOG_I18N.setLanguage(language);
 }
+
 async function changeUserLanguage(language) {
   if (!currentUser) return;
   const previous = currentUser.language || "pt-BR";
@@ -59,6 +33,7 @@ async function changeUserLanguage(language) {
 async function api(url, options = {}) {
   const headers = { ...(options.headers || {}) };
   if (!(options.body instanceof FormData)) headers["Content-Type"] = "application/json";
+  headers["Accept-Language"] = DISTRILOG_I18N.getLanguage();
   const response = await fetch(url, { ...options, headers });
   if (!response.ok) {
     const error = await response.json().catch(() => ({ detail: "Erro inesperado." }));
@@ -81,7 +56,7 @@ async function api(url, options = {}) {
       if ($("loginError")) $("loginError").textContent =
         "Sessão encerrada. Se o perfil foi excluído no Supabase, ele não está mais autorizado.";
     }
-    throw new Error(error.detail || "Erro inesperado.");
+    throw new Error(DISTRILOG_I18N.t(error.detail || "Erro inesperado."));
   }
   return response.json();
 }
@@ -111,13 +86,13 @@ function esc(value) {
 function fmtDate(value) {
   if (!value) return "—";
   const parsed = new Date(value.length === 10 ? value + "T00:00:00" : value);
-  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleDateString("pt-BR");
+  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleDateString(DISTRILOG_I18N.getLanguage());
 }
 
 function fmtDateTime(value) {
   if (!value) return "—";
   const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString("pt-BR");
+  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString(DISTRILOG_I18N.getLanguage());
 }
 
 // Estado de módulos novos: declarado no topo porque o app já inicia (enterApp) antes do fim do arquivo.
@@ -144,7 +119,7 @@ function statusClass(status) {
 }
 
 function toast(message) {
-  $("toast").textContent = message;
+  $("toast").textContent = DISTRILOG_I18N.t(message);
   $("toast").classList.remove("hidden");
   clearTimeout(window.toastTimer);
   window.toastTimer = setTimeout(() => $("toast").classList.add("hidden"), 3500);
@@ -313,15 +288,15 @@ function showQuickHelp() {
 function metricCardsHtml(scope, totals) {
   if (scope === "receiving") {
     const qty = Number(totals.receiving_qty || 0);
-    return `<div class="metric-row-2"><div class="kpi"><div class="kpi-label">Peças aguardando recebimento</div><div class="kpi-value">${qty.toLocaleString("pt-BR")}</div></div></div>`;
+    return `<div class="metric-row-2"><div class="kpi"><div class="kpi-label">Peças aguardando recebimento</div><div class="kpi-value">${qty.toLocaleString(DISTRILOG_I18N.getLanguage())}</div></div></div>`;
   }
   if (scope === "quality") {
     const qty = Number(totals.quality_qty || 0), total = Number(totals.quality || 0), active = Number(totals.quality_in_progress || 0);
-    return `<div class="metric-row-2"><div class="kpi"><div class="kpi-label">Peças em Qualidade</div><div class="kpi-value">${qty.toLocaleString("pt-BR")}</div></div><div class="kpi"><div class="kpi-label">% em inspeção ativa</div><div class="kpi-value">${total?(active*100/total).toFixed(1):"0.0"}%</div></div></div>`;
+    return `<div class="metric-row-2"><div class="kpi"><div class="kpi-label">Peças em Qualidade</div><div class="kpi-value">${qty.toLocaleString(DISTRILOG_I18N.getLanguage())}</div></div><div class="kpi"><div class="kpi-label">% em inspeção ativa</div><div class="kpi-value">${total?(active*100/total).toFixed(1):"0.0"}%</div></div></div>`;
   }
   if (scope === "processing") {
     const qty = Number(totals.processing_qty || 0), total = Number(totals.processing || 0), active = Number(totals.processing_in_progress || 0);
-    return `<div class="metric-row-2"><div class="kpi"><div class="kpi-label">Peças em Processamento</div><div class="kpi-value">${qty.toLocaleString("pt-BR")}</div></div><div class="kpi"><div class="kpi-label">% em execução ativa</div><div class="kpi-value">${total?(active*100/total).toFixed(1):"0.0"}%</div></div></div>`;
+    return `<div class="metric-row-2"><div class="kpi"><div class="kpi-label">Peças em Processamento</div><div class="kpi-value">${qty.toLocaleString(DISTRILOG_I18N.getLanguage())}</div></div><div class="kpi"><div class="kpi-label">% em execução ativa</div><div class="kpi-value">${total?(active*100/total).toFixed(1):"0.0"}%</div></div></div>`;
   }
   return "";
 }
@@ -395,10 +370,10 @@ function renderAddressMapContent() {
       '<div class="address-map-intro"><div><span class="address-map-eyebrow">WMS · CONTROLE</span><h2>Central de Endereçamento</h2><p>Clique em uma posição para consultar seu conteúdo ou transferir material, sem precisar abrir um Card.</p></div>' +
       '<button class="secondary" type="button" onclick="renderAddressMap()">Atualizar mapa</button></div>' +
       '<div class="address-map-stats">' +
-        '<div class="address-map-stat"><span>Posições no setor</span><strong id="addressMapTotal">' + allPositions.length.toLocaleString("pt-BR") + '</strong></div>' +
-        '<div class="address-map-stat"><span>Posições livres</span><strong id="addressMapFree">' + free.toLocaleString("pt-BR") + '</strong></div>' +
-        '<div class="address-map-stat"><span>Posições ocupadas</span><strong id="addressMapOccupied">' + occupied.toLocaleString("pt-BR") + '</strong></div>' +
-        '<div class="address-map-stat"><span>Unidades alocadas</span><strong id="addressMapAllocated">' + allocated.toLocaleString("pt-BR") + '</strong></div>' +
+        '<div class="address-map-stat"><span>Posições no setor</span><strong id="addressMapTotal">' + allPositions.length.toLocaleString(DISTRILOG_I18N.getLanguage()) + '</strong></div>' +
+        '<div class="address-map-stat"><span>Posições livres</span><strong id="addressMapFree">' + free.toLocaleString(DISTRILOG_I18N.getLanguage()) + '</strong></div>' +
+        '<div class="address-map-stat"><span>Posições ocupadas</span><strong id="addressMapOccupied">' + occupied.toLocaleString(DISTRILOG_I18N.getLanguage()) + '</strong></div>' +
+        '<div class="address-map-stat"><span>Unidades alocadas</span><strong id="addressMapAllocated">' + allocated.toLocaleString(DISTRILOG_I18N.getLanguage()) + '</strong></div>' +
       '</div>' +
       '<div class="address-map-controls">' +
         '<div class="field"><label for="addressMapSector">Setor</label><select id="addressMapSector" onchange="changeAddressMapSector(this.value)">' +
@@ -479,16 +454,16 @@ function renderAddressMapGrid() {
             const p=rows[0],boxes=Math.max(0,Number(p?.ocupado||0)),colors=String(p?.colors||"").split(",").map(x=>x.trim()).filter(Boolean),used=Math.min(4,Number(p?.color_count||colors.length||0));
             const slots=Array.from({length:4},(_,idx)=>'<span class="position-color-slot '+(idx<used?'filled':'')+'">'+(colors[idx]?esc(colors[idx]):(idx<used?'Ocupada':'Livre'))+'</span>').join("");
             const title=(p?.address||casulo)+' • '+used+'/4 cores • '+boxes+' caixas pretas';
-            return '<button type="button" class="position-casulo flat-casulo" data-address="'+esc(p?.address||casulo)+'" onclick="openAddressInventory(this.dataset.address)" title="'+esc(title)+'"><div class="position-casulo-head"><span>CASULO</span><b>'+esc(p?.address||casulo)+'</b></div><div class="position-color-slots">'+slots+'</div><div class="position-flat-summary"><b>'+used+'/4 cores</b><span>'+boxes.toLocaleString("pt-BR")+' caixas pretas</span></div></button>';
+            return '<button type="button" class="position-casulo flat-casulo" data-address="'+esc(p?.address||casulo)+'" onclick="openAddressInventory(this.dataset.address)" title="'+esc(title)+'"><div class="position-casulo-head"><span>CASULO</span><b>'+esc(p?.address||casulo)+'</b></div><div class="position-color-slots">'+slots+'</div><div class="position-flat-summary"><b>'+used+'/4 cores</b><span>'+boxes.toLocaleString(DISTRILOG_I18N.getLanguage())+' caixas pretas</span></div></button>';
           }
           return '<div class="position-casulo"><div class="position-casulo-head"><span>CASULO</span><b>' + esc(casulo) + '</b></div><div class="position-levels">' +
             rows.sort((a, b) => String(a.nivel).localeCompare(String(b.nivel))).map((p) => {
               const quantity = Math.max(0, Number(p.ocupado || 0));
               const statusClassName = quantity > 0 ? "is-occupied" : "is-free";
-              const title = p.address + " • " + (quantity > 0 ? quantity.toLocaleString("pt-BR") + " unidade(s) alocada(s)" : "Livre");
+              const title = p.address + " • " + (quantity > 0 ? quantity.toLocaleString(DISTRILOG_I18N.getLanguage()) + " unidade(s) alocada(s)" : "Livre");
               return '<button type="button" class="position-cell ' + statusClassName + '" data-address="' + esc(p.address) + '" onclick="openAddressInventory(this.dataset.address)" title="' + esc(title) + '" aria-label="' + esc(title) + '">' +
                 '<span class="position-level">' + esc(p.nivel) + '</span><strong>' + esc(p.address) + '</strong>' +
-                '<small>' + (quantity > 0 ? quantity.toLocaleString("pt-BR") + ' alocado(s)' : 'Livre') + '</small></button>';
+                '<small>' + (quantity > 0 ? quantity.toLocaleString(DISTRILOG_I18N.getLanguage()) + ' alocado(s)' : 'Livre') + '</small></button>';
             }).join("") + '</div></div>';
         }).join("");
       return '<section class="position-zone"><div class="position-zone-head"><div><b>' + esc(zoneLabel) + '</b><span>' + casulos.size + ' casulo(s) visível(is)</span></div><small>' + visibleCount + ' posições</small></div><div class="position-casulo-grid address-map-casulos">' + casuloHtml + '</div></section>';
@@ -497,10 +472,10 @@ function renderAddressMapGrid() {
   const occupied = allPositions.filter((p) => Number(p.ocupado || 0) > 0).length;
   const free = allPositions.length - occupied;
   const allocated = allPositions.reduce((sum, p) => sum + Math.max(0, Number(p.ocupado || 0)), 0);
-  if ($("addressMapTotal")) $("addressMapTotal").textContent = allPositions.length.toLocaleString("pt-BR");
-  if ($("addressMapFree")) $("addressMapFree").textContent = free.toLocaleString("pt-BR");
-  if ($("addressMapOccupied")) $("addressMapOccupied").textContent = occupied.toLocaleString("pt-BR");
-  if ($("addressMapAllocated")) $("addressMapAllocated").textContent = allocated.toLocaleString("pt-BR");
+  if ($("addressMapTotal")) $("addressMapTotal").textContent = allPositions.length.toLocaleString(DISTRILOG_I18N.getLanguage());
+  if ($("addressMapFree")) $("addressMapFree").textContent = free.toLocaleString(DISTRILOG_I18N.getLanguage());
+  if ($("addressMapOccupied")) $("addressMapOccupied").textContent = occupied.toLocaleString(DISTRILOG_I18N.getLanguage());
+  if ($("addressMapAllocated")) $("addressMapAllocated").textContent = allocated.toLocaleString(DISTRILOG_I18N.getLanguage());
 }
 
 // Consulta de conteúdo e transferência independente de conclusão de card.
@@ -534,8 +509,8 @@ async function openAddressInventory(address) {
         (broken?'<span class="badge orange">Reconciliar</span>':'<button class="secondary small-btn" type="button" onclick="chooseAddressTransfer('+i+')">Transferir</button>')+
         '</td></tr>';
     }).join("");
-    const hist = (movements||[]).map(m=>'<tr><td>'+esc(new Date(m.created_at).toLocaleString("pt-BR"))+'</td><td>'+esc(m.source_address)+' → '+esc(m.destination_address)+'</td><td>'+esc(m.box_count>0?m.box_count+" caixas":m.quantity+" volumes")+'</td><td>'+esc(m.actor_name||"")+'</td><td>'+esc(m.reason||"")+'</td></tr>').join("");
-    panel.innerHTML = '<div class="wms-panel-head"><div><span class="address-map-eyebrow">WMS · CONTEÚDO REAL</span><h3>'+esc(address)+'</h3><p>'+total.toLocaleString("pt-BR")+' '+unit+' · '+rows.length+' registros de alocação</p></div>'+
+    const hist = (movements||[]).map(m=>'<tr><td>'+esc(new Date(m.created_at).toLocaleString(DISTRILOG_I18N.getLanguage()))+'</td><td>'+esc(m.source_address)+' → '+esc(m.destination_address)+'</td><td>'+esc(m.box_count>0?m.box_count+" caixas":m.quantity+" volumes")+'</td><td>'+esc(m.actor_name||"")+'</td><td>'+esc(m.reason||"")+'</td></tr>').join("");
+    panel.innerHTML = '<div class="wms-panel-head"><div><span class="address-map-eyebrow">WMS · CONTEÚDO REAL</span><h3>'+esc(address)+'</h3><p>'+total.toLocaleString(DISTRILOG_I18N.getLanguage())+' '+unit+' · '+rows.length+' registros de alocação</p></div>'+
       '<button class="secondary" type="button" onclick="closeAddressInventory()">Fechar ×</button></div>'+
       (bad.length?'<div class="notice warn"><b>Atenção:</b> '+bad.length+' registro(s) legado(s) não possuem Card ou item válido. Não é seguro movimentá-los antes da reconciliação.</div>':'')+
       '<div class="table-wrap"><table class="compact-table"><thead><tr><th>Card / compra</th><th>Referência · cor · tamanho</th><th>Saldo físico</th><th>Ação</th></tr></thead><tbody>'+
@@ -570,7 +545,7 @@ function chooseAddressTransfer(index) {
     (isBox?'<div class="notice">ET/EC: a transferência movimenta todas as caixas e tamanhos desta cor juntos. Não permite transferência parcial.</div>':
       '<div class="field"><label>Volumes a transferir</label><input id="wmsTransferQty" type="number" min="1" max="'+Number(item.quantidade)+'" value="'+Number(item.quantidade)+'" step="1"></div>')+
     '<div class="field"><label>Endereço de destino</label><select id="wmsTransferDestination"><option value="">Escolha o destino</option>'+
-    destinations.map(p=>'<option value="'+esc(p.address)+'">'+esc(p.address)+' · '+Number(p.occupied).toLocaleString("pt-BR")+' ocupados</option>').join("")+'</select></div>'+
+    destinations.map(p=>'<option value="'+esc(p.address)+'">'+esc(p.address)+' · '+Number(p.occupied).toLocaleString(DISTRILOG_I18N.getLanguage())+' ocupados</option>').join("")+'</select></div>'+
     '<div class="field"><label>Motivo da transferência</label><input id="wmsTransferReason" maxlength="500" placeholder="Ex.: reorganização de casulos"></div>'+
     '<div class="actions"><button class="primary" type="button" onclick="submitAddressTransfer()">Confirmar transferência</button>'+
     '<button class="ghost" type="button" onclick="$(\'addressTransferForm\').innerHTML=\'\'">Cancelar</button></div></div>';
@@ -614,7 +589,7 @@ async function refreshWmsReconciliationSummary() {
       Number(last.invalid_addresses||0)+Number(last.invalid_quantities||0)+
       Number(last.overfilled_color_addresses||0)) : null;
     const stale=last ? (Date.now()-new Date(last.checked_at).getTime()) > 2*60*60*1000 : true;
-    const timestamp=last ? new Date(last.checked_at).toLocaleString("pt-BR") : "Ainda não executada";
+    const timestamp=last ? new Date(last.checked_at).toLocaleString(DISTRILOG_I18N.getLanguage()) : "Ainda não executada";
     box.innerHTML =
       '<div class="wms-health-summary">'+
       '<div><b>Auditoria automática · Supabase</b><small>Última verificação: '+esc(timestamp)+
@@ -648,12 +623,12 @@ async function openWmsReconciliation() {
       const unit=["ET","EC"].includes(row.setor)?" caixas":" volumes";
       return '<tr><td><b>'+esc(row.address)+'</b><small>'+esc(row.setor)+'</small></td>'+
         '<td>Card #'+Number(row.card_id)+' · item '+esc(row.item_id??"sem grade")+'</td>'+
-        '<td>'+Number(["ET","EC"].includes(row.setor)?row.box_count:row.quantidade).toLocaleString("pt-BR")+unit+'</td>'+
+        '<td>'+Number(["ET","EC"].includes(row.setor)?row.box_count:row.quantidade).toLocaleString(DISTRILOG_I18N.getLanguage())+unit+'</td>'+
         '<td><span class="badge orange">'+esc(flags)+'</span></td>'+
         '<td>'+(currentUser.role==="admin"?'<button class="secondary small-btn" type="button" onclick="resolveEmptyWmsAllocation('+Number(row.allocation_id)+')">Confirmar posição vazia</button>':'<small>Consulta</small>')+'</td></tr>';
     }).join("");
     panel.innerHTML='<div class="wms-panel-head"><div><span class="address-map-eyebrow">WMS · AUDITORIA</span>'+
-      '<h3>Conferência de divergências</h3><p>'+Number(data.total).toLocaleString("pt-BR")+' alocações sem vínculo válido. A listagem mostra até 500.</p></div>'+
+      '<h3>Conferência de divergências</h3><p>'+Number(data.total).toLocaleString(DISTRILOG_I18N.getLanguage())+' alocações sem vínculo válido. A listagem mostra até 500.</p></div>'+
       '<button class="secondary" type="button" onclick="closeAddressInventory()">Fechar ×</button></div>'+
       '<div class="notice warn"><b>Não dê baixa automaticamente.</b> Primeiro confira o endereço físico. Se houver mercadoria, é necessário recuperar seu vínculo com um Card. A baixa só é permitida após confirmar que a posição está vazia.</div>'+
       '<div class="table-wrap"><table class="compact-table"><thead><tr><th>Posição</th><th>Registro</th><th>Ocupação</th><th>Problema</th><th>Conferência física</th></tr></thead><tbody>'+
@@ -953,7 +928,7 @@ function cardLocationBannerHtml(rows, failed=false, loading=false, currentSector
         '<div class="card-location-address"><div class="card-location-address-main"><strong>' +
           esc(location.address) + '</strong><span>' + esc(location.label) +
         '</span></div><div class="card-location-quantity"><b>' +
-          Number(location.quantity).toLocaleString("pt-BR") + '</b><small>' + esc(location.unit) +
+          Number(location.quantity).toLocaleString(DISTRILOG_I18N.getLanguage()) + '</b><small>' + esc(location.unit) +
         '</small></div></div>'
       ).join("") + '</div>'
     : '<div class="card-location-empty"><b>Endereçamento ainda não registrado</b><span>As posições da mercadoria aparecerão aqui assim que forem alocadas.</span></div>';
@@ -1083,7 +1058,7 @@ function canOperateReceiving() {
 
 function qualityReadOnlyPreviewHtml() {
   const items = (cardData.items || []).slice(0, 8);
-  const rows = items.map((item) => '<tr><td>' + esc(item.product || '—') + '</td><td>' + esc(item.reference || '—') + '</td><td>' + esc(item.color || '—') + '</td><td>' + esc(item.size || '—') + '</td><td>' + Number(item.expected_qty || 0).toLocaleString('pt-BR') + '</td></tr>').join('');
+  const rows = items.map((item) => '<tr><td>' + esc(item.product || '—') + '</td><td>' + esc(item.reference || '—') + '</td><td>' + esc(item.color || '—') + '</td><td>' + esc(item.size || '—') + '</td><td>' + Number(item.expected_qty || 0).toLocaleString(DISTRILOG_I18N.getLanguage()) + '</td></tr>').join('');
   return '<div class="panel-body">' +
     '<div class="notice warn"><b>Visualização somente leitura.</b><br>Setor responsável: <b>' + esc(cardData.current_sector || 'Não definido') + '</b>. Ações operacionais ficam disponíveis somente para o setor responsável.</div>' +
     '<div class="summary-grid">' +
@@ -1092,7 +1067,7 @@ function qualityReadOnlyPreviewHtml() {
       '<div class="summary-box"><span>Marca</span><strong>' + esc(cardData.brand || '—') + '</strong></div>' +
       '<div class="summary-box"><span>Tipo da compra</span><strong>' + esc(cardData.purchase_mode === 'GRADE' ? 'Grade' : cardData.purchase_mode === 'SALDO' ? 'Saldo' : 'Não reconhecido') + '</strong></div>' +
       '<div class="summary-box"><span>Itens</span><strong>' + (cardData.items || []).length + '</strong></div>' +
-      '<div class="summary-box"><span>Quantidade esperada</span><strong>' + Number(cardData.expected_total || 0).toLocaleString('pt-BR') + '</strong></div>' +
+      '<div class="summary-box"><span>Quantidade esperada</span><strong>' + Number(cardData.expected_total || 0).toLocaleString(DISTRILOG_I18N.getLanguage()) + '</strong></div>' +
       '<div class="summary-box"><span>Status</span><strong>' + esc(cardData.status_label || cardData.status || '—') + '</strong></div>' +
     '</div>' +
     '<h3 class="section-heading">Resumo dos itens</h3>' +
@@ -2232,7 +2207,7 @@ async function renderProcessingTab() {
   const qty=p?.totals||{};
   const responsible=[...history].reverse().find(e=>["TRIAGEM_INICIADA","CADASTRO_INICIADO","ETIQUETAGEM_INICIADA","ESTOCAGEM_INICIADA"].includes(e.event_type));
   const divergence=[...history].reverse().find(e=>String(e.event_type||"").includes("DIVERGENTE"));
-  const correctionRows=(downstreamDivergence.pending||[]).map(row=>'<tr class="processing-divergence-row" data-item-id="'+Number(row.item_id)+'"><td><b>'+esc(row.reference||row.product||"—")+'</b></td><td>'+esc(row.color||"—")+'</td><td>'+esc(row.size||"—")+'</td><td>'+Number(row.counted_qty||0).toLocaleString("pt-BR")+'</td><td><input class="processing-corrected-qty" type="number" min="0" step="1" value="'+Number(row.current_qty||0)+'" required></td></tr>').join("");
+  const correctionRows=(downstreamDivergence.pending||[]).map(row=>'<tr class="processing-divergence-row" data-item-id="'+Number(row.item_id)+'"><td><b>'+esc(row.reference||row.product||"—")+'</b></td><td>'+esc(row.color||"—")+'</td><td>'+esc(row.size||"—")+'</td><td>'+Number(row.counted_qty||0).toLocaleString(DISTRILOG_I18N.getLanguage())+'</td><td><input class="processing-corrected-qty" type="number" min="0" step="1" value="'+Number(row.current_qty||0)+'" required></td></tr>').join("");
   const correctionPanel=downstreamDivergence.operation&&((downstreamDivergence.pending||[]).length||(downstreamDivergence.awaiting_recount||[]).length)
     ? '<h3 class="section-heading">Divergência persistente · '+esc(downstreamDivergence.operation.sector||"")+'</h3>'+
       ((downstreamDivergence.pending||[]).length
@@ -2242,7 +2217,7 @@ async function renderProcessingTab() {
         ? '<div class="notice success-box"><b>Grade corrigida pelo Processamento.</b><br>Aguardando nova conferência de '+esc(downstreamDivergence.operation.sector||"setor")+'.</div>'
         : '')
     : "";
-  $("cardTab").innerHTML='<div class="panel-body"><div class="notice"><b>Visão geral do Processamento</b><br>Esta aba acompanha o caminho do Card. As operações são realizadas nas etapas correspondentes do fluxo.</div><div class="summary-grid processing-summary">'+flow+'</div><h3 class="section-heading">Situação do Card</h3><div class="form-grid"><div class="field"><label>Setor atual</label><input class="readonly" readonly value="'+esc(cardData.current_sector||"—")+'"></div><div class="field"><label>Status</label><input class="readonly" readonly value="'+esc(cardData.status||"—")+'"></div><div class="field"><label>Tipo da compra</label><input class="readonly" readonly value="'+esc(cardData.purchase_mode==="GRADE"?"Grade":"Saldo")+'"></div><div class="field"><label>Quantidade prevista</label><input class="readonly" readonly value="'+Number(qty.expected??cardData.expected_total??0).toLocaleString("pt-BR")+'"></div>'+(responsible?'<div class="field"><label>Último responsável operacional</label><input class="readonly" readonly value="'+esc(responsible.user_name||responsible.description||"Registrado no histórico")+'"></div>':"")+'</div>'+(divergence?'<div class="notice warn"><b>Última divergência registrada</b><br>'+esc(divergence.description||"Existe uma conferência divergente pendente de verificação.")+'</div>':"")+correctionPanel+'<div class="notice success-box"><b>Sem configuração paralela.</b><br>Triagem, Cadastro, Etiquetagem, Estocagem e Entrada mantêm suas próprias regras e responsáveis.</div></div>';
+  $("cardTab").innerHTML='<div class="panel-body"><div class="notice"><b>Visão geral do Processamento</b><br>Esta aba acompanha o caminho do Card. As operações são realizadas nas etapas correspondentes do fluxo.</div><div class="summary-grid processing-summary">'+flow+'</div><h3 class="section-heading">Situação do Card</h3><div class="form-grid"><div class="field"><label>Setor atual</label><input class="readonly" readonly value="'+esc(cardData.current_sector||"—")+'"></div><div class="field"><label>Status</label><input class="readonly" readonly value="'+esc(cardData.status||"—")+'"></div><div class="field"><label>Tipo da compra</label><input class="readonly" readonly value="'+esc(cardData.purchase_mode==="GRADE"?"Grade":"Saldo")+'"></div><div class="field"><label>Quantidade prevista</label><input class="readonly" readonly value="'+Number(qty.expected??cardData.expected_total??0).toLocaleString(DISTRILOG_I18N.getLanguage())+'"></div>'+(responsible?'<div class="field"><label>Último responsável operacional</label><input class="readonly" readonly value="'+esc(responsible.user_name||responsible.description||"Registrado no histórico")+'"></div>':"")+'</div>'+(divergence?'<div class="notice warn"><b>Última divergência registrada</b><br>'+esc(divergence.description||"Existe uma conferência divergente pendente de verificação.")+'</div>':"")+correctionPanel+'<div class="notice success-box"><b>Sem configuração paralela.</b><br>Triagem, Cadastro, Etiquetagem, Estocagem e Entrada mantêm suas próprias regras e responsáveis.</div></div>';
 }
 async function submitProcessingDivergenceCorrection(operationId){
   try{
@@ -2271,7 +2246,7 @@ function processingSetupHtml(importedItems=[]) {
     '<div class="notice success-box"><b>Selecione as referências que entrarão nesta produção.</b><br>'+(volumeOnly ? 'O RM guarda somente o saldo global de volumes, sem vínculo a produto, cor ou tamanho. A quantidade processada por referência será informada nesta etapa e validada contra o saldo global.' : 'Somente os volumes das referências posicionadas em Aguardando Processamento serão movimentados. A composição de grade será definida posteriormente na Triagem.')+'</div>' +
     '<div class="table-wrap compact-picker"><table class="compact-table"><thead><tr><th class="check-col"><input id="processingImportedAll" type="checkbox" checked onchange="toggleImportedProcessingItems(this.checked)"></th><th>Produto</th><th>Referência</th><th>Volumes</th></tr></thead><tbody>' +
       importedItems.map(function(item){
-        return '<tr><td><input class="processing-import-item" type="checkbox" value="'+item.id+'" checked onchange="updateImportedProcessingSummary()"></td><td><b>'+esc(item.product||"—")+'</b></td><td><b>'+esc(item.reference||item.sku||"—")+'</b><small>'+Number(item.expected_qty||0).toLocaleString("pt-BR")+' peças</small></td><td><b>'+(volumeOnly?"—":Number(rmVolumes[String(item.id)]||0).toLocaleString("pt-BR"))+'</b></td></tr>';
+        return '<tr><td><input class="processing-import-item" type="checkbox" value="'+item.id+'" checked onchange="updateImportedProcessingSummary()"></td><td><b>'+esc(item.product||"—")+'</b></td><td><b>'+esc(item.reference||item.sku||"—")+'</b><small>'+Number(item.expected_qty||0).toLocaleString(DISTRILOG_I18N.getLanguage())+' peças</small></td><td><b>'+(volumeOnly?"—":Number(rmVolumes[String(item.id)]||0).toLocaleString(DISTRILOG_I18N.getLanguage()))+'</b></td></tr>';
       }).join("") +
     '</tbody></table></div><div id="processingImportedSummary" class="queue-counter"><b>'+importedItems.length+'</b> referência(s) • <b>'+importedQty+'</b> '+(volumeOnly?"volume(s) no saldo global":"volume(s) selecionado(s)")+'</div>'
   ) : (
@@ -2493,7 +2468,7 @@ function processingQuantitiesHtml(p, editable) {
 
   const volumeOnly = p.volume_allocation_mode === "VOLUMES";
   const deferredNotice = (volumeOnly
-    ? '<div class="notice">O RM foi endereçado por volumes, sem vínculo individual por referência. Informe o processamento por referência nesta etapa; a soma será validada contra o saldo global de '+Number(p.global_allocated_volume_total||0).toLocaleString("pt-BR")+' volume(s).</div>'
+    ? '<div class="notice">O RM foi endereçado por volumes, sem vínculo individual por referência. Informe o processamento por referência nesta etapa; a soma será validada contra o saldo global de '+Number(p.global_allocated_volume_total||0).toLocaleString(DISTRILOG_I18N.getLanguage())+' volume(s).</div>'
     : '') + (p.quantity_deferred_to_storage
     ? '<div class="notice warn">Os volumes finais serão confirmados na Estocagem. É permitido concluir o Processamento sem preencher todas as referências.</div>'
     : volumeOnly ? '' : '<div class="notice">Informe os volumes processados por referência.</div>');
@@ -2501,7 +2476,7 @@ function processingQuantitiesHtml(p, editable) {
   return '<h3 class="section-heading">Volumes — Referências</h3>'+deferredNotice+
     '<div class="table-wrap"><table><thead><tr><th>Referência</th><th>'+(volumeOnly?"Volumes no RM":"Volumes previstos")+'</th><th>Volumes processados</th><th>Volumes estocados</th></tr></thead><tbody>'+
     p.items.map(function(item){
-      return '<tr><td><b>'+esc(item.reference||item.sku||item.product||"—")+'</b><small>'+Number(item.expected_qty||0).toLocaleString("pt-BR")+' peças</small></td><td>'+(volumeOnly?"—":Number(item.volume_expected||0).toLocaleString("pt-BR"))+'</td><td><input class="table-input processing-item-qty" data-item-id="'+item.item_id+'" type="number" min="0" value="'+item.processed_qty+'" '+(editable ? "" : "readonly")+'></td><td>'+item.stored_qty+'</td></tr>';
+      return '<tr><td><b>'+esc(item.reference||item.sku||item.product||"—")+'</b><small>'+Number(item.expected_qty||0).toLocaleString(DISTRILOG_I18N.getLanguage())+' peças</small></td><td>'+(volumeOnly?"—":Number(item.volume_expected||0).toLocaleString(DISTRILOG_I18N.getLanguage()))+'</td><td><input class="table-input processing-item-qty" data-item-id="'+item.item_id+'" type="number" min="0" value="'+item.processed_qty+'" '+(editable ? "" : "readonly")+'></td><td>'+item.stored_qty+'</td></tr>';
     }).join("")+
     '</tbody></table></div><div class="actions">'+(editable ? '<button class="primary" onclick="saveProcessingQuantities()">Salvar volumes por referência</button>' : '')+copyButton+'</div>';
 }
@@ -2733,14 +2708,14 @@ async function renderShipping(){
       <div class="kpi"><div class="kpi-label">Em preenchimento</div><div class="kpi-value">${preparing}</div><div class="kpi-hint">Romaneios</div></div>
       <div class="kpi"><div class="kpi-label">Prontos para saída</div><div class="kpi-value">${ready}</div><div class="kpi-hint">Conferidos</div></div>
       <div class="kpi"><div class="kpi-label">Expedidos</div><div class="kpi-value">${shipped}</div><div class="kpi-hint">Concluídos</div></div>
-      <div class="kpi"><div class="kpi-label">Conferência geral</div><div class="kpi-value">${total?Math.round(checked*100/total):0}%</div><div class="kpi-hint">${checked.toLocaleString('pt-BR')} de ${total.toLocaleString('pt-BR')} peças</div></div>
+      <div class="kpi"><div class="kpi-label">Conferência geral</div><div class="kpi-value">${total?Math.round(checked*100/total):0}%</div><div class="kpi-hint">${checked.toLocaleString(DISTRILOG_I18N.getLanguage())} de ${total.toLocaleString(DISTRILOG_I18N.getLanguage())} peças</div></div>
     </div>
     <div class="panel shipping-panel">
       <div class="panel-header"><span>Controle de romaneios</span><div>${allowed?`<button class="ghost small-btn" onclick="document.getElementById('shipmentPdf').click()">Importar PDF</button> <button class="primary small-btn" onclick="showShipmentForm()">+ Novo romaneio</button><input id="shipmentPdf" class="hidden" type="file" accept=".pdf" onchange="importShipmentPdf(this)">`:''}</div></div>
       <div class="panel-body shipping-toolbar"><div class="queue-search"><span>⌕</span><input id="shipmentSearch" placeholder="Romaneio, destino, transportadora, placa ou motorista" oninput="filterShipmentRows()"></div><select id="shipmentStatus" onchange="filterShipmentRows()"><option value="">Todos os status</option><option>RASCUNHO</option><option>PREPARANDO</option><option>EM_CONFERENCIA</option><option>PRONTO</option><option>EXPEDIDO</option></select></div>
       <div id="shipmentForm" class="panel-body hidden"></div>
       <div class="table-wrap"><table class="compact-table"><thead><tr><th>Documento</th><th>Destino / transporte</th><th>Conferência</th><th>Volumes</th><th>Saída prevista</th><th>Status</th><th></th></tr></thead><tbody>
-        ${rows.map(s=>{const pct=s.total_qty?Math.min(100,Math.round(Number(s.checked_qty||0)*100/s.total_qty)):0;return `<tr class="shipment-row" data-status="${esc(s.status)}" data-search="${esc(normalizeSearch([s.document_no,s.destination,s.carrier,s.vehicle_plate,s.driver_name].join(' ')))}"><td><button class="link-button" onclick="openShipment(${s.id})"><b>${esc(s.document_no)}</b></button><small>${s.item_count||0} item(ns)</small></td><td><b>${esc(s.destination||'Pendente')}</b><small>${esc(s.carrier||'Transportadora não informada')} ${s.vehicle_plate?`• ${esc(s.vehicle_plate)}`:''}</small></td><td><div class="shipping-progress"><i style="width:${pct}%"></i></div><small>${Number(s.checked_qty||0).toLocaleString('pt-BR')} / ${Number(s.total_qty||0).toLocaleString('pt-BR')} peças • ${pct}%</small></td><td>${Number(s.volume_count||0)||'—'}</td><td>${s.scheduled_at?fmtDateTime(s.scheduled_at):'—'}</td><td>${statusBadge(s.status)}</td><td><button class="secondary small-btn" onclick="openShipment(${s.id})">Preencher</button></td></tr>`}).join("")||'<tr><td colspan="7">Nenhum romaneio cadastrado.</td></tr>'}
+        ${rows.map(s=>{const pct=s.total_qty?Math.min(100,Math.round(Number(s.checked_qty||0)*100/s.total_qty)):0;return `<tr class="shipment-row" data-status="${esc(s.status)}" data-search="${esc(normalizeSearch([s.document_no,s.destination,s.carrier,s.vehicle_plate,s.driver_name].join(' ')))}"><td><button class="link-button" onclick="openShipment(${s.id})"><b>${esc(s.document_no)}</b></button><small>${s.item_count||0} item(ns)</small></td><td><b>${esc(s.destination||'Pendente')}</b><small>${esc(s.carrier||'Transportadora não informada')} ${s.vehicle_plate?`• ${esc(s.vehicle_plate)}`:''}</small></td><td><div class="shipping-progress"><i style="width:${pct}%"></i></div><small>${Number(s.checked_qty||0).toLocaleString(DISTRILOG_I18N.getLanguage())} / ${Number(s.total_qty||0).toLocaleString(DISTRILOG_I18N.getLanguage())} peças • ${pct}%</small></td><td>${Number(s.volume_count||0)||'—'}</td><td>${s.scheduled_at?fmtDateTime(s.scheduled_at):'—'}</td><td>${statusBadge(s.status)}</td><td><button class="secondary small-btn" onclick="openShipment(${s.id})">Preencher</button></td></tr>`}).join("")||'<tr><td colspan="7">Nenhum romaneio cadastrado.</td></tr>'}
       </tbody></table></div>
     </div>`;
 }
@@ -2755,7 +2730,7 @@ function showShipmentForm(){
 function addShipmentItemRow(barcode="",description="",quantity=""){$("shipmentNewItems").insertAdjacentHTML("beforeend",`<div class="shipment-new-item"><div class="field"><label>Código de barras</label><input data-field="barcode" value="${esc(barcode)}"></div><div class="field grow"><label>Descrição</label><input data-field="description" value="${esc(description)}"></div><div class="field"><label>Quantidade *</label><input data-field="quantity" type="number" min="1" value="${esc(quantity)}"></div><button class="danger small-btn" onclick="this.parentElement.remove()">Remover</button></div>`);}
 async function createShipment(){try{const items=[...document.querySelectorAll(".shipment-new-item")].map(row=>({barcode:row.querySelector('[data-field=barcode]').value,description:row.querySelector('[data-field=description]').value,quantity:Number(row.querySelector('[data-field=quantity]').value||0)})).filter(i=>i.quantity>0);const d=await api("/api/unified/shipments",{method:"POST",body:JSON.stringify({user_id:currentUser.id,document_no:$("shipDoc").value,destination:$("shipDest").value,carrier:$("shipCarrier").value,vehicle_plate:$("shipPlate").value,driver_name:$("shipDriver").value,scheduled_at:$("shipScheduled").value,volume_count:Number($("shipVolumes").value||0),notes:$("shipNotes").value,items})});toast("Romaneio salvo. Continue a conferência.");await renderShipping();openShipment(d.shipment_id);}catch(e){toast(e.message)}}
 async function importShipmentPdf(input){if(!input.files?.[0])return;const form=new FormData();form.append("file",input.files[0]);try{const d=await api(`/api/unified/shipments/import-pdf?user_id=${currentUser.id}`,{method:"POST",body:form});toast(`${d.document_no}: ${d.total_qty} peças reconhecidas.`);renderShipping();}catch(e){toast(e.message)}}
-async function openShipment(id){try{const d=await api(`/api/unified/shipments/${id}`),s=d.shipment;const allowed=["expedicao","estocagem","supervisor","admin"].includes(currentUser.role)&&s.status!=="EXPEDIDO";const pct=s.total_qty?Math.min(100,Math.round(Number(s.checked_qty||0)*100/s.total_qty)):0;const missing=[["Destino",s.destination],["Transportadora",s.carrier],["Placa",s.vehicle_plate],["Motorista",s.driver_name],["Saída prevista",s.scheduled_at],["Volumes",s.volume_count]].filter(([,v])=>!v).map(([k])=>k);$("modalBody").innerHTML=`<div class="card-title"><div><h2>Romaneio ${esc(s.document_no)}</h2><div class="card-subtitle">Preenchimento e conferência da Expedição</div></div>${statusBadge(s.status)}</div><div class="shipping-completion"><div><span>Progresso da conferência</span><b>${pct}%</b></div><div class="shipping-progress large"><i style="width:${pct}%"></i></div><small>${Number(s.checked_qty||0).toLocaleString('pt-BR')} de ${Number(s.total_qty||0).toLocaleString('pt-BR')} peças conferidas</small></div>${missing.length?`<div class="notice warn"><b>Faltam dados obrigatórios:</b> ${missing.join(', ')}.</div>`:'<div class="notice success-box"><b>Dados do transporte completos.</b></div>'}<div class="shipping-form-grid"><div class="field"><label>Romaneio *</label><input id="shipEditDoc" value="${esc(s.document_no||'')}" ${allowed?'':'readonly'}></div><div class="field"><label>Destino *</label><input id="shipEditDest" value="${esc(s.destination||'')}" ${allowed?'':'readonly'}></div><div class="field"><label>Transportadora *</label><input id="shipEditCarrier" value="${esc(s.carrier||'')}" ${allowed?'':'readonly'}></div><div class="field"><label>Placa *</label><input id="shipEditPlate" value="${esc(s.vehicle_plate||'')}" ${allowed?'':'readonly'}></div><div class="field"><label>Motorista *</label><input id="shipEditDriver" value="${esc(s.driver_name||'')}" ${allowed?'':'readonly'}></div><div class="field"><label>Saída prevista *</label><input id="shipEditScheduled" type="datetime-local" value="${esc((s.scheduled_at||'').slice(0,16))}" ${allowed?'':'readonly'}></div><div class="field"><label>Volumes *</label><input id="shipEditVolumes" type="number" min="1" value="${Number(s.volume_count||0)||''}" ${allowed?'':'readonly'}></div><div class="field grow"><label>Observações</label><input id="shipEditNotes" value="${esc(s.notes||'')}" ${allowed?'':'readonly'}></div></div><h3 class="section-heading">Conferência por item</h3><div class="table-wrap shipping-items"><table class="compact-table"><thead><tr><th>Código</th><th>Descrição</th><th>Prevista</th><th>Conferida</th><th>Pendente</th><th>Observação</th></tr></thead><tbody>${d.items.map(i=>`<tr class="shipment-edit-item" data-id="${i.id}"><td>${esc(i.barcode||'—')}</td><td><b>${esc(i.description||'Item sem descrição')}</b></td><td>${i.quantity}</td><td><input class="table-input" data-field="checked" type="number" min="0" max="${i.quantity}" value="${i.checked_qty}" ${allowed?'':'readonly'}></td><td><b class="${i.quantity-i.checked_qty?'text-danger':'text-success'}">${i.quantity-i.checked_qty}</b></td><td><input data-field="notes" value="${esc(i.notes||'')}" ${allowed?'':'readonly'}></td></tr>`).join('')||'<tr><td colspan="6">Nenhum item informado.</td></tr>'}</tbody></table></div>${allowed?`<div class="actions"><button class="primary" onclick="saveShipmentFilling(${id})">Salvar preenchimento</button>${s.status==='PRONTO'?`<button class="success" onclick="finishShipment(${id})">Confirmar saída</button>`:''}</div>`:''}`;$("modal").classList.remove("hidden");}catch(e){toast(e.message)}}
+async function openShipment(id){try{const d=await api(`/api/unified/shipments/${id}`),s=d.shipment;const allowed=["expedicao","estocagem","supervisor","admin"].includes(currentUser.role)&&s.status!=="EXPEDIDO";const pct=s.total_qty?Math.min(100,Math.round(Number(s.checked_qty||0)*100/s.total_qty)):0;const missing=[["Destino",s.destination],["Transportadora",s.carrier],["Placa",s.vehicle_plate],["Motorista",s.driver_name],["Saída prevista",s.scheduled_at],["Volumes",s.volume_count]].filter(([,v])=>!v).map(([k])=>k);$("modalBody").innerHTML=`<div class="card-title"><div><h2>Romaneio ${esc(s.document_no)}</h2><div class="card-subtitle">Preenchimento e conferência da Expedição</div></div>${statusBadge(s.status)}</div><div class="shipping-completion"><div><span>Progresso da conferência</span><b>${pct}%</b></div><div class="shipping-progress large"><i style="width:${pct}%"></i></div><small>${Number(s.checked_qty||0).toLocaleString(DISTRILOG_I18N.getLanguage())} de ${Number(s.total_qty||0).toLocaleString(DISTRILOG_I18N.getLanguage())} peças conferidas</small></div>${missing.length?`<div class="notice warn"><b>Faltam dados obrigatórios:</b> ${missing.join(', ')}.</div>`:'<div class="notice success-box"><b>Dados do transporte completos.</b></div>'}<div class="shipping-form-grid"><div class="field"><label>Romaneio *</label><input id="shipEditDoc" value="${esc(s.document_no||'')}" ${allowed?'':'readonly'}></div><div class="field"><label>Destino *</label><input id="shipEditDest" value="${esc(s.destination||'')}" ${allowed?'':'readonly'}></div><div class="field"><label>Transportadora *</label><input id="shipEditCarrier" value="${esc(s.carrier||'')}" ${allowed?'':'readonly'}></div><div class="field"><label>Placa *</label><input id="shipEditPlate" value="${esc(s.vehicle_plate||'')}" ${allowed?'':'readonly'}></div><div class="field"><label>Motorista *</label><input id="shipEditDriver" value="${esc(s.driver_name||'')}" ${allowed?'':'readonly'}></div><div class="field"><label>Saída prevista *</label><input id="shipEditScheduled" type="datetime-local" value="${esc((s.scheduled_at||'').slice(0,16))}" ${allowed?'':'readonly'}></div><div class="field"><label>Volumes *</label><input id="shipEditVolumes" type="number" min="1" value="${Number(s.volume_count||0)||''}" ${allowed?'':'readonly'}></div><div class="field grow"><label>Observações</label><input id="shipEditNotes" value="${esc(s.notes||'')}" ${allowed?'':'readonly'}></div></div><h3 class="section-heading">Conferência por item</h3><div class="table-wrap shipping-items"><table class="compact-table"><thead><tr><th>Código</th><th>Descrição</th><th>Prevista</th><th>Conferida</th><th>Pendente</th><th>Observação</th></tr></thead><tbody>${d.items.map(i=>`<tr class="shipment-edit-item" data-id="${i.id}"><td>${esc(i.barcode||'—')}</td><td><b>${esc(i.description||'Item sem descrição')}</b></td><td>${i.quantity}</td><td><input class="table-input" data-field="checked" type="number" min="0" max="${i.quantity}" value="${i.checked_qty}" ${allowed?'':'readonly'}></td><td><b class="${i.quantity-i.checked_qty?'text-danger':'text-success'}">${i.quantity-i.checked_qty}</b></td><td><input data-field="notes" value="${esc(i.notes||'')}" ${allowed?'':'readonly'}></td></tr>`).join('')||'<tr><td colspan="6">Nenhum item informado.</td></tr>'}</tbody></table></div>${allowed?`<div class="actions"><button class="primary" onclick="saveShipmentFilling(${id})">Salvar preenchimento</button>${s.status==='PRONTO'?`<button class="success" onclick="finishShipment(${id})">Confirmar saída</button>`:''}</div>`:''}`;$("modal").classList.remove("hidden");}catch(e){toast(e.message)}}
 async function saveShipmentFilling(id){try{const items=[...document.querySelectorAll('.shipment-edit-item')].map(row=>({id:Number(row.dataset.id),checked_qty:Number(row.querySelector('[data-field=checked]').value||0),notes:row.querySelector('[data-field=notes]').value}));const d=await api(`/api/unified/shipments/${id}/filling`,{method:'PATCH',body:JSON.stringify({user_id:currentUser.id,document_no:$("shipEditDoc").value,destination:$("shipEditDest").value,carrier:$("shipEditCarrier").value,vehicle_plate:$("shipEditPlate").value,driver_name:$("shipEditDriver").value,scheduled_at:$("shipEditScheduled").value,volume_count:Number($("shipEditVolumes").value||0),notes:$("shipEditNotes").value,items})});toast(d.status==='PRONTO'?'Conferência completa. Romaneio liberado para saída.':'Preenchimento salvo. Ainda existem pendências.');await renderShipping();openShipment(id);}catch(e){toast(e.message)}}
 async function finishShipment(id){try{await api(`/api/unified/shipments/${id}`,{method:"PATCH",body:JSON.stringify({user_id:currentUser.id,status:"EXPEDIDO"})});closeModal();toast("Saída confirmada e romaneio concluído.");renderShipping();}catch(e){toast(e.message)}}
 
@@ -2785,7 +2760,7 @@ function statusBadge(value){
 }
 const progressFor = card => card.status?.includes("FINAL")||card.status?.includes("CONCL")?100:card.status?.includes("PROCESS")?68:card.status?.includes("ETIQU")?82:card.status?.includes("QUAL")||card.status?.includes("INSPE")?38:card.status?.includes("RECEB")?18:12;
 
-function analyticsBarsBody(rows){const max=Math.max(1,...rows.map(r=>Number(r.value)||0));return `<div class="analytics-bars">${rows.slice(0,15).map(r=>`<div><span>${esc(r.label)}</span><i><b style="width:${Number(r.value)*100/max}%"></b></i><strong>${Number(r.value).toLocaleString('pt-BR')}</strong><small>${esc(r.hint||'')}</small></div>`).join('')||'<div class="empty-visual">Sem dados para exibir.</div>'}</div>`;}
+function analyticsBarsBody(rows){const max=Math.max(1,...rows.map(r=>Number(r.value)||0));return `<div class="analytics-bars">${rows.slice(0,15).map(r=>`<div><span>${esc(r.label)}</span><i><b style="width:${Number(r.value)*100/max}%"></b></i><strong>${Number(r.value).toLocaleString(DISTRILOG_I18N.getLanguage())}</strong><small>${esc(r.hint||'')}</small></div>`).join('')||'<div class="empty-visual">Sem dados para exibir.</div>'}</div>`;}
 
 async function renderDashboard() {
   setPage("Central de Operações", "");
@@ -2814,7 +2789,7 @@ async function renderDashboard() {
       processing:Number(totals.processing||0),storage:Number(totals.storage||0)
     },recent};
     $("mainContent").innerHTML=`<div class="reference-dashboard"><div class="hero-kpis">${heroKpi("Aguardando recebimento",dashboardData.totals.receiving,"Pedidos","▣","blue","receiving")}${heroKpi("Em qualidade",dashboardData.totals.quality,"Pedidos","◇","teal","quality")}${heroKpi("Em processamento",dashboardData.totals.processing,"Pedidos","⚙","blue","processing")}${heroKpi("Aguardando estocagem",dashboardData.totals.storage,"Cards","⌂","teal","storage")}</div>
-    <div class="dash-row dash-row-main">${dashboardPanel("⌁","Produção ativa",`<span class="live-indicator">◷ ${new Date().toLocaleTimeString('pt-BR')}</span>`,compactProductionTable(active))}${dashboardPanel("⇩","Aguardando recebimento",`<span class="panel-count">${dashboardData.totals.receiving}</span>`,awaitingTable([],recent))}${dashboardPanel("▣","Estoque por grupo",`<span class="online-pill">${stockReport.latest_report?esc(stockReport.latest_report.filename||"Relatório"):"Sem relatório"}</span>`,analyticsBarsBody(groups))}</div>
+    <div class="dash-row dash-row-main">${dashboardPanel("⌁","Produção ativa",`<span class="live-indicator">◷ ${new Date().toLocaleTimeString(DISTRILOG_I18N.getLanguage())}</span>`,compactProductionTable(active))}${dashboardPanel("⇩","Aguardando recebimento",`<span class="panel-count">${dashboardData.totals.receiving}</span>`,awaitingTable([],recent))}${dashboardPanel("▣","Estoque por grupo",`<span class="online-pill">${stockReport.latest_report?esc(stockReport.latest_report.filename||"Relatório"):"Sem relatório"}</span>`,analyticsBarsBody(groups))}</div>
     <div class="dash-row dash-row-secondary">${dashboardPanel("◇","Qualidade",`<span class="panel-count">${quality.length}</span>`,qualityTable(quality.slice(0,5)))}${dashboardPanel("⚙","Processamento",`<span class="panel-count">${processing.length}</span>`,processingTable(processing.slice(0,5)))}${dashboardPanel("↩","Devoluções",`<span class="panel-count red-count">${returns.filter(r=>r&&r.status!=="CONCLUIDA").length}</span>`,returnsTable(returns.slice(0,5)))}</div>
     <div class="flow-strip">${[["🛒","Compras","import"],["⇩","Recebimento","receiving"],["◇","Qualidade","quality"],["⚙","Processamento","processing"],["♢","Etiquetagem","labeling"],["⌂","Estocagem","storage-hub"],["▣","Expedição / Devolução","returns-hub"]].map(([icon,label,view],i)=>`${i?'<i>→</i>':''}<button onclick="goTo('${view}')"><b>${icon}</b><span>${label}</span>${i===1?'<small>+ 10%</small>':''}</button>`).join("")}</div></div>`;
   } catch(error) {
@@ -2852,13 +2827,13 @@ async function renderGoatIndicators(){
   const t=summary.totals||{};
   $("mainContent").innerHTML=`
     <div class="hero-kpis">
-      ${heroKpi("Peças rejeitadas",(t.rejeitados_pecas||0).toLocaleString('pt-BR'),`R$ ${(t.rejeitados_valor||0).toLocaleString('pt-BR')}`,"⚠","blue","goat-indicators")}
-      ${heroKpi("Peças em perda",(t.perdas_pecas||0).toLocaleString('pt-BR'),"Registradas pela equipe","▣","teal","goat-indicators")}
+      ${heroKpi("Peças rejeitadas",(t.rejeitados_pecas||0).toLocaleString(DISTRILOG_I18N.getLanguage()),`R$ ${(t.rejeitados_valor||0).toLocaleString(DISTRILOG_I18N.getLanguage())}`,"⚠","blue","goat-indicators")}
+      ${heroKpi("Peças em perda",(t.perdas_pecas||0).toLocaleString(DISTRILOG_I18N.getLanguage()),"Registradas pela equipe","▣","teal","goat-indicators")}
       ${heroKpi("Entregas atrasadas",t.entregas_atrasadas||0,"Compras em atraso","⏱","blue","goat-indicators")}
       ${heroKpi("Divergências",(t.divergencias_compra||0)+(t.divergencias_estoque||0),"Compra x recebido + estoque","≠","teal","goat-indicators")}
     </div>
     <div class="dash-row" style="grid-template-columns:1fr 1fr;gap:18px">
-      ${analyticsBars("Rejeitados por fornecedor",summary.top_rejeitados_fornecedor.map(f=>({label:f.name,value:f.pecas,hint:`R$ ${f.valor.toLocaleString('pt-BR')}`})))}
+      ${analyticsBars("Rejeitados por fornecedor",summary.top_rejeitados_fornecedor.map(f=>({label:f.name,value:f.pecas,hint:`R$ ${f.valor.toLocaleString(DISTRILOG_I18N.getLanguage())}`})))}
       ${analyticsBars("Perdas por responsável",summary.top_perdas_responsavel.map(p=>({label:p.name,value:p.pecas})))}
     </div>
     <section class="dash-panel" style="margin-bottom:14px"><header><b>⚑</b><strong>Fornecedores críticos hoje</strong><span class="panel-count">${summary.fornecedores_criticos.length}</span></header>
@@ -2920,9 +2895,9 @@ async function prodRenderApontamento(body){
   const kpi=ranking.totals[prodSector]||{tasks:0,qty:0};
   body.innerHTML=`
     <div class="hero-kpis">
-      ${heroKpi("Tarefas concluídas",kpi.tasks.toLocaleString('pt-BR'),prodSector,"☑","blue","production")}
-      ${heroKpi("Peças processadas",kpi.qty.toLocaleString('pt-BR'),prodSector,"▣","teal","production")}
-      ${heroKpi("Peças / tarefa (média)",kpi.tasks?Math.round(kpi.qty/kpi.tasks).toLocaleString('pt-BR'):'0',"Média do setor","⌁","blue","production")}
+      ${heroKpi("Tarefas concluídas",kpi.tasks.toLocaleString(DISTRILOG_I18N.getLanguage()),prodSector,"☑","blue","production")}
+      ${heroKpi("Peças processadas",kpi.qty.toLocaleString(DISTRILOG_I18N.getLanguage()),prodSector,"▣","teal","production")}
+      ${heroKpi("Peças / tarefa (média)",kpi.tasks?Math.round(kpi.qty/kpi.tasks).toLocaleString(DISTRILOG_I18N.getLanguage()):'0',"Média do setor","⌁","blue","production")}
       ${heroKpi("Colaboradores",(ranking.sectors[prodSector]||[]).length,"No setor","☺","teal","production")}
     </div>
     <div class="dash-row" style="grid-template-columns:1.1fr 1.5fr;gap:18px">
@@ -2953,7 +2928,7 @@ function prodRunningCard(entry){
   const paused=entry.status==='PAUSADO';
   return `<div class="prod-form">
     <div class="field-row"><div class="summary-box"><span>Responsável</span><strong>${esc(entry.responsavel)}</strong></div>
-    <div class="summary-box"><span>Início</span><strong>${new Date(entry.inicio).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})}</strong></div></div>
+    <div class="summary-box"><span>Início</span><strong>${new Date(entry.inicio).toLocaleTimeString(DISTRILOG_I18N.getLanguage(),{hour:'2-digit',minute:'2-digit'})}</strong></div></div>
     <div class="field"><label>Quantidade concluída</label><input id="prodQtyFinal" type="number" value="${entry.quantidade||0}"></div>
     <div style="display:flex;gap:8px">
       ${paused?`<button class="primary" style="flex:1" onclick="prodResume(${entry.id})">▶ Retomar</button>`:`<button class="secondary" style="flex:1" onclick="prodPause(${entry.id})">⏸ Pausa</button>`}
@@ -3016,7 +2991,7 @@ async function prodRenderPessoa(body){
   const max=Math.max(1,...rows.map(r=>r.qty));
   body.innerHTML=`<section class="dash-panel"><header><b>▥</b><strong>Produção por pessoa</strong><span class="panel-count">${esc(prodSector)} · peças totais</span></header>
     <div class="dash-panel-body">
-      ${rows.length?`<div class="analytics-bars">${rows.map(r=>`<div><span>${esc(r.name)}</span><i><b style="width:${r.qty*100/max}%"></b></i><strong>${r.qty.toLocaleString('pt-BR')}</strong><small>${r.tasks} tarefa${r.tasks===1?'':'s'}</small></div>`).join('')}</div>`
+      ${rows.length?`<div class="analytics-bars">${rows.map(r=>`<div><span>${esc(r.name)}</span><i><b style="width:${r.qty*100/max}%"></b></i><strong>${r.qty.toLocaleString(DISTRILOG_I18N.getLanguage())}</strong><small>${r.tasks} tarefa${r.tasks===1?'':'s'}</small></div>`).join('')}</div>`
       :'<div class="empty-visual">Ainda sem tarefas concluídas neste setor.</div>'}
     </div></section>`;
 }
@@ -3038,7 +3013,7 @@ async function renderStorageHub() {
   setPage("Estocagem", "");
   const [cards,analytics]=await Promise.all([safeApi("/api/cards?scope=storage",[]),safeApi("/api/unified/stock-group-report/analytics",{groups:[],latest_report:null})]);
   $("mainContent").innerHTML=`${moduleTabs([["Visão geral","storage-hub"],["Fila operacional","storage"]],"storage-hub")}<div class="hero-kpis storage-kpis">${heroKpi("Aguardando estocagem",cards.length,"Cards","⌂","blue","storage")}</div>
-    <section class="dash-panel stock-report-panel"><header><b>⇧</b><strong>Relatório de estoque por grupo</strong><button class="panel-action" onclick="document.getElementById('stockGroupPdf').click()">Importar PDF</button><input id="stockGroupPdf" class="hidden" type="file" accept=".pdf" onchange="importStockGroupReport(this)"></header><div class="dash-panel-body">${analytics.groups?.length?`<div class="group-summary">${['FEMININO','MASCULINO','OUTROS'].map(g=>`<div><span>${g}</span><strong>${analytics.groups.filter(x=>x.gender===g).reduce((a,x)=>a+Number(x.quantity),0).toLocaleString('pt-BR')}</strong></div>`).join('')}</div>`:'<div class="empty-visual">Importe o PDF “Resumo de Estoque do Grupo” para recuperar a visão por gênero e grupo.</div>'}</div></section>`;
+    <section class="dash-panel stock-report-panel"><header><b>⇧</b><strong>Relatório de estoque por grupo</strong><button class="panel-action" onclick="document.getElementById('stockGroupPdf').click()">Importar PDF</button><input id="stockGroupPdf" class="hidden" type="file" accept=".pdf" onchange="importStockGroupReport(this)"></header><div class="dash-panel-body">${analytics.groups?.length?`<div class="group-summary">${['FEMININO','MASCULINO','OUTROS'].map(g=>`<div><span>${g}</span><strong>${analytics.groups.filter(x=>x.gender===g).reduce((a,x)=>a+Number(x.quantity),0).toLocaleString(DISTRILOG_I18N.getLanguage())}</strong></div>`).join('')}</div>`:'<div class="empty-visual">Importe o PDF “Resumo de Estoque do Grupo” para recuperar a visão por gênero e grupo.</div>'}</div></section>`;
 }
 
 function moduleTabs(items,current){return `<div class="module-tabs">${items.map(([label,view])=>`<button class="${view===current?'active':''}" onclick="goTo('${view}')">${label}</button>`).join('')}</div>`;}
@@ -3053,8 +3028,10 @@ async function renderRegistrations(){
     safeApi("/api/unified/stock-group-report/analytics",{groups:[],latest_report:null})
   ]);
   const usersMeta = `<span class="panel-count">${users.length}</span>`;
-  const usersTable = `<table class="dash-table"><thead><tr><th>Nome</th><th>Usuário</th><th>Perfil</th></tr></thead><tbody>${users.map(u => `<tr><td>${esc(u.name)}</td><td>${esc(u.username)}</td><td>${statusBadge(u.role)}</td></tr>`).join("")}</tbody></table>`;
-  const adminPanel=currentUser.role==="admin"?`<section class="panel" style="margin-top:16px"><div class="panel-body"><h3 class="section-heading">Criar login de operador</h3><p>O colaborador deverá trocar a senha temporária no primeiro acesso.</p><div class="shipping-form-grid"><div class="field"><label>Nome</label><input id="newOperatorName" maxlength="100"></div><div class="field"><label>Usuário</label><input id="newOperatorUsername" maxlength="40" autocomplete="off"></div><div class="field"><label>Função / setor</label><select id="newOperatorRole">${["recebimento","qualidade","processamento","etiquetagem","estocagem","expedicao","devolucoes","planejamento","supervisor","consulta","admin"].map(r=>'<option value="'+r+'">'+r+'</option>').join("")}</select></div><div class="field"><label>Senha temporária (12+ caracteres, letras e números)</label><input id="newOperatorPassword" type="password" autocomplete="new-password"></div><div class="field"><label>Confirme sua senha de administrador</label><input id="adminConfirmPassword" type="password" autocomplete="current-password"></div></div><div class="actions"><button class="primary" onclick="createOperatorLogin()">Criar login</button></div></div></section>`:"";
+  const usersTable = `<table class="dash-table"><thead><tr><th>Nome</th><th>Usuário</th><th>Perfil</th><th>Idioma preferido</th></tr></thead><tbody>${users.map(u => `<tr><td>${esc(u.name)}</td><td>${esc(u.username)}</td><td>${statusBadge(u.role)}</td><td>${currentUser.role==="admin"
+    ? `<select aria-label="Idioma do operador" onchange="setOperatorLanguage('${esc(u.username)}',this.value)" data-i18n-ignore><option value="pt-BR" ${u.language!=="es"?"selected":""}>Português</option><option value="es" ${u.language==="es"?"selected":""}>Español</option></select>`
+    : (u.language==="es"?"Español":"Português")}</td></tr>`).join("")}</tbody></table>`;
+  const adminPanel=currentUser.role==="admin"?`<section class="panel" style="margin-top:16px"><div class="panel-body"><h3 class="section-heading">Criar login de operador</h3><p>O colaborador deverá trocar a senha temporária no primeiro acesso.</p><div class="shipping-form-grid"><div class="field"><label>Nome</label><input id="newOperatorName" maxlength="100"></div><div class="field"><label>Usuário</label><input id="newOperatorUsername" maxlength="40" autocomplete="off"></div><div class="field"><label>Função / setor</label><select id="newOperatorRole">${["recebimento","qualidade","processamento","etiquetagem","estocagem","expedicao","devolucoes","planejamento","supervisor","consulta","admin"].map(r=>'<option value="'+r+'">'+r+'</option>').join("")}</select></div><div class="field"><label>Idioma preferido</label><select id="newOperatorLanguage" data-i18n-ignore><option value="pt-BR">Português</option><option value="es">Español</option></select></div><div class="field"><label>Senha temporária (12+ caracteres, letras e números)</label><input id="newOperatorPassword" type="password" autocomplete="new-password"></div><div class="field"><label>Confirme sua senha de administrador</label><input id="adminConfirmPassword" type="password" autocomplete="current-password"></div></div><div class="actions"><button class="primary" onclick="createOperatorLogin()">Criar login</button></div></div></section>`:"";
   const resetPanel=currentUser.role==="admin"?
     '<section class="panel" style="margin-top:16px"><div class="panel-body"><h3 class="section-heading">Redefinir senha de operador</h3>'+
     '<p>Use para ativar novamente contas legadas. A senha antiga deixa de funcionar e o operador será obrigado a escolher uma nova senha no primeiro acesso.</p>'+
@@ -3086,12 +3063,29 @@ async function resetOperatorPassword() {
   } catch(error) {toast(error.message);}
 }
 
+async function setOperatorLanguage(username, language) {
+  if (currentUser?.role !== "admin") return;
+  try {
+    await api("/api/admin/users/" + encodeURIComponent(username) + "/language", {
+      method: "PATCH", body: JSON.stringify({language})
+    });
+    if (username === currentUser.username) {
+      currentUser.language = language;
+      applyUserLanguage(language);
+    }
+    toast("Preferência de idioma salva.");
+  } catch (error) {
+    toast(error.message);
+    await renderRegistrations();
+  }
+}
+
 async function createOperatorLogin(){
   try{
     await api("/api/admin/users",{method:"POST",body:JSON.stringify({
       admin_username:currentUser.username,admin_password:$("adminConfirmPassword").value,
       username:$("newOperatorUsername").value.trim().toLowerCase(),name:$("newOperatorName").value.trim(),
-      role:$("newOperatorRole").value,temporary_password:$("newOperatorPassword").value
+      role:$("newOperatorRole").value,language:$("newOperatorLanguage").value,temporary_password:$("newOperatorPassword").value
     })});
     toast("Login criado. Entregue a senha temporária ao operador por canal seguro.");
     await renderRegistrations();
@@ -3100,7 +3094,7 @@ async function createOperatorLogin(){
 
 async function renderSettings(){setPage("Configurações","");$("mainContent").innerHTML=`<div class="settings-grid"><button onclick="goTo('import')"><b>⇧</b><strong>Importar compras</strong><span>Atualizar Cards a partir do relatório Excel.</span></button><button onclick="goTo('tasks')"><b>☑</b><strong>Quadro de tarefas</strong><span>Responsáveis, prioridades e andamento.</span></button><button onclick="goTo('test')"><b>⚙</b><strong>Administração e testes</strong><span>Ferramentas controladas para validação.</span></button><button onclick="goTo('history')"><b>◷</b><strong>Histórico global</strong><span>Rastreabilidade das movimentações.</span></button></div><div class="state-panel"><b>DistriLog V3</b><span>Uma interface, um backend e uma base SQLite. As regras congeladas de Recebimento, Qualidade e Processamento permanecem no motor operacional.</span></div>`;}
 
-setInterval(() => { if ($("clock")) $("clock").textContent = new Date().toLocaleString("pt-BR"); }, 1000);
+setInterval(() => { if ($("clock")) $("clock").textContent = new Date().toLocaleString(DISTRILOG_I18N.getLanguage()); }, 1000);
 // Exige autenticação novamente após recarregar a página.
 
 /* V10 — endereçamento por referência + mapa visual */
@@ -3172,7 +3166,7 @@ function renderAllocationItemPicker(){
   }
   box.innerHTML=items.map(function(item){
     const allocated=globalItemAllocatedQty(item.id),selected=Number(ctx.selectedItemId)===Number(item.id);
-    return '<button type="button" class="allocation-item-card '+(selected?'is-selected ':'')+'" onclick="selectAllocationItem('+Number(item.id)+')"><div class="allocation-item-main"><span class="allocation-item-ref">'+esc(referenceLabel(item))+'</span><small>'+esc(referenceSecondaryLabel(item)||"Sem detalhe")+'</small></div><div class="allocation-item-numbers"><b>'+allocated.toLocaleString("pt-BR")+'</b><span>volumes alocados</span><b>'+Number(item.expected_qty||0).toLocaleString("pt-BR")+'</b><span>peças da referência</span></div></button>';
+    return '<button type="button" class="allocation-item-card '+(selected?'is-selected ':'')+'" onclick="selectAllocationItem('+Number(item.id)+')"><div class="allocation-item-main"><span class="allocation-item-ref">'+esc(referenceLabel(item))+'</span><small>'+esc(referenceSecondaryLabel(item)||"Sem detalhe")+'</small></div><div class="allocation-item-numbers"><b>'+allocated.toLocaleString(DISTRILOG_I18N.getLanguage())+'</b><span>volumes alocados</span><b>'+Number(item.expected_qty||0).toLocaleString(DISTRILOG_I18N.getLanguage())+'</b><span>peças da referência</span></div></button>';
   }).join("");
 }
 
@@ -3209,7 +3203,7 @@ function positionCellHtml(p,ctx){
   return '<button type="button" class="'+classes+'" title="'+esc(title)+'" onclick="selectAllocationPosition(\''+esc(p.address)+'\')">' +
     (["ET","EC"].includes(ctx.setor)?"":'<span class="position-level">'+esc(p.nivel)+'</span>') +
     '<strong>'+esc(p.address)+'</strong>' +
-    '<small>'+(occupied?occupied.toLocaleString("pt-BR"):"Livre")+(itemQty>0?" · Ref: "+itemQty.toLocaleString("pt-BR"):"")+'</small>' +
+    '<small>'+(occupied?occupied.toLocaleString(DISTRILOG_I18N.getLanguage()):"Livre")+(itemQty>0?" · Ref: "+itemQty.toLocaleString(DISTRILOG_I18N.getLanguage()):"")+'</small>' +
   '</button>';
 }
 
@@ -3418,7 +3412,7 @@ async function loadPositionAllocator(cardId,setor,tenPercentSample=false,tenPerc
       '<div class="position-allocator-head">' +
         '<div><div class="position-kicker">ENDEREÇAMENTO FÍSICO</div>' +
           '<h3>'+(isTenPercentSample?"Alocar os 10% na Qualidade":({RM:"Alocar no Recebimento",QA:"Alocar na Qualidade",PR:"Alocar no Processamento",ET:"Alocar na Etiquetagem",EC:"Alocar na Estocagem"}[setor]||("Alocar no "+setor)))+'</h3>' +
-          '<p>'+(isTenPercentSample?"Etapa obrigatória: enderece exatamente "+Number(tenPercentTarget).toLocaleString("pt-BR")+" volume(s) da amostra em endereços da QA antes de liberar o RM.":(isVolumeOnlyRM?"No RM, a alocação é exclusivamente por volumes, sem divisão por produto, cor ou tamanho.":(isPieceSector?"Selecione a cor e o casulo; informe quantas caixas pretas físicas deixou. A conferência de peças é independente.":"Escolha primeiro a referência, depois a posição. O controle é feito em volumes da referência.")))+'</p>' +
+          '<p>'+(isTenPercentSample?"Etapa obrigatória: enderece exatamente "+Number(tenPercentTarget).toLocaleString(DISTRILOG_I18N.getLanguage())+" volume(s) da amostra em endereços da QA antes de liberar o RM.":(isVolumeOnlyRM?"No RM, a alocação é exclusivamente por volumes, sem divisão por produto, cor ou tamanho.":(isPieceSector?"Selecione a cor e o casulo; informe quantas caixas pretas físicas deixou. A conferência de peças é independente.":"Escolha primeiro a referência, depois a posição. O controle é feito em volumes da referência.")))+'</p>' +
           (isTenPercentSample ? '<div class="position-dest"><b>Destino fixo: Qualidade (QA)</b><small>Os 10% são endereçados primeiro; o saldo global restante continua compartilhado entre RM, QA e PR.</small></div>' :
           fixedDestination ? '<div class="position-dest"><b>Destino fixo: '+esc(setor==="ET"?"Etiquetagem (ET)":"Estocagem (EC)")+'</b><small>Este fechamento não permite alterar o setor de destino.</small></div>' :
           '<div class="position-dest"><label for="positionDestSetor">Destino</label>' +
@@ -3430,7 +3424,7 @@ async function loadPositionAllocator(cardId,setor,tenPercentSample=false,tenPerc
         '</div>' +
         '<div class="position-suggest">'+
           (suggestion?'<span>SUGESTÃO AUTOMÁTICA</span><b>'+esc(suggestion.address)+'</b><small>'+
-            Number(suggestion.ocupado||0).toLocaleString("pt-BR")+' '+(isPieceSector?"peça(s)":"volume(s)")+' já ocupado(s)</small>':
+            Number(suggestion.ocupado||0).toLocaleString(DISTRILOG_I18N.getLanguage())+' '+(isPieceSector?"peça(s)":"volume(s)")+' já ocupado(s)</small>':
             '<span>SEM SUGESTÃO DISPONÍVEL</span>')+
         '</div>' +
       '</div>' +
@@ -3443,10 +3437,10 @@ async function loadPositionAllocator(cardId,setor,tenPercentSample=false,tenPerc
         '</div>') +
 
       '<div class="position-stat-grid">' +
-        '<div class="position-stat"><span>'+(isTenPercentSample?"10% endereçados na QA":"Total alocado")+'</span><strong id="positionAllocatedTotal">'+Number(isTenPercentSample?sampleAllocated:(isPieceSector?scopedAllocated:status.global_total_alocado||0)).toLocaleString("pt-BR")+
-          '</strong><small>'+(isTenPercentSample?"de "+Number(tenPercentTarget).toLocaleString("pt-BR")+" volume(s) obrigatórios":(isPieceSector?"peças endereçadas (não são caixas) em "+setor:"volumes globais · RM "+Number(status.global_por_setor?.RM||0).toLocaleString("pt-BR")+
-          ' · QA '+Number(status.global_por_setor?.QA||0).toLocaleString("pt-BR")+
-          ' · PR '+Number(status.global_por_setor?.PR||0).toLocaleString("pt-BR")) )+'</small></div>' +
+        '<div class="position-stat"><span>'+(isTenPercentSample?"10% endereçados na QA":"Total alocado")+'</span><strong id="positionAllocatedTotal">'+Number(isTenPercentSample?sampleAllocated:(isPieceSector?scopedAllocated:status.global_total_alocado||0)).toLocaleString(DISTRILOG_I18N.getLanguage())+
+          '</strong><small>'+(isTenPercentSample?"de "+Number(tenPercentTarget).toLocaleString(DISTRILOG_I18N.getLanguage())+" volume(s) obrigatórios":(isPieceSector?"peças endereçadas (não são caixas) em "+setor:"volumes globais · RM "+Number(status.global_por_setor?.RM||0).toLocaleString(DISTRILOG_I18N.getLanguage())+
+          ' · QA '+Number(status.global_por_setor?.QA||0).toLocaleString(DISTRILOG_I18N.getLanguage())+
+          ' · PR '+Number(status.global_por_setor?.PR||0).toLocaleString(DISTRILOG_I18N.getLanguage())) )+'</small></div>' +
         '<div class="position-stat"><span>Posições usadas</span><strong id="positionUsedCount">'+(status.posicoes?.length||0)+
           '</strong><small>endereços</small></div>' +
         '<div class="position-stat"><span>'+(isTenPercentSample?"Restante dos 10%":(isVolumeOnlyRM?"Saldo global do Card":"Saldo da referência"))+'</span><strong id="positionReferenceRemainingStat">—</strong><small>'+(isPieceSector?"peças da grade restantes":(isTenPercentSample?"volume(s) que ainda precisam de endereço":(isVolumeOnlyRM?"volumes restantes no Card":"volumes restantes")))+'</small></div>' +
@@ -3470,7 +3464,7 @@ async function loadPositionAllocator(cardId,setor,tenPercentSample=false,tenPerc
           '<div class="position-selected"><span>ALOCAÇÃO POR VOLUMES</span><strong id="positionSelectedItemLabel">'+(isTenPercentSample?"Amostra de 10% — Qualidade":"Saldo global do Card")+'</strong><small id="positionReferenceRemainingLabel"></small><em id="positionSelectedLabel">'+esc(window.allocCtx.selectedAddress||"Nenhuma")+'</em></div>' :
           '<div class="position-selected"><span>REFERÊNCIA SELECIONADA</span><strong id="positionSelectedItemLabel">'+esc(firstAvailable?referenceDetailLabel(firstAvailable):"Nenhuma")+'</strong><small id="positionReferenceRemainingLabel"></small><em id="positionSelectedLabel">'+esc(window.allocCtx.selectedAddress||"Nenhuma")+'</em></div>') +
         '<div class="position-editor-fields">' +
-          '<div class="field"><label>'+(isPieceSector?"Caixas pretas neste casulo":"Volumes nessa posição")+'</label><input id="posQty" type="number" min="1" '+(isPieceSector?"":"max=\""+(isTenPercentSample?window.allocCtx.remaining:"")+"\"")+' placeholder="'+(isPieceSector?"Ex.: 3":"Ex.: 30")+'" oninput="updateAllocHint()"><small id="posHint" class="muted">'+(isPieceSector?"Informe quantas caixas pretas desta cor foram deixadas neste casulo.":(isTenPercentSample?("Restam "+window.allocCtx.remaining.toLocaleString("pt-BR")+" volumes dos 10%"):(isVolumeOnlyRM ? ("Saldo do Card: "+window.allocCtx.remaining.toLocaleString("pt-BR")+" volumes") : ("Saldo da referência: "+(firstAvailable?itemRemainingQty(firstAvailable).toLocaleString("pt-BR"):"—")+" volumes"))))+'</small></div>' +
+          '<div class="field"><label>'+(isPieceSector?"Caixas pretas neste casulo":"Volumes nessa posição")+'</label><input id="posQty" type="number" min="1" '+(isPieceSector?"":"max=\""+(isTenPercentSample?window.allocCtx.remaining:"")+"\"")+' placeholder="'+(isPieceSector?"Ex.: 3":"Ex.: 30")+'" oninput="updateAllocHint()"><small id="posHint" class="muted">'+(isPieceSector?"Informe quantas caixas pretas desta cor foram deixadas neste casulo.":(isTenPercentSample?("Restam "+window.allocCtx.remaining.toLocaleString(DISTRILOG_I18N.getLanguage())+" volumes dos 10%"):(isVolumeOnlyRM ? ("Saldo do Card: "+window.allocCtx.remaining.toLocaleString(DISTRILOG_I18N.getLanguage())+" volumes") : ("Saldo da referência: "+(firstAvailable?itemRemainingQty(firstAvailable).toLocaleString(DISTRILOG_I18N.getLanguage()):"—")+" volumes"))))+'</small></div>' +
           '<div class="position-editor-action"><button class="primary" onclick="submitAllocation('+cardId+',\''+setor+'\')">+ '+(isVolumeOnly?"Alocar volumes":"Alocar referência")+'</button></div>' +
         '</div>' +
       '</div>' +
@@ -3508,15 +3502,15 @@ function updateReferenceRemaining(){
   if(!ctx)return;
   if(ctx.tenPercentSample){
     const allocated=Number(ctx.status?.ten_percent_sample_allocated||0);
-    if($("positionReferenceRemainingStat"))$("positionReferenceRemainingStat").textContent=Number(ctx.remaining||0).toLocaleString("pt-BR");
-    if($("positionReferenceRemainingLabel"))$("positionReferenceRemainingLabel").textContent=allocated.toLocaleString("pt-BR")+" de "+Number(ctx.sourceTotal||0).toLocaleString("pt-BR")+" volumes dos 10% alocados na QA";
+    if($("positionReferenceRemainingStat"))$("positionReferenceRemainingStat").textContent=Number(ctx.remaining||0).toLocaleString(DISTRILOG_I18N.getLanguage());
+    if($("positionReferenceRemainingLabel"))$("positionReferenceRemainingLabel").textContent=allocated.toLocaleString(DISTRILOG_I18N.getLanguage())+" de "+Number(ctx.sourceTotal||0).toLocaleString(DISTRILOG_I18N.getLanguage())+" volumes dos 10% alocados na QA";
     if($("positionSelectedItemLabel"))$("positionSelectedItemLabel").textContent="Amostra de 10% — Qualidade";
     return;
   }
   if(ctx.setor==="RM"){
     const allocated=Number(ctx.status?.global_total_alocado||0);
-    if($("positionReferenceRemainingStat"))$("positionReferenceRemainingStat").textContent=Number(ctx.remaining||0).toLocaleString("pt-BR");
-    if($("positionReferenceRemainingLabel"))$("positionReferenceRemainingLabel").textContent=allocated.toLocaleString("pt-BR")+" volumes alocados no saldo global";
+    if($("positionReferenceRemainingStat"))$("positionReferenceRemainingStat").textContent=Number(ctx.remaining||0).toLocaleString(DISTRILOG_I18N.getLanguage());
+    if($("positionReferenceRemainingLabel"))$("positionReferenceRemainingLabel").textContent=allocated.toLocaleString(DISTRILOG_I18N.getLanguage())+" volumes alocados no saldo global";
     if($("positionSelectedItemLabel"))$("positionSelectedItemLabel").textContent="Saldo global do Card";
     return;
   }
@@ -3524,10 +3518,10 @@ function updateReferenceRemaining(){
   if(!item)return;
   const allocated=globalItemAllocatedQty(item.id),remaining=itemRemainingQty(item);
   const isBoxes=["ET","EC"].includes(ctx.setor);
-  if($("positionReferenceRemainingStat"))$("positionReferenceRemainingStat").textContent=remaining.toLocaleString("pt-BR");
+  if($("positionReferenceRemainingStat"))$("positionReferenceRemainingStat").textContent=remaining.toLocaleString(DISTRILOG_I18N.getLanguage());
   if($("positionReferenceRemainingLabel"))$("positionReferenceRemainingLabel").textContent=isBoxes
-    ? "Saldo de peças: "+remaining.toLocaleString("pt-BR")+" · Caixas pretas: informar separadamente por cor e casulo"
-    : allocated.toLocaleString("pt-BR")+" volumes alocados globalmente";
+    ? "Saldo de peças: "+remaining.toLocaleString(DISTRILOG_I18N.getLanguage())+" · Caixas pretas: informar separadamente por cor e casulo"
+    : allocated.toLocaleString(DISTRILOG_I18N.getLanguage())+" volumes alocados globalmente";
   if($("positionSelectedItemLabel"))$("positionSelectedItemLabel").textContent=referenceDetailLabel(item);
 }
 
@@ -3543,7 +3537,7 @@ function renderCurrentItemAllocations(){
       return;
     }
     box.innerHTML=positions.map(function(p){
-      return '<div class="reference-allocation-summary"><div><b>'+esc(p.address)+'</b><small>'+(ctx.tenPercentSample?"Endereço da amostra na QA":"Endereço no RM")+'</small></div><strong>'+Number(p.quantidade||0).toLocaleString("pt-BR")+' volumes</strong></div>';
+      return '<div class="reference-allocation-summary"><div><b>'+esc(p.address)+'</b><small>'+(ctx.tenPercentSample?"Endereço da amostra na QA":"Endereço no RM")+'</small></div><strong>'+Number(p.quantidade||0).toLocaleString(DISTRILOG_I18N.getLanguage())+' volumes</strong></div>';
     }).join("");
     return;
   }
@@ -3555,10 +3549,10 @@ function renderCurrentItemAllocations(){
   box.innerHTML=rows.map(function(row){
     return '<div class="reference-allocation-summary">' +
       '<div><b>'+esc(referenceDetailLabel(row))+'</b><small>'+(row.product?esc(row.product):"")+'</small></div>' +
-      '<strong>'+Number(["ET","EC"].includes(ctx.setor)?(row.posicoes||[]).reduce((n,p)=>n+Number(p.box_count||0),0):row.total_alocado||0).toLocaleString("pt-BR")+' '+unit+'</strong>' +
+      '<strong>'+Number(["ET","EC"].includes(ctx.setor)?(row.posicoes||[]).reduce((n,p)=>n+Number(p.box_count||0),0):row.total_alocado||0).toLocaleString(DISTRILOG_I18N.getLanguage())+' '+unit+'</strong>' +
       '<div class="reference-allocation-addresses">'+(row.posicoes||[]).map(function(p){
         return '<button type="button" onclick="selectAllocationItem('+Number(row.item_id)+');selectAllocationPosition(\''+esc(p.address)+'\')">'+
-          esc(p.address)+' · '+Number(["ET","EC"].includes(ctx.setor)?p.box_count:p.quantidade||0).toLocaleString("pt-BR")+' '+unit+'</button>';
+          esc(p.address)+' · '+Number(["ET","EC"].includes(ctx.setor)?p.box_count:p.quantidade||0).toLocaleString(DISTRILOG_I18N.getLanguage())+' '+unit+'</button>';
       }).join("")+'</div>' +
     '</div>';
   }).join("");
@@ -3569,7 +3563,7 @@ function updateAllocHint(){
   if(!el||!ctx)return;
   const raw=Number($("posQty")?.value||0),unit=["ET","EC"].includes(ctx.setor)?"caixas pretas":"volumes";
   if(ctx.setor==="RM"||ctx.tenPercentSample){
-    el.textContent=(ctx.tenPercentSample?"Volumes restantes dos 10%: ":"Volumes restantes no Card: ")+Number(ctx.remaining||0).toLocaleString("pt-BR");
+    el.textContent=(ctx.tenPercentSample?"Volumes restantes dos 10%: ":"Volumes restantes no Card: ")+Number(ctx.remaining||0).toLocaleString(DISTRILOG_I18N.getLanguage());
     if(raw>Number(ctx.remaining||0))el.textContent+=" — quantidade acima do saldo disponível.";
     updateReferenceRemaining();
     return;
@@ -3580,7 +3574,7 @@ function updateAllocHint(){
     el.textContent="Informe somente as caixas pretas físicas desta cor neste casulo. A quantidade conferida em peças é independente.";
     return;
   }
-  el.textContent="Volumes restantes no Card: "+Number(ctx.remaining||0).toLocaleString("pt-BR");
+  el.textContent="Volumes restantes no Card: "+Number(ctx.remaining||0).toLocaleString(DISTRILOG_I18N.getLanguage());
   if(raw>Number(ctx.remaining||0))el.textContent+=" — quantidade acima do saldo disponível.";
   updateReferenceRemaining();
 }
@@ -3597,7 +3591,7 @@ async function submitAllocation(cardId,setor){
     const itemRemaining=itemRemainingQty(item);
     if(isPieceSector&&itemRemaining<=0){toast("Esta cor já foi endereçada. Se precisar movimentá-la, utilize a movimentação de estoque.");return;}
   }
-  if(!isPieceSector&&qty>ctx.remaining){toast("A quantidade ultrapassa o saldo de "+ctx.remaining.toLocaleString("pt-BR")+" "+unit+" disponíveis.");return;}
+  if(!isPieceSector&&qty>ctx.remaining){toast("A quantidade ultrapassa o saldo de "+ctx.remaining.toLocaleString(DISTRILOG_I18N.getLanguage())+" "+unit+" disponíveis.");return;}
   try{
     const result=await api("/api/positions/cards/"+cardId+"/allocate",{
       method:"POST",body:JSON.stringify({
@@ -3610,7 +3604,7 @@ async function submitAllocation(cardId,setor){
     if(isTenPercentSample){
       ctx.remaining=Math.max(0,Number(ctx.sourceTotal||0)-Number(result.ten_percent_sample_allocated||0));
       $("posQty").value="";
-      toast("Amostra alocada na Qualidade em "+address+" com "+qty.toLocaleString("pt-BR")+" volume(s).");
+      toast("Amostra alocada na Qualidade em "+address+" com "+qty.toLocaleString(DISTRILOG_I18N.getLanguage())+" volume(s).");
       if(ctx.remaining<=0){
         await openCard(currentCardId,"quality");
       }else{
@@ -3622,9 +3616,9 @@ async function submitAllocation(cardId,setor){
     ctx.remaining=Math.max(0,Number(ctx.sourceTotal||0)-scopedNow);
     ctx.positions=await api("/api/positions?setor="+setor);
     $("posQty").value="";
-    if($("positionAllocatedTotal"))$("positionAllocatedTotal").textContent=Number(isPieceSector?scopedNow:result.global_total_alocado||0).toLocaleString("pt-BR");
+    if($("positionAllocatedTotal"))$("positionAllocatedTotal").textContent=Number(isPieceSector?scopedNow:result.global_total_alocado||0).toLocaleString(DISTRILOG_I18N.getLanguage());
     if($("positionUsedCount"))$("positionUsedCount").textContent=String(result.posicoes?.length||0);
-    toast((isVolumeOnlyRM?"Volumes":(isPieceSector?"Cor "+(ctx.selectedColor||item.color):"Referência "+referenceLabel(item)))+" alocados em "+address+" com "+qty.toLocaleString("pt-BR")+" "+unit+".");
+    toast((isVolumeOnlyRM?"Volumes":(isPieceSector?"Cor "+(ctx.selectedColor||item.color):"Referência "+referenceLabel(item)))+" alocados em "+address+" com "+qty.toLocaleString(DISTRILOG_I18N.getLanguage())+" "+unit+".");
     renderAllocationItemPicker();renderCurrentItemAllocations();updateReferenceRemaining();renderPositionMap();
   }catch(e){toast(e.message);}
 }
@@ -3661,7 +3655,7 @@ async function renderCleaning() {
   const others = data.active.filter((t) => t !== mine);
   const canDelete = ["admin", "supervisor"].includes(currentUser.role);
   const maxAvg = Math.max(1, ...data.by_area.map((a) => a.avg_seconds));
-  const when = (iso) => (iso ? new Date(iso).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—");
+  const when = (iso) => (iso ? new Date(iso).toLocaleString(DISTRILOG_I18N.getLanguage(), { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—");
   const startPanel = mine
     ? `<div class="clean-active"><div><span class="clean-area-tag">${esc(mine.area)}</span><div class="muted">${mine.status === "PAUSADA" ? "Pausada" : "Em andamento"} · iniciada às ${when(mine.started_at)}</div></div>
          ${cleaningTimerHtml(mine, fetchedAt)}<div class="actions">${cleaningActionButtons(mine)}</div></div>`
@@ -3820,7 +3814,7 @@ async function renderProcessingRegister() {
       else if(t.status==="CONCLUIDO" && Number(t.labels_ready||0)!==1 && t.card_current_sector==="ETIQUETAGEM" && owner) actions='<button class="success small-btn" onclick="processingLabelsReady('+t.id+')">Etiquetas disponíveis para etiquetar</button>';
       else if(t.status==="CONCLUIDO" && Number(t.labels_ready||0)===1) actions='<span class="badge">Etiquetas disponíveis</span>';
       const status=processingStatusLabel(t.status);
-      return '<article class="processing-cadastro-card"><div class="processing-cadastro-main"><div class="processing-cadastro-reference">'+esc(t.reference||"Referência não informada")+'</div><div class="processing-cadastro-meta">'+esc(t.supplier||"Fornecedor não informado")+' · '+Number(t.reference_qty||0).toLocaleString("pt-BR")+' peças</div></div><div class="processing-cadastro-state"><span class="badge">'+esc(status)+'</span><small>'+esc(t.card_sector_label||"")+'</small>'+((t.user_name&&t.status!=="PENDENTE")?'<small>Responsável: '+esc(t.user_name)+'</small>':'')+'</div><div class="processing-cadastro-timer">'+(["EM_ANDAMENTO","PAUSADA","CONCLUIDO"].includes(t.status)?processingTimerHtml(t):"")+'</div><div class="processing-cadastro-actions">'+actions+'</div></article>';
+      return '<article class="processing-cadastro-card"><div class="processing-cadastro-main"><div class="processing-cadastro-reference">'+esc(t.reference||"Referência não informada")+'</div><div class="processing-cadastro-meta">'+esc(t.supplier||"Fornecedor não informado")+' · '+Number(t.reference_qty||0).toLocaleString(DISTRILOG_I18N.getLanguage())+' peças</div></div><div class="processing-cadastro-state"><span class="badge">'+esc(status)+'</span><small>'+esc(t.card_sector_label||"")+'</small>'+((t.user_name&&t.status!=="PENDENTE")?'<small>Responsável: '+esc(t.user_name)+'</small>':'')+'</div><div class="processing-cadastro-timer">'+(["EM_ANDAMENTO","PAUSADA","CONCLUIDO"].includes(t.status)?processingTimerHtml(t):"")+'</div><div class="processing-cadastro-actions">'+actions+'</div></article>';
     };
     $("mainContent").innerHTML=processingTabs("processing-register")+
       '<section class="panel processing-cadastro-panel"><div class="panel-body"><div class="processing-cadastro-heading"><div><h3 class="section-heading">Cadastro normal</h3><p class="muted">Cada referência fica disponível aqui depois que a Triagem termina.</p></div><span class="processing-cadastro-count">'+normal.length+'</span></div>'+
@@ -3973,7 +3967,7 @@ async function openEntryConfirmation(id) {
   try {
     const data=await api("/api/processing/entry/queue?user_id="+currentUser.id),entry=(data.pending||[]).find(e=>Number(e.id)===Number(id));
     if(!entry)throw new Error("Entrada não encontrada ou já confirmada.");
-    const rows=entry.items.map(item=>'<tr><td><b>'+esc(item.reference||"—")+'</b>'+(item.is_extra?'<small>Combinação extra</small>':"")+'</td><td>'+esc(item.color||"—")+'</td><td>'+esc(item.size||"—")+'</td><td><b>'+Number(item.stored_qty||0).toLocaleString("pt-BR")+'</b></td></tr>').join("");
+    const rows=entry.items.map(item=>'<tr><td><b>'+esc(item.reference||"—")+'</b>'+(item.is_extra?'<small>Combinação extra</small>':"")+'</td><td>'+esc(item.color||"—")+'</td><td>'+esc(item.size||"—")+'</td><td><b>'+Number(item.stored_qty||0).toLocaleString(DISTRILOG_I18N.getLanguage())+'</b></td></tr>').join("");
     $("modalBody").innerHTML='<div class="card-title"><div><h2>Confirmar Entrada da Estocagem</h2><div class="card-subtitle">'+esc(entry.purchase_id||("Card "+entry.card_id))+' · '+esc(entry.supplier||"—")+'</div></div></div><div class="notice"><b>Somente confirmação.</b> As quantidades já foram conferidas na Estocagem. Alterações de grade não são feitas na Entrada.</div><div class="table-wrap"><table class="compact-table"><thead><tr><th>Referência</th><th>Cor</th><th>Tamanho</th><th>Quantidade conferida</th></tr></thead><tbody>'+rows+'</tbody></table></div><div class="field"><label>Observação geral (opcional)</label><textarea id="entryNotes" rows="2"></textarea></div><div class="actions"><button class="success" onclick="confirmProcessingEntry('+entry.id+')">Dar Entrada e concluir</button></div>';
     $("modal").classList.remove("hidden");
   } catch(error) { toast(error.message); }

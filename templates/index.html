@@ -14,6 +14,7 @@
     <div class="login-panel">
       <div class="login-logo">DL</div>
       <h1>DISTRILOG</h1>
+      <div class="field"><label for="loginLanguage">Idioma</label><select id="loginLanguage" onchange="DISTRILOG_I18N.setLanguage(this.value)" data-i18n-ignore><option value="pt-BR">Português</option><option value="es">Español</option></select></div>
       <p>Produção, estoque, expedição e devoluções em um só lugar</p>
       <label>Usuário</label>
       <input id="loginUsername" autocomplete="username" onkeydown="if(event.key==='Enter'){event.preventDefault();doLogin();}">
@@ -99,10 +100,11 @@
   </div>
 
   <div id="toast" class="toast hidden"></div>
+  <script src="/static/i18n.js?v=1.0.0"></script>
   <script src="/static/collab.js?v=1.1.0"></script>
   <script src="/static/mission_history_2026.js?v=1.0.0"></script>
   <script src="/static/mission_weekly.js?v=1.1.0"></script>
   <script src="/static/mission.js?v=3.0.0"></script>
-  <script src="/static/app.js?v=4.5.4"></script>
+  <script src="/static/app.js?v=4.6.0"></script>
 </body>
 </html>

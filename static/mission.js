@@ -2,7 +2,7 @@
    A base inclui maio a outubro de 2026; nunca somar backlog de várias
    semanas para fingir total mensal: backlog é fotografia, não fluxo. */
 const MISSAO_SETORES=["RECEBIMENTO","EXPEDIÇÃO PCP","QUALIDADE 1","QUALIDADE 2","PROCESSAMENTO","ETIQUETAGEM","ESTOCAGEM","AJUSTES","EXPEDIÇÃO"];
-const missaoFmt=n=>n==null?'—':Number(n).toLocaleString("pt-BR");
+const missaoFmt=n=>n==null?'—':Number(n).toLocaleString(DISTRILOG_I18N.getLanguage());
 let missionSelectedMonth=10;
 let missionBoardMetric="ambos";
 const missionSumValues=values=>{
@@ -152,19 +152,19 @@ async function showMissionLive(){
     const total=rows.reduce((s,r)=>s+Number(r.pieces||0),0);
     const max=Math.max(1,...rows.map(r=>Number(r.pieces||0)));
     body.innerHTML='<div class="missao-header"><div><h3>Fotografia da operação</h3>'+
-      '<p>Última consulta: '+esc(new Date(snapshot.captured_at).toLocaleString('pt-BR'))+'</p></div>'+
+      '<p>Última consulta: '+esc(new Date(snapshot.captured_at).toLocaleString(DISTRILOG_I18N.getLanguage()))+'</p></div>'+
       '<button class="secondary" type="button" onclick="showMissionLive()">Atualizar dados ↻</button></div>'+
       '<div class="missao-kpis">'+
-      '<div class="missao-kpi"><span>Peças em etapas</span><strong>'+total.toLocaleString('pt-BR')+'</strong><small>Soma dos estágios operacionais</small></div>'+
+      '<div class="missao-kpi"><span>Peças em etapas</span><strong>'+total.toLocaleString(DISTRILOG_I18N.getLanguage())+'</strong><small>Soma dos estágios operacionais</small></div>'+
       '<div class="missao-kpi"><span>Etapas com itens</span><strong>'+rows.length+'</strong><small>Conforme registro de estágio dos itens</small></div>'+
       '<div class="missao-kpi"><span>Produzido semanal</span><strong>—</strong><small>Apontamento por setor ainda não estruturado</small></div>'+
       '</div><div class="missao-grid"><section class="panel"><div class="panel-header">Peças por estágio</div><div class="panel-body">'+
-      (rows.length?rows.map(r=>'<div class="missao-bar"><div><span>'+esc(r.stage||'Sem etapa')+'</span><b>'+Number(r.pieces||0).toLocaleString('pt-BR')+'</b></div>'+
+      (rows.length?rows.map(r=>'<div class="missao-bar"><div><span>'+esc(r.stage||'Sem etapa')+'</span><b>'+Number(r.pieces||0).toLocaleString(DISTRILOG_I18N.getLanguage())+'</b></div>'+
         '<i><em style="width:'+(100*Number(r.pieces||0)/max)+'%"></em></i></div>').join(''):'Nenhum item operacional encontrado no banco.')+
       '</div></section><section class="panel"><div class="panel-header">Etapas e referências</div>'+
       '<div class="panel-body" style="overflow:auto"><table class="missao-table"><thead><tr><th>Etapa</th><th>Cards</th><th>Referências</th><th>Peças</th></tr></thead><tbody>'+
       (rows.length?rows.map(r=>'<tr><td>'+esc(r.stage)+'</td><td>'+Number(r.cards||0)+'</td><td>'+Number(r.references_count||0)+'</td>'+
-        '<td>'+Number(r.pieces||0).toLocaleString('pt-BR')+'</td></tr>').join(''):'<tr><td colspan="4">Nenhum Card disponível.</td></tr>')+
+        '<td>'+Number(r.pieces||0).toLocaleString(DISTRILOG_I18N.getLanguage())+'</td></tr>').join(''):'<tr><td colspan="4">Nenhum Card disponível.</td></tr>')+
       '</tbody></table></div></section></div>'+
       '<p class="missao-note">'+esc(snapshot.note||'')+' A soma dos estágios é agregada; não representa necessariamente peças únicas em uma cadeia com retrabalho.</p>';
   }catch(error){if(id===missionLiveRequest)$('missionBody').innerHTML='<div class="notice error">'+esc(error.message)+'</div>';}
