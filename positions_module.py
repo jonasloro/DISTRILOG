@@ -411,6 +411,8 @@ def allocate(card_id: int, payload: dict[str, Any]) -> dict[str, Any]:
                         color_items=cur.fetchall()
                         if not color_items: raise HTTPException(400,"A cor selecionada não pertence a este Card.")
                         boxes=int(a.get("box_count") or 0)
+                        if boxes <= 0:
+                            raise HTTPException(400, "Informe quantas caixas pretas foram deixadas neste casulo.")
                         first_color_item = True
                         for color_item in color_items:
                             piece_qty=int(color_item["real_qty"] if color_item.get("real_qty") is not None else color_item["expected_qty"] or 0)
@@ -483,7 +485,11 @@ def allocate(card_id: int, payload: dict[str, Any]) -> dict[str, Any]:
 
                     allocation_purpose = "TEN_PERCENT_SAMPLE" if is_ten_percent_sample else "STOCK"
                     box_count = int(a.get("box_count") or 0) if setor in FLAT_SECTORS else 0
-                    if setor in FLAT_SECTORS and box_count <= 0:
+                    if setor in FLAT_SECTORS and box_count < 0:
+                        raise HTTPException(400, "A quantidade de caixas pretas não pode ser negativa.")
+                    # Uma cor pode ter vários tamanhos. As caixas físicas são
+                    # contabilizadas uma única vez, no primeiro item da cor.
+                    if setor in FLAT_SECTORS and not a.get("_color") and box_count <= 0:
                         raise HTTPException(400, "Informe quantas caixas pretas foram deixadas neste casulo.")
                     cur.execute(
                         """INSERT INTO distrilog.card_allocations(
