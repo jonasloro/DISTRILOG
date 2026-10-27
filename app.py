@@ -1659,9 +1659,13 @@ async def upload_files(request: Request, files: list[UploadFile] = File(...)) ->
 @app.post("/api/import-excel")
 async def import_excel(request: Request, file: UploadFile = File(...)):
     user_id = request.state.auth_user_id
+    if request.state.auth_role != "admin":
+        raise HTTPException(403, "Somente administrador pode importar compras.")
     if not (file.filename or "").lower().endswith((".xlsx", ".xlsm")):
         raise HTTPException(400, "Envie um arquivo Excel .xlsx ou .xlsm.")
-    content = await file.read()
+    content = await file.read(25 * 1024 * 1024 + 1)
+    if not content or len(content) > 25 * 1024 * 1024:
+        raise HTTPException(413, "A planilha deve conter dados e ter até 25 MB.")
     temp = DATA_DIR / f"import_{uuid.uuid4().hex}.xlsx"
     temp.write_bytes(content)
     wb = None
