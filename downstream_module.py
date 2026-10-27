@@ -210,6 +210,115 @@ async def create_operation(card_id: int, sector: str, request: Request):
     con.commit(); data = downstream_card_data(con, card_id, sector); con.close(); return data
 
 
+@router.post("/downstream/{operation_id}/claim-all")
+async def claim_all(operation_id: int, request: Request):
+    p=await request.json(); uid=int(p.get("user_id") or 0); worker_id=int(p.get("worker_user_id") or uid)
+    con=db_connect(); con.execute("BEGIN IMMEDIATE")
+    try:
+        op=con.execute("SELECT * FROM downstream_operations WHERE id=?",(operation_id,)).fetchone()
+        if not op: raise HTTPException(404,"Operação não encontrada.")
+        if op["status"]!="ABERTO": raise HTTPException(409,"Esta operação não está aberta.")
+        actor=user(con,uid,op["sector"])
+        worker=con.execute("SELECT * FROM users WHERE id=? AND role=?",(worker_id,op["sector"].lower())).fetchone()
+        if not worker: raise HTTPException(400,"Selecione um colaborador do setor.")
+        active=con.execute("""SELECT COUNT(*) n FROM downstream_assignments
+          WHERE operation_id=? AND status NOT IN ('LIBERADA','CONCLUIDA')""",(operation_id,)).fetchone()["n"]
+        if int(active or 0)>0: raise HTTPException(409,"Este Card já está em execução.")
+        stamp=now(); created=0
+        if op["purchase_mode"]=="GRADE":
+            expected=_operation_expected_by_item(con,op)
+            for item_id,total in expected.items():
+                done=int(con.execute("""SELECT COALESCE(SUM(completed_qty),0) n FROM downstream_assignments
+                  WHERE operation_id=? AND item_id=? AND status IN ('LIBERADA','CONCLUIDA')""",(operation_id,item_id)).fetchone()["n"] or 0)
+                remaining=max(0,int(total)-done)
+                if remaining<=0: continue
+                con.execute("""INSERT INTO downstream_assignments(operation_id,item_id,worker_user_id,assigned_qty,status,timer_state,timer_started_at,created_at)
+                  VALUES(?,?,?,?, 'EM_EXECUCAO','EM_ANDAMENTO',?,?)""",(operation_id,item_id,worker_id,remaining,stamp,stamp))
+                created+=1
+        else:
+            total=sum(_operation_expected_by_item(con,op).values())
+            done=int(con.execute("""SELECT COALESCE(SUM(completed_qty),0) n FROM downstream_assignments
+              WHERE operation_id=? AND status IN ('LIBERADA','CONCLUIDA')""",(operation_id,)).fetchone()["n"] or 0)
+            remaining=max(0,int(total)-done)
+            if remaining>0:
+                con.execute("""INSERT INTO downstream_assignments(operation_id,item_id,worker_user_id,assigned_qty,status,timer_state,timer_started_at,created_at)
+                  VALUES(?,NULL,?,?, 'EM_EXECUCAO','EM_ANDAMENTO',?,?)""",(operation_id,worker_id,remaining,stamp,stamp))
+                created=1
+        if created<=0: raise HTTPException(409,"Não há saldo pendente para executar.")
+        history(con,int(op["card_id"]),f"{op['sector']}_CARD_ASSUMIDO",
+                f"{actor['name']} atribuiu o Card a {worker['name']} e iniciou a execução de {created} linha(s) pendente(s).",uid)
+        con.commit(); return {"ok":True,"created":created,"worker_name":worker["name"]}
+    finally: con.close()
+
+
+@router.post("/downstream/{operation_id}/session/{action}")
+async def downstream_session(operation_id: int, action: str, request: Request):
+    if action not in {"pause","resume"}: raise HTTPException(404,"Ação de execução inválida.")
+    p=await request.json(); uid=int(p.get("user_id") or 0); con=db_connect(); con.execute("BEGIN")
+    try:
+        op=con.execute("SELECT * FROM downstream_operations WHERE id=?",(operation_id,)).fetchone()
+        if not op: raise HTTPException(404,"Operação não encontrada.")
+        actor=user(con,uid,op["sector"]); stamp=now()
+        rows=con.execute("""SELECT * FROM downstream_assignments WHERE operation_id=?
+          AND status NOT IN ('LIBERADA','CONCLUIDA')""",(operation_id,)).fetchall()
+        if not rows: raise HTTPException(409,"Não há execução ativa neste Card.")
+        changed=0
+        for row in rows:
+            if actor["role"]==op["sector"].lower() and int(row["worker_user_id"])!=uid:
+                raise HTTPException(403,"Você controla somente a sua própria execução.")
+            state=row["timer_state"]; accum=int(row["accumulated_seconds"] or 0)
+            if action=="pause" and state=="EM_ANDAMENTO":
+                if row["timer_started_at"]:
+                    accum += max(0,int((datetime.now()-datetime.fromisoformat(row["timer_started_at"])).total_seconds()))
+                con.execute("""UPDATE downstream_assignments SET timer_state='PAUSADA',timer_started_at=NULL,accumulated_seconds=?
+                  WHERE id=?""",(accum,int(row["id"]))); changed+=1
+            elif action=="resume" and state=="PAUSADA":
+                con.execute("""UPDATE downstream_assignments SET timer_state='EM_ANDAMENTO',timer_started_at=?
+                  WHERE id=?""",(stamp,int(row["id"]))); changed+=1
+        if changed<=0: raise HTTPException(409,"A execução já está nesse estado.")
+        history(con,int(op["card_id"]),f"{op['sector']}_{'PAUSADA' if action=='pause' else 'RETOMADA'}",
+                f"{actor['name']} {'pausou' if action=='pause' else 'retomou'} a execução do Card.",uid)
+        con.commit(); return {"ok":True}
+    finally: con.close()
+
+
+@router.post("/downstream/{operation_id}/partial-all")
+async def partial_all(operation_id: int, request: Request):
+    p=await request.json(); uid=int(p.get("user_id") or 0); supplied=p.get("items")
+    if not isinstance(supplied,list): raise HTTPException(400,"Informe quanto foi executado em cada linha.")
+    con=db_connect(); con.execute("BEGIN")
+    try:
+        op=con.execute("SELECT * FROM downstream_operations WHERE id=?",(operation_id,)).fetchone()
+        if not op: raise HTTPException(404,"Operação não encontrada.")
+        actor=user(con,uid,op["sector"]); rows=con.execute("""SELECT * FROM downstream_assignments
+          WHERE operation_id=? AND status NOT IN ('LIBERADA','CONCLUIDA') ORDER BY id""",(operation_id,)).fetchall()
+        if not rows: raise HTTPException(409,"Não há execução ativa neste Card.")
+        by_item={int(v.get("item_id") or 0):v for v in supplied if isinstance(v,dict)}
+        stamp=now(); returned=0; completed=0
+        for row in rows:
+            if actor["role"]==op["sector"].lower() and int(row["worker_user_id"])!=uid:
+                raise HTTPException(403,"Você altera somente a sua própria execução.")
+            key=int(row["item_id"] or 0); value=by_item.get(key)
+            if value is None: raise HTTPException(400,"Informe a quantidade executada de todas as linhas ativas.")
+            try: qty=int(value.get("completed_qty"))
+            except (TypeError,ValueError): raise HTTPException(400,"Quantidade executada inválida.") from None
+            assigned=int(row["assigned_qty"] or 0)
+            if qty<0 or qty>assigned: raise HTTPException(400,"A quantidade executada não pode ultrapassar a quantidade assumida.")
+            accum=int(row["accumulated_seconds"] or 0)
+            if row["timer_state"]=="EM_ANDAMENTO" and row["timer_started_at"]:
+                accum += max(0,int((datetime.now()-datetime.fromisoformat(row["timer_started_at"])).total_seconds()))
+            status="CONCLUIDA" if qty==assigned else "LIBERADA"
+            con.execute("""UPDATE downstream_assignments SET completed_qty=?,status=?,timer_state='FINALIZADA',
+              timer_started_at=NULL,accumulated_seconds=?,completed_at=? WHERE id=?""",
+              (qty,status,accum,stamp,int(row["id"])))
+            completed+=qty; returned+=max(0,assigned-qty)
+        if returned<=0: raise HTTPException(400,"Se terminou tudo, use a conferência final. Esta ação é somente para execução parcial.")
+        history(con,int(op["card_id"]),f"{op['sector']}_CARD_PARCIAL",
+                f"{actor['name']} encerrou uma execução parcial: {completed} peça(s) executadas e {returned} peça(s) devolvidas ao saldo.",uid)
+        con.commit(); return {"ok":True,"completed_qty":completed,"returned_qty":returned}
+    finally: con.close()
+
+
 @router.post("/downstream/{operation_id}/claim")
 async def claim(operation_id: int, request: Request):
     p = await request.json(); uid = int(p.get("user_id") or 0); worker_id = int(p.get("worker_user_id") or uid); qty = int(p.get("qty") or 0)
