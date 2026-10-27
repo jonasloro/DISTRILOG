@@ -3366,7 +3366,7 @@ async function processingTriageAction(id,action) {
 async function openTriageCountModal(id,cardId,readOnly) {
   try {
     const t = await api("/api/processing/triage/" + id + "/details?user_id=" + currentUser.id);
-    processingExtraIndex = 0;
+    processingExtraIndex = 0; window.currentTriageItems=t.items||[];
     const saved = new Map((t.counts || []).filter(x=>x.item_id!=null).map(x=>[Number(x.item_id),x]));
     const rows = (t.items || []).map(item => {
       const val = saved.has(Number(item.item_id)) ? Number(saved.get(Number(item.item_id)).counted_qty) : "";
@@ -3377,8 +3377,8 @@ async function openTriageCountModal(id,cardId,readOnly) {
     $("modalBody").innerHTML = '<div class="card-title"><div><h2>Contagem da Triagem</h2><div class="card-subtitle">' + esc(t.user_name || "") + ' · ' + fmtSeconds(t.worked_seconds || 0) + ' trabalhados</div></div></div>' +
       '<div class="notice">Zero é válido; campo vazio não.</div><div class="table-wrap"><table class="compact-table"><thead><tr><th>Referência</th><th>Cor</th><th>Tamanho</th><th>Previsto</th><th>Contado</th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
       (readOnly ? '<h3 class="section-heading">Combinações extras</h3><div class="table-wrap"><table class="compact-table"><tbody>' + extras + '</tbody></table></div>' :
-       '<h3 class="section-heading">Combinações extras fora da grade</h3><div class="notice">Extras ficam em auditoria, sem criar itens automaticamente.</div><div class="table-wrap"><table class="compact-table"><thead><tr><th>Referência</th><th>Cor</th><th>Tamanho</th><th>Qtd.</th><th></th></tr></thead><tbody id="triageExtraRows"></tbody></table></div><div class="field full"><label for="triageNeedsLabeling">Precisa etiquetar?</label><select id="triageNeedsLabeling" required><option value="">Selecione uma opção</option><option value="1">Sim — encaminhar para Etiquetagem</option><option value="0">Não — encaminhar diretamente para Estocagem</option></select></div><h3 class="section-heading">Endereçamento obrigatório de saída — ET</h3><div class="notice">A Triagem só pode endereçar a mercadoria em posições ET. O Card não avança enquanto toda a quantidade conferida não estiver endereçada.</div><div id="posAllocBox" class="notice">Carregando posições ET...</div><div class="actions"><button class="secondary" onclick="addTriageExtraRow()">Adicionar combinação extra</button><button class="success" onclick="finishProcessingTriage(' + id + ')">Concluir triagem e encaminhar</button></div>');
-    $("modal").classList.remove("hidden"); window.processingTriageCardId=cardId; if(!readOnly) loadPositionAllocator(cardId,"ET");
+       '<h3 class="section-heading">Combinações extras fora da grade</h3><div class="notice">Extras ficam em auditoria, sem criar itens automaticamente.</div><div class="table-wrap"><table class="compact-table"><thead><tr><th>Referência</th><th>Cor</th><th>Tamanho</th><th>Qtd.</th><th></th></tr></thead><tbody id="triageExtraRows"></tbody></table></div><div class="field full"><label for="triageNeedsLabeling">Precisa etiquetar?</label><select id="triageNeedsLabeling" required><option value="">Selecione uma opção</option><option value="1">Sim — encaminhar para Etiquetagem</option><option value="0">Não — encaminhar diretamente para Estocagem</option></select></div><div id="triageAllocationPhase"></div><div class="actions"><button class="secondary" onclick="addTriageExtraRow()">Adicionar combinação extra</button><button class="success" onclick="finishProcessingTriage(' + id + ')">Concluir triagem e encaminhar</button></div>');
+    $("modal").classList.remove("hidden"); window.processingTriageCardId=cardId;
   } catch(error) { toast(error.message); }
 }
 function addTriageExtraRow() {
@@ -3406,10 +3406,28 @@ async function finishProcessingTriage(id) {
       document.querySelectorAll(".triage-count-value").forEach(input=>{
         const wrong=divergentIds.has(Number(input.dataset.itemId));
         input.closest("tr")?.classList.toggle("triage-recount-required",wrong);
-        if(wrong){ input.value=""; input.focus(); }
+        input.disabled=!wrong;
+        if(wrong){input.value="";input.focus();}
       });
+      if($("triageAllocationPhase"))$("triageAllocationPhase").innerHTML="";
       const labels=(result.divergences||[]).map(x=>[x.reference,x.color,x.size].filter(Boolean).join(" · ")).join("; ");
       toast("Recontagem obrigatória: "+(labels||"há divergências na conferência."));
+      return;
+    }
+    if(result.requires_allocation){
+      document.querySelectorAll(".triage-count-value").forEach(input=>input.disabled=true);
+      document.querySelectorAll(".triage-extra-row input").forEach(input=>input.disabled=true);
+      if($("triageNeedsLabeling"))$("triageNeedsLabeling").disabled=true;
+      const byId=new Map((window.currentTriageItems||[]).map(i=>[Number(i.item_id),i]));
+      const allocItems=counts.filter(x=>x.item_id!=null).map(x=>{
+        const src=byId.get(Number(x.item_id))||{};
+        return {id:Number(x.item_id),product:src.reference||"",reference:src.reference||"",sku:"",color:src.color||"",size:src.size||"",expected_qty:Number(x.counted_qty),source_stage:"ETIQUETAGEM"};
+      });
+      const host=$("triageAllocationPhase");
+      if(!host)throw new Error("Não foi possível abrir o endereçamento da Triagem.");
+      host.innerHTML='<h3 class="section-heading">Endereçamento obrigatório de saída — ET</h3><div class="notice"><b>Contagem validada.</b> Agora enderece toda a mercadoria em ET. O destino é fixo.</div><div id="posAllocBox" class="notice">Carregando posições ET...</div>';
+      await loadPositionAllocator(window.processingTriageCardId,"ET",false,0,allocItems,true);
+      toast(result.detail||"Contagem validada. Conclua o endereçamento em ET.");
       return;
     }
     closeModal();
