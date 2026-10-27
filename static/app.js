@@ -2911,9 +2911,35 @@ async function renderRegistrations(){
   const usersMeta = `<span class="panel-count">${users.length}</span>`;
   const usersTable = `<table class="dash-table"><thead><tr><th>Nome</th><th>Usuário</th><th>Perfil</th></tr></thead><tbody>${users.map(u => `<tr><td>${esc(u.name)}</td><td>${esc(u.username)}</td><td>${statusBadge(u.role)}</td></tr>`).join("")}</tbody></table>`;
   const adminPanel=currentUser.role==="admin"?`<section class="panel" style="margin-top:16px"><div class="panel-body"><h3 class="section-heading">Criar login de operador</h3><p>O colaborador deverá trocar a senha temporária no primeiro acesso.</p><div class="shipping-form-grid"><div class="field"><label>Nome</label><input id="newOperatorName" maxlength="100"></div><div class="field"><label>Usuário</label><input id="newOperatorUsername" maxlength="40" autocomplete="off"></div><div class="field"><label>Função / setor</label><select id="newOperatorRole">${["recebimento","qualidade","processamento","etiquetagem","estocagem","expedicao","devolucoes","planejamento","supervisor","consulta","admin"].map(r=>'<option value="'+r+'">'+r+'</option>').join("")}</select></div><div class="field"><label>Senha temporária (12+ caracteres, letras e números)</label><input id="newOperatorPassword" type="password" autocomplete="new-password"></div><div class="field"><label>Confirme sua senha de administrador</label><input id="adminConfirmPassword" type="password" autocomplete="current-password"></div></div><div class="actions"><button class="primary" onclick="createOperatorLogin()">Criar login</button></div></div></section>`:"";
+  const resetPanel=currentUser.role==="admin"?
+    '<section class="panel" style="margin-top:16px"><div class="panel-body"><h3 class="section-heading">Redefinir senha de operador</h3>'+
+    '<p>Use para ativar novamente contas legadas. A senha antiga deixa de funcionar e o operador será obrigado a escolher uma nova senha no primeiro acesso.</p>'+
+    '<div class="shipping-form-grid"><div class="field"><label>Operador</label><select id="resetOperatorUsername">'+
+    users.filter(u=>u.username!==currentUser.username).map(u=>'<option value="'+esc(u.username)+'">'+esc(u.name)+' — '+esc(u.username)+'</option>').join("")+
+    '</select></div><div class="field"><label>Nova senha temporária (12+ caracteres, letras e números)</label>'+
+    '<input id="resetOperatorTempPassword" type="password" autocomplete="new-password"></div>'+
+    '<div class="field"><label>Sua senha de administrador</label>'+
+    '<input id="resetOperatorAdminPassword" type="password" autocomplete="current-password"></div></div>'+
+    '<div class="actions"><button class="primary" type="button" onclick="resetOperatorPassword()">Redefinir senha</button></div></div></section>' : "";
   const reportTitle = analytics.latest_report ? esc(analytics.latest_report.filename) : "Sem relatório";
   const reportBody = analyticsBarsBody((analytics.groups||[]).map(g => ({label:g.group_name,value:g.quantity,hint:g.gender})));
-  $("mainContent").innerHTML = `<div class="actions" style="margin-bottom:12px"><button class="primary" onclick="openGoatCardModal()">+ Criar Card</button></div><div class="dash-row registrations-grid">${dashboardPanel("♙","Usuários e perfis",usersMeta,usersTable)}${dashboardPanel("▣","Grupos do último relatório",reportTitle,reportBody)}</div>${adminPanel}`;
+  $("mainContent").innerHTML = `<div class="actions" style="margin-bottom:12px"><button class="primary" onclick="openGoatCardModal()">+ Criar Card</button></div><div class="dash-row registrations-grid">${dashboardPanel("♙","Usuários e perfis",usersMeta,usersTable)}${dashboardPanel("▣","Grupos do último relatório",reportTitle,reportBody)}</div>${adminPanel}${resetPanel}`;
+}
+
+async function resetOperatorPassword() {
+  const username=$("resetOperatorUsername")?.value||"";
+  const temporary=$("resetOperatorTempPassword")?.value||"";
+  const admin=$("resetOperatorAdminPassword")?.value||"";
+  if (!username || temporary.length<12 || !admin) {toast("Selecione o operador, informe senha temporária forte e confirme sua senha.");return;}
+  if (!confirm("Revogar sessões e redefinir a senha de "+username+"?")) return;
+  try {
+    await api("/api/admin/users/"+encodeURIComponent(username)+"/reset-password",{
+      method:"POST",body:JSON.stringify({temporary_password:temporary,admin_password:admin})
+    });
+    $("resetOperatorTempPassword").value="";
+    $("resetOperatorAdminPassword").value="";
+    toast("Senha temporária redefinida. O operador precisa alterá-la no próximo login.");
+  } catch(error) {toast(error.message);}
 }
 
 async function createOperatorLogin(){
