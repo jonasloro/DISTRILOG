@@ -192,6 +192,17 @@ def init_processing_flow_db():
         CREATE INDEX IF NOT EXISTS idx_processing_triage_counts_task ON processing_triage_counts(triage_id);
         CREATE INDEX IF NOT EXISTS idx_storage_entries_status ON storage_entries(status,created_at);
         CREATE INDEX IF NOT EXISTS idx_storage_entry_items_entry ON storage_entry_items(entry_id);
+        CREATE TABLE IF NOT EXISTS processing_downstream_corrections (
+          id INTEGER PRIMARY KEY AUTOINCREMENT, operation_id INTEGER NOT NULL, sector TEXT NOT NULL,
+          check_id INTEGER NOT NULL, item_id INTEGER NOT NULL, old_qty INTEGER NOT NULL, corrected_qty INTEGER NOT NULL,
+          reason TEXT NOT NULL, corrected_by INTEGER NOT NULL, corrected_by_name TEXT NOT NULL, corrected_at TEXT NOT NULL,
+          UNIQUE(operation_id,sector,check_id,item_id),
+          FOREIGN KEY(operation_id) REFERENCES downstream_operations(id) ON DELETE CASCADE,
+          FOREIGN KEY(item_id) REFERENCES items(id) ON DELETE CASCADE,
+          FOREIGN KEY(corrected_by) REFERENCES users(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_processing_downstream_corrections
+          ON processing_downstream_corrections(operation_id,sector,item_id,check_id);
         CREATE UNIQUE INDEX IF NOT EXISTS uq_processing_triage_one_open_per_card
           ON processing_triages(card_id) WHERE status IN ('EM_ANDAMENTO','PAUSADA');
         """)
@@ -759,6 +770,40 @@ def ensure_storage_entry(con,card_id,operation_id):
     return eid
 
 
+@router.get("/downstream-divergence/card/{card_id}")
+def downstream_divergence_status(card_id: int,user_id: int):
+    con=db.connect()
+    try:
+        _operator(con,user_id)
+        op=con.execute("""SELECT * FROM downstream_operations
+          WHERE card_id=? AND sector IN ('ETIQUETAGEM','ESTOCAGEM') AND status='ABERTO'
+          ORDER BY id DESC LIMIT 1""",(card_id,)).fetchone()
+        if not op:
+            return {"operation":None,"pending":[],"awaiting_recount":[]}
+        table="labeling_final_checks" if op["sector"]=="ETIQUETAGEM" else "storage_blind_checks"
+        checks=con.execute(f"""SELECT s.id AS check_id,s.item_id,s.counted_qty,s.attempt,
+                 i.reference,i.product,i.color,i.size,COALESCE(i.real_qty,i.expected_qty,0) current_qty
+          FROM {table} s JOIN items i ON i.id=s.item_id
+          WHERE s.operation_id=? AND s.matched=0 AND s.attempt>=2
+            AND s.id=(SELECT MAX(s2.id) FROM {table} s2
+                      WHERE s2.operation_id=s.operation_id AND s2.item_id=s.item_id)
+          ORDER BY i.reference,i.color,i.size,i.id""",(int(op["id"]),)).fetchall()
+        pending=[]; awaiting=[]
+        for row in checks:
+            value=dict(row)
+            correction=con.execute("""SELECT corrected_qty,reason,corrected_by_name,corrected_at
+              FROM processing_downstream_corrections
+              WHERE operation_id=? AND sector=? AND check_id=? AND item_id=?""",
+              (int(op["id"]),op["sector"],int(row["check_id"]),int(row["item_id"]))).fetchone()
+            if correction:
+                value["correction"]=dict(correction); awaiting.append(value)
+            else:
+                pending.append(value)
+        return {"operation":{"id":int(op["id"]),"sector":op["sector"]},"pending":pending,"awaiting_recount":awaiting}
+    finally:
+        con.close()
+
+
 @router.post("/downstream-divergence/{operation_id}/correct")
 @router.post("/storage-divergence/{operation_id}/correct")
 async def correct_storage_divergence(operation_id: int, request: Request):
@@ -771,22 +816,36 @@ async def correct_storage_divergence(operation_id: int, request: Request):
         if not op or op["sector"] not in {"ETIQUETAGEM","ESTOCAGEM"}: raise HTTPException(404,"Operação com divergência não encontrada.")
         if op["status"]!="ABERTO": raise HTTPException(409,"A operação já foi concluída e não pode mais ter a grade alterada.")
         table="labeling_final_checks" if op["sector"]=="ETIQUETAGEM" else "storage_blind_checks"
-        rows=con.execute(f"""SELECT s.item_id FROM {table} s
+        rows=con.execute(f"""SELECT s.id AS check_id,s.item_id,s.counted_qty FROM {table} s
           WHERE s.operation_id=? AND s.matched=0 AND s.attempt>=2
             AND s.id=(SELECT MAX(s2.id) FROM {table} s2 WHERE s2.operation_id=s.operation_id AND s2.item_id=s.item_id)""",
           (operation_id,)).fetchall()
-        eligible={int(r["item_id"]) for r in rows if r["item_id"] is not None}
+        latest={int(r["item_id"]):r for r in rows if r["item_id"] is not None}
+        eligible={}
+        for iid,row in latest.items():
+            corrected=con.execute("""SELECT 1 FROM processing_downstream_corrections
+              WHERE operation_id=? AND sector=? AND check_id=? AND item_id=?""",
+              (operation_id,op["sector"],int(row["check_id"]),iid)).fetchone()
+            if not corrected: eligible[iid]=row
         if not eligible: raise HTTPException(409,"Não existe divergência persistente aguardando correção do Processamento.")
-        items={int(x["id"]):x for x in con.execute("SELECT id,reference,color,size FROM items WHERE card_id=?",(int(op["card_id"]),)).fetchall()}
-        seen=set()
+        items={int(x["id"]):x for x in con.execute("SELECT id,reference,color,size,COALESCE(real_qty,expected_qty,0) current_qty FROM items WHERE card_id=?",(int(op["card_id"]),)).fetchall()}
+        seen=set(); corrections=[]
         for value in supplied:
             try: iid=int(value.get("item_id")); qty=_qty(value.get("quantity"),"quantidade corrigida")
             except (TypeError,ValueError,AttributeError): raise HTTPException(400,"Correção de grade inválida.") from None
             if iid not in items or iid not in eligible or iid in seen:
                 raise HTTPException(400,"Só é permitido corrigir as linhas que permaneceram divergentes após a recontagem.")
-            seen.add(iid); con.execute("UPDATE items SET real_qty=? WHERE id=? AND card_id=?",(qty,iid,int(op["card_id"])))
-        if seen != eligible:
+            seen.add(iid)
+            old_qty=int(items[iid]["current_qty"] or 0)
+            con.execute("UPDATE items SET real_qty=? WHERE id=? AND card_id=?",(qty,iid,int(op["card_id"])))
+            corrections.append((operation_id,op["sector"],int(eligible[iid]["check_id"]),iid,old_qty,qty,
+                                reason,int(actor["id"]),actor["name"],_iso()))
+        if seen != set(eligible):
             raise HTTPException(400,"Corrija todas as linhas que permaneceram divergentes antes de liberar nova conferência.")
+        for correction in corrections:
+            con.execute("""INSERT INTO processing_downstream_corrections(
+              operation_id,sector,check_id,item_id,old_qty,corrected_qty,reason,corrected_by,corrected_by_name,corrected_at)
+              VALUES(?,?,?,?,?,?,?,?,?,?)""",correction)
         _history(con,int(op["card_id"]),"GRADE_CORRIGIDA_PELO_PROCESSAMENTO",
           f"{actor['name']} corrigiu {len(seen)} linha(s) da grade após divergência persistente em {op['sector'].title()}. Motivo: {reason}",int(actor["id"]))
         con.commit(); return {"ok":True,"corrected":len(seen),"sector":op["sector"]}
