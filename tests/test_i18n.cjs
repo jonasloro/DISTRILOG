@@ -48,6 +48,6 @@ test("Unrecognized locales fail closed to default Portuguese", () => {
 test("Catalog has substantial coverage across operational screens", () => {
   assert.ok(Object.keys(i18n.catalog).length >= 750);
   const expected = ["Criar inspeção", "Concluir Estocagem", "Assumir Card e iniciar",
-    "Entrada confirmada.", "Confirme sua senha de administrador", "Idioma preferido"];
+    "Selecionar inspetor", "Confirme sua senha de administrador", "Idioma preferido"];
   for (const label of expected) assert.notEqual(i18n.t(label, "es"), label, label);
 });
