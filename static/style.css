@@ -1340,3 +1340,79 @@ input:disabled,select:disabled,textarea:disabled{
 }
 .wms-health-summary small{display:block;margin-top:4px;color:#a7b9ab;font-size:12px}
 .wms-health-summary .badge{white-space:nowrap}
+
+
+/* Missão 2026: quadro de backlog com histórico mensal completo. */
+.mission-kicker{display:block;font-size:10px;font-weight:800;letter-spacing:.13em;text-transform:uppercase;color:#8ec6a0;margin-bottom:7px}
+.mission-period-tabs{display:flex;gap:7px;flex-wrap:wrap;margin:0 0 14px}
+.mission-month{background:#222a25;border:1px solid #3a4b3e;border-radius:8px;color:#c9dccd;padding:10px 15px;font-size:12px;font-weight:700;cursor:pointer;transition:background .14s,border-color .14s}
+.mission-month:hover{background:#2c4031;border-color:#658e6f}
+.mission-month.selected{background:#264c32;border-color:#72ad81;color:#e6f7ea;box-shadow:inset 0 -2px 0 #82bf93}
+.mission-month:focus-visible{outline:2px solid #98d5a7;outline-offset:2px}
+.mission-month-heading{display:flex;justify-content:space-between;align-items:end;gap:15px;flex-wrap:wrap;margin:0 0 14px}
+.mission-month-heading h3{font-size:22px;line-height:1.3;margin:2px 0 0;color:#f0f8f2}
+.mission-month-heading h3 small{font-size:12px;font-weight:500;color:#a6b5ab}
+.mission-month-heading label{display:flex;flex-direction:column;gap:5px;font-size:11px;color:#a9b9ae}
+.mission-month-heading select{background:#252e28;color:#e9f2ec;border:1px solid #4b6050;padding:9px 12px;border-radius:8px;min-width:186px}
+.mission-board-panel{margin-top:3px;background:#1a201c;border-color:#334438;overflow:hidden}
+.mission-board-panel .panel-header{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;color:#e0efe5}
+.mission-board-panel .panel-header>div{display:grid;gap:5px}
+.mission-board-panel .panel-header strong{font-size:13px;letter-spacing:.04em}
+.mission-board-panel .panel-header small,.mission-board-hint{font-size:11px;color:#a5b8ac}
+.mission-board-wrap{width:100%;overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:thin;scrollbar-color:#54765c #1c2520}
+.mission-board{width:100%;border-collapse:separate;border-spacing:0;min-width:930px;white-space:nowrap;color:#e5eee7;font-variant-numeric:tabular-nums}
+.mission-board th,.mission-board td{border-bottom:1px solid #34463a;border-right:1px solid #2d3d32;padding:12px 11px;vertical-align:middle;text-align:right;font-size:12px}
+.mission-board thead th{background:#2d3830;color:#ddece0;position:sticky;top:0;z-index:1}
+.mission-board thead tr:first-child th{padding:12px 10px;border-bottom:1px solid #537059}
+.mission-board thead th b{display:block;font-size:11px;letter-spacing:.06em}
+.mission-board thead th small{display:block;color:#b2c6b7;font-size:10px;margin-top:3px;font-weight:400}
+.mission-board thead th.mission-th-metric{font-size:10px;letter-spacing:.02em;font-weight:700}
+.mission-board thead th.mission-th-metric.is-backlog{color:#f1cf87;background:#37372b}
+.mission-board thead th.mission-th-metric.is-produced{color:#9fddb0;background:#243c2d}
+.mission-board thead th:first-child,.mission-board tbody th,.mission-board tfoot th{
+  position:sticky;left:0;z-index:2;text-align:left;min-width:152px;max-width:180px;
+  font-size:11px;letter-spacing:.01em;white-space:normal;
+}
+.mission-board tbody th{background:#263129;font-weight:750;color:#e4f0e8}
+.mission-board tbody tr:nth-child(even) th{background:#223026}
+.mission-board tbody tr:nth-child(even) td{background:#1b251e}
+.mission-board tbody tr:hover td{background:#2d3b30}
+.mission-board tbody tr:hover th{background:#344c3a}
+.mission-board td.mission-val{min-width:100px;background:#1e2720}
+.mission-board tbody td.mission-val.backlog{background:#282820}
+.mission-board tbody td.mission-val.produzido{background:#1e2d23}
+.mission-cell-value{font-size:12px;font-weight:800}
+.mission-cell-value.is-backlog{color:#edd59c}
+.mission-cell-value.is-produced{color:#afdfbc}
+.mission-zero{color:#c3cfc5;font-weight:700}
+.mission-nodata{color:#677b6d;font-style:italic;font-size:14px}
+.mission-board tfoot td{font-weight:850;background:#273a2c!important;color:#f3faf4}
+.mission-board tfoot th{background:#294231;color:#ecf7ee;z-index:2}
+.mission-board tfoot small{display:block;font-size:9px;margin-top:4px;color:#a7baaa;font-weight:400}
+.mission-support-grid{margin-top:15px;grid-template-columns:minmax(0,0.88fr) minmax(0,1.12fr)}
+.mission-trend-chart{display:grid;gap:17px}
+.mission-week-trend{display:grid;grid-template-columns:minmax(74px,auto) minmax(55px,1fr) 80px 64px;gap:11px;align-items:center}
+.mission-trend-title{display:grid;gap:3px;font-size:10px;color:#dbebdf}
+.mission-trend-title small{font-size:9px;color:#96a99a}
+.mission-trend-track{height:14px;border-radius:4px;background:#2b352d;overflow:hidden}
+.mission-trend-track i{display:block;height:100%;background:linear-gradient(90deg,#4f855e,#8bc69b);border-radius:4px;min-width:0}
+.mission-week-trend>strong{font-size:11px;color:#c8e5cf;text-align:right;font-variant-numeric:tabular-nums}
+.mission-week-trend>small{font-size:9px;color:#93a99a;text-align:right}
+.mission-footnote{display:block;line-height:1.55;margin-top:20px;color:#a3b5a7}
+.mission-sector-table th,.mission-sector-table td{padding:10px 6px;font-size:11px}
+.mission-sector-table td.mission-num{text-align:right;font-variant-numeric:tabular-nums}
+.mission-sector-table td.mission-worse{color:#f0bd8c}
+.mission-sector-table td.mission-better{color:#a1dda9}
+.collab-load-error{margin:8px 13px;padding:9px 12px;color:#f1c3a1;background:#3b2a22;border:1px solid #70513b;border-radius:8px;font-size:12px}
+.collab-load-error.hidden{display:none!important}
+@media(max-width:800px){
+  .mission-support-grid{grid-template-columns:1fr}
+  .mission-board thead th:first-child,.mission-board tbody th,.mission-board tfoot th{min-width:125px;max-width:136px}
+  .mission-period-tabs{flex-wrap:nowrap;overflow-x:auto;padding-bottom:4px}
+  .mission-month{flex-shrink:0}
+}
+@media(max-width:570px){
+  .mission-week-trend{grid-template-columns:65px minmax(40px,1fr) 70px;gap:7px}
+  .mission-week-trend>small{display:none}
+  .mission-board-hint{display:none}
+}
