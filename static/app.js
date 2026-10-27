@@ -1935,48 +1935,28 @@ function processingInspectionHandoffNotice() {
 async function renderProcessingTab() {
   if (guardSampleAllocationNavigation()) return;
   activateTab("tabProcessingBtn");
-  try {
-    if (!processingUsers.length) processingUsers = await api("/api/processing/users");
-  } catch (error) {
-    $("cardTab").innerHTML = `<div class="notice error">${esc(error.message)}</div>`;
-    return;
-  }
-  const p = cardData.processing;
-  const handoffNotice = cardData.current_sector === "PROCESSAMENTO" ? processingInspectionHandoffNotice() : "";
-  const importedProcessingItems = (cardData.items||[]).filter((item)=>["AGUARDANDO_PROCESSAMENTO","PROCESSAMENTO"].includes(item.source_stage));
-  if (cardData.source_snapshot_at && !p && cardData.current_sector !== "PROCESSAMENTO") {
-    if (importedProcessingItems.length && canOperateProcessing()) {
-      $("cardTab").innerHTML = processingSetupHtml(importedProcessingItems);
-      toggleProcessingLabelField();
-    } else {
-      renderImportedSectorSnapshot("tabProcessingBtn",["AGUARDANDO_PROCESSAMENTO","PROCESSAMENTO"],"Itens localizados no Processamento");
-      if (importedProcessingItems.length) {
-        $("cardTab").insertAdjacentHTML("afterbegin",'<div class="notice warn"><b>Para produzir:</b> saia deste perfil e entre como operador do Processamento, Supervisor ou Administrador.</div>');
-      }
-    }
-    return;
-  }
-  if (cardData.current_sector === "PROCESSAMENTO" && !p) {
-    if (!canOperateProcessing()) {
-      $("cardTab").innerHTML = handoffNotice + '<div class="panel-body"><div class="notice warn">Aguardando um operador do Processamento configurar o Card.</div></div>';
-      return;
-    }
-    $("cardTab").innerHTML = handoffNotice + processingSetupHtml();
-    toggleProcessingLabelField();
-    return;
-  }
-  if (!p) {
-    $("cardTab").innerHTML = '<div class="panel-body"><div class="notice">Este Card ainda não possui dados do Processamento.</div></div>';
-    return;
-  }
-  $("cardTab").innerHTML = handoffNotice + processingDetailHtml(p);
-  toggleProcessingLabelField();
-  if (canOperateProcessing()) {
-    $("cardTab").insertAdjacentHTML("beforeend", '<div class="panel-body"><h3 class="section-heading">Endereçamento no Processamento (PR)</h3><div id="posAllocBox" class="notice">Carregando posições…</div></div>');
-    loadPositionAllocator(cardData.id, "PR");
-  }
+  const p=cardData.processing;
+  const sector=String(cardData.current_sector||"").toUpperCase();
+  const history=cardData.history||[];
+  const hasEvent=(...types)=>history.some(e=>types.includes(e.event_type));
+  const triageDone=hasEvent("TRIAGEM_CONCLUIDA") || ["ETIQUETAGEM","ESTOCAGEM","FINALIZADO"].includes(sector);
+  const cadastroDone=hasEvent("CADASTRO_CONCLUIDO","ETIQUETAS_DISPONIVEIS");
+  const labelingDone=hasEvent("ETIQUETAGEM_CONCLUIDA","ETIQUETAGEM_CONFERENCIA_OK") || ["ESTOCAGEM","FINALIZADO"].includes(sector);
+  const storageDone=hasEvent("ESTOCAGEM_CONCLUIDA","ESTOCAGEM_CONFERENCIA_OK") || sector==="FINALIZADO";
+  const entryDone=hasEvent("ENTRADA_ESTOCAGEM_CONFIRMADA");
+  const steps=[
+    ["Triagem",triageDone,sector==="PROCESSAMENTO"],
+    ["Cadastro",cadastroDone,!cadastroDone&&triageDone],
+    ["Etiquetagem",labelingDone,sector==="ETIQUETAGEM"],
+    ["Estocagem",storageDone,sector==="ESTOCAGEM"],
+    ["Entrada",entryDone,storageDone&&!entryDone]
+  ];
+  const flow=steps.map(([label,done,current])=>'<div class="summary-box"><span>'+esc(label)+'</span><strong>'+(done?"✓ Concluído":current?"• Atual":"— Pendente")+'</strong></div>').join("");
+  const qty=p?.totals||{};
+  const responsible=[...history].reverse().find(e=>["TRIAGEM_INICIADA","CADASTRO_INICIADO","ETIQUETAGEM_INICIADA","ESTOCAGEM_INICIADA"].includes(e.event_type));
+  const divergence=[...history].reverse().find(e=>String(e.event_type||"").includes("DIVERGENTE"));
+  $("cardTab").innerHTML='<div class="panel-body"><div class="notice"><b>Visão geral do Processamento</b><br>Esta aba acompanha o caminho do Card. As operações são realizadas nas etapas correspondentes do fluxo.</div><div class="summary-grid processing-summary">'+flow+'</div><h3 class="section-heading">Situação do Card</h3><div class="form-grid"><div class="field"><label>Setor atual</label><input class="readonly" readonly value="'+esc(cardData.current_sector||"—")+'"></div><div class="field"><label>Status</label><input class="readonly" readonly value="'+esc(cardData.status||"—")+'"></div><div class="field"><label>Tipo da compra</label><input class="readonly" readonly value="'+esc(cardData.purchase_mode==="GRADE"?"Grade":"Saldo")+'"></div><div class="field"><label>Quantidade prevista</label><input class="readonly" readonly value="'+Number(qty.expected??cardData.expected_total??0).toLocaleString("pt-BR")+'"></div>'+(responsible?'<div class="field"><label>Último responsável operacional</label><input class="readonly" readonly value="'+esc(responsible.user_name||responsible.description||"Registrado no histórico")+'"></div>':"")+'</div>'+(divergence?'<div class="notice warn"><b>Última divergência registrada</b><br>'+esc(divergence.description||"Existe uma conferência divergente pendente de verificação.")+'</div>':"")+'<div class="notice success-box"><b>Sem configuração paralela.</b><br>Triagem, Cadastro, Etiquetagem, Estocagem e Entrada mantêm suas próprias regras e responsáveis.</div></div>';
 }
-
 
 function processingSetupHtml(importedItems=[]) {
   const modeLabel = cardData.purchase_mode === "GRADE" ? "Grade — importado como Private Label" : cardData.purchase_mode === "SALDO" ? "Saldo" : "Tipo não reconhecido";
