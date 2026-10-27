@@ -346,9 +346,10 @@ function renderAddressMapContent() {
         '<div class="field"><label for="addressMapSearch">Buscar endereço</label><input id="addressMapSearch" type="search" value="' + esc(state.search) + '" placeholder="Ex.: 1RM06A" oninput="filterAddressMap()"></div>' +
       '</div>' +
       '<div class="address-map-legend"><span><i class="address-map-dot is-free"></i>Livre</span><span><i class="address-map-dot is-occupied"></i>Ocupada</span><small>Os números nas posições representam unidades atualmente alocadas.</small></div>' +
-      '<div id="addressMapGrid" class="address-map-grid"></div><section id="addressInventoryPanel" class="wms-inventory-panel hidden" aria-live="polite"></section>' +
+      '<div id="wmsReconciliationSummary"></div><div id="addressMapGrid" class="address-map-grid"></div><section id="addressInventoryPanel" class="wms-inventory-panel hidden" aria-live="polite"></section>' +
     '</section>';
   renderAddressMapGrid();
+  refreshWmsReconciliationSummary();
 }
 
 async function changeAddressMapSector(sector) {
@@ -531,6 +532,65 @@ async function submitAddressTransfer() {
     await renderAddressMap();
     await openAddressInventory(data.location.address);
   } catch(error) {toast(error.message);if(button)button.disabled=false;}
+}
+
+async function refreshWmsReconciliationSummary() {
+  const box=$("wmsReconciliationSummary");
+  if(!box || !["admin","supervisor"].includes(currentUser?.role)) return;
+  try {
+    const result=await api("/api/positions/reconciliation?limit=1");
+    if (!box.isConnected) return;
+    const count=Number(result.total||0);
+    box.innerHTML = count
+      ? '<div class="notice warn wms-anomaly-summary"><b>⚠ '+count+' divergência(s) de endereçamento</b>'+
+        '<span>Existem alocações ativas sem card, item ou endereço válido. Requerem conferência física.</span>'+
+        '<button class="secondary small-btn" type="button" onclick="openWmsReconciliation()">Revisar divergências</button></div>'
+      : '<div class="notice success-box">✓ Nenhuma alocação ativa órfã detectada no Supabase.</div>';
+  } catch(error) {
+    if(box.isConnected)box.innerHTML='<div class="notice warn">Não foi possível executar a verificação de integridade WMS. '+esc(error.message)+'</div>';
+  }
+}
+
+async function openWmsReconciliation() {
+  const panel=$("addressInventoryPanel");
+  if(!panel || !["admin","supervisor"].includes(currentUser?.role)) return;
+  ++addressInventoryRequest;
+  panel.classList.remove("hidden");
+  panel.innerHTML='<div class="state-panel">Conferindo divergências no Supabase…</div>';
+  panel.scrollIntoView({behavior:"smooth",block:"start"});
+  try {
+    const data=await api("/api/positions/reconciliation?limit=500");
+    const rows=(data.items||[]).map(row=>{
+      const flags=[row.missing_card?"Card inexistente":"",row.missing_item?"Item inexistente":"",row.invalid_address?"Endereço inválido":""].filter(Boolean).join(" · ");
+      const unit=["ET","EC"].includes(row.setor)?" caixas":" volumes";
+      return '<tr><td><b>'+esc(row.address)+'</b><small>'+esc(row.setor)+'</small></td>'+
+        '<td>Card #'+Number(row.card_id)+' · item '+esc(row.item_id??"sem grade")+'</td>'+
+        '<td>'+Number(["ET","EC"].includes(row.setor)?row.box_count:row.quantidade).toLocaleString("pt-BR")+unit+'</td>'+
+        '<td><span class="badge orange">'+esc(flags)+'</span></td>'+
+        '<td>'+(currentUser.role==="admin"?'<button class="secondary small-btn" type="button" onclick="resolveEmptyWmsAllocation('+Number(row.allocation_id)+')">Confirmar posição vazia</button>':'<small>Consulta</small>')+'</td></tr>';
+    }).join("");
+    panel.innerHTML='<div class="wms-panel-head"><div><span class="address-map-eyebrow">WMS · AUDITORIA</span>'+
+      '<h3>Conferência de divergências</h3><p>'+Number(data.total).toLocaleString("pt-BR")+' alocações sem vínculo válido. A listagem mostra até 500.</p></div>'+
+      '<button class="secondary" type="button" onclick="closeAddressInventory()">Fechar ×</button></div>'+
+      '<div class="notice warn"><b>Não dê baixa automaticamente.</b> Primeiro confira o endereço físico. Se houver mercadoria, é necessário recuperar seu vínculo com um Card. A baixa só é permitida após confirmar que a posição está vazia.</div>'+
+      '<div class="table-wrap"><table class="compact-table"><thead><tr><th>Posição</th><th>Registro</th><th>Ocupação</th><th>Problema</th><th>Conferência física</th></tr></thead><tbody>'+
+      (rows||'<tr><td colspan="5">Nenhuma inconsistência encontrada.</td></tr>')+'</tbody></table></div>';
+  } catch(e) {panel.innerHTML='<div class="notice error">'+esc(e.message)+'</div>';}
+}
+
+async function resolveEmptyWmsAllocation(allocationId) {
+  if (currentUser?.role!=="admin") return;
+  if(!confirm("Você conferiu fisicamente esta posição e confirmou que a mercadoria NÃO está presente?\n\nA alocação será desativada, com histórico preservado."))return;
+  const reason=prompt("Registre o motivo, quem conferiu e a evidência física da posição vazia (mínimo 12 caracteres):");
+  if(!reason || reason.trim().length<12) {toast("Informe uma justificativa completa da conferência física.");return;}
+  try {
+    await api("/api/positions/reconciliation/"+allocationId+"/clear",{method:"POST",body:JSON.stringify({
+      physically_verified_empty:true,reason:reason.trim()
+    })});
+    toast("Divergência encerrada com histórico e conferência registrada.");
+    await renderAddressMap();
+    await openWmsReconciliation();
+  } catch(e){toast(e.message);}
 }
 
 async function renderCards(scope) {
