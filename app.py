@@ -1901,6 +1901,35 @@ def imports():
     return [dict(r) for r in rows]
 
 
+@app.get("/api/mission/live")
+def mission_operational_snapshot():
+    """Fotografia operacional viva sem inventar valores de produzido.
+
+    A planilha histórica mantém sua métrica semanal separada. Este endpoint
+    conta referências e peças pelo estágio atual dos itens vinculados a Cards.
+    """
+    con = db_connect()
+    try:
+        rows = con.execute("""
+            SELECT COALESCE(NULLIF(TRIM(i.source_stage),''),c.current_sector,'SEM_ETAPA') AS stage,
+                   COUNT(DISTINCT i.card_id) AS cards,
+                   COUNT(DISTINCT COALESCE(NULLIF(TRIM(i.reference),''),i.sku)) AS references_count,
+                   COALESCE(SUM(GREATEST(0,COALESCE(i.real_qty,i.expected_qty,0))),0) AS pieces
+            FROM items i JOIN cards c ON c.id=i.card_id
+            GROUP BY COALESCE(NULLIF(TRIM(i.source_stage),''),c.current_sector,'SEM_ETAPA')
+            ORDER BY pieces DESC,stage
+        """).fetchall()
+    finally:
+        con.close()
+    return {
+        "captured_at": datetime.now().astimezone().isoformat(),
+        "source": "Supabase — itens dos Cards por etapa atual",
+        "rows": [dict(row) for row in rows],
+        "produced_available": False,
+        "note": "Fotografia do saldo previsto/contado por estágio. Produção semanal exige apontamentos próprios; não é inferida dos Cards.",
+    }
+
+
 @app.get("/api/dashboard")
 def dashboard():
     con = db_connect()
