@@ -38,7 +38,8 @@ TABLES = {
     "stock_group_snapshots", "stock_report_imports", "timer_events", "unified_movements",
     "users", "quality_files", "cleaning_tasks", "cleaning_task_events",
     "processing_cadastro_tasks", "processing_cadastro_events", "processing_triages",
-    "processing_triage_events", "processing_triage_counts", "storage_entries", "storage_entry_items",
+    "processing_triage_events", "processing_triage_counts", "processing_intake_routes",
+    "storage_entries", "storage_entry_items", "storage_blind_checks", "labeling_final_checks",
 }
 
 IntegrityError = psycopg.errors.IntegrityError
