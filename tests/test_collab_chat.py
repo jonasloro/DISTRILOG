@@ -5,6 +5,7 @@ Uses TEST_DATABASE_URL from CI; never writes to the real DISTRILOG data.
 from __future__ import annotations
 
 import os
+from datetime import datetime
 
 import psycopg
 import pytest
@@ -49,6 +50,7 @@ def test_reading_messages_inserts_receipt_without_id_column(chat_db):
 
     messages = collab_module.chat_messages(user_id=2, channel="geral")
     assert [m["body"] for m in messages] == ["Bom dia", "Recebido"]
+    assert datetime.fromisoformat(messages[0]["created_at"]).utcoffset() is not None
     assert collab_module.chat_unread(2) == {}
 
     # Repeated reads of the same conversation must update, not duplicate PK.
