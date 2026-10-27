@@ -243,6 +243,15 @@ def allocate(card_id: int, payload: dict[str, Any], request: Request) -> dict[st
                 responsavel = str(actor["name"])
                 current_sector = str(card.get("current_sector") or "").upper()
                 card_status = str(card.get("status") or "").upper()
+                owner = {
+                    "RECEBIMENTO": "recebimento",
+                    "QUALIDADE": "qualidade",
+                    "PROCESSAMENTO": "processamento",
+                    "ETIQUETAGEM": "etiquetagem",
+                    "ESTOCAGEM": "estocagem",
+                }.get(current_sector)
+                if role not in {"admin", "supervisor"} and (not owner or role != owner):
+                    raise HTTPException(403, "Somente o setor atualmente responsável pelo Card pode alocar seu material.")
                 if current_sector == "FINALIZADO" or card_status == "FINALIZADO":
                     raise HTTPException(409,"Card finalizado não aceita novas alocações.")
                 if current_sector == "PROCESSAMENTO" and card_status == "AGUARDANDO_ENTRADA":
