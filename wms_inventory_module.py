@@ -48,6 +48,20 @@ def init_inventory_db() -> None:
                     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
                 )
             """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS distrilog.wms_reconciliation_actions (
+                    id BIGSERIAL PRIMARY KEY,
+                    allocation_id BIGINT NOT NULL,
+                    record_snapshot JSONB NOT NULL,
+                    action TEXT NOT NULL,
+                    reason TEXT NOT NULL,
+                    physically_verified BOOLEAN NOT NULL,
+                    actor_user_id BIGINT NOT NULL,
+                    actor_name TEXT NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+            """)
+            cur.execute("ALTER TABLE distrilog.wms_reconciliation_actions ENABLE ROW LEVEL SECURITY")
             cur.execute("ALTER TABLE distrilog.position_movements ENABLE ROW LEVEL SECURITY")
             cur.execute("""CREATE INDEX IF NOT EXISTS idx_wms_active_address
                 ON distrilog.card_allocations(address, setor, card_id)
@@ -271,6 +285,99 @@ def transfer(payload: TransferRequest, request: Request) -> dict[str, Any]:
         "source": origin, "destination": destination, "quantity": quantity,
         "box_count": box_count, "unit": unit, "replaced_allocation_ids": moved_ids,
     }
+
+
+class ClearOrphanRequest(BaseModel):
+    physically_verified_empty: bool
+    reason: str = Field(min_length=12, max_length=500)
+
+
+@router.get("/reconciliation")
+def reconciliation(request: Request, limit: int = 200) -> dict[str, Any]:
+    """Divergências do WMS, sem apagar ou alterar saldos automaticamente."""
+    if getattr(request.state, "auth_role", None) not in {"admin", "supervisor"}:
+        raise HTTPException(403, "Somente Gestão pode consultar inconsistências físicas.")
+    limit = max(1, min(int(limit), 1000))
+    with pg_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT a.id AS allocation_id,a.card_id,a.item_id,a.setor,a.address,
+                       a.quantidade,a.box_count,a.created_at,
+                       c.purchase_id,i.reference,i.color,i.size,
+                       (c.id IS NULL) AS missing_card,
+                       (a.item_id IS NOT NULL AND i.id IS NULL) AS missing_item,
+                       (p.address IS NULL) AS invalid_address
+                FROM distrilog.card_allocations a
+                LEFT JOIN distrilog.cards c ON c.id=a.card_id
+                LEFT JOIN distrilog.items i ON i.id=a.item_id
+                LEFT JOIN distrilog.sector_positions p ON p.address=a.address AND p.setor=a.setor
+                WHERE a.active IS TRUE
+                  AND (c.id IS NULL OR (a.item_id IS NOT NULL AND i.id IS NULL) OR p.address IS NULL)
+                ORDER BY a.setor,a.address,a.id LIMIT %s
+            """, (limit,))
+            rows = [dict(r) for r in cur.fetchall()]
+            cur.execute("""
+                SELECT COUNT(*) AS total FROM distrilog.card_allocations a
+                LEFT JOIN distrilog.cards c ON c.id=a.card_id
+                LEFT JOIN distrilog.items i ON i.id=a.item_id
+                LEFT JOIN distrilog.sector_positions p ON p.address=a.address AND p.setor=a.setor
+                WHERE a.active IS TRUE
+                  AND (c.id IS NULL OR (a.item_id IS NOT NULL AND i.id IS NULL) OR p.address IS NULL)
+            """)
+            total = int(cur.fetchone()["total"] or 0)
+    return {"total": total, "shown": len(rows), "items": rows}
+
+
+@router.post("/reconciliation/{allocation_id}/clear")
+def clear_confirmed_empty_orphan(allocation_id: int, payload: ClearOrphanRequest,
+                                request: Request) -> dict[str, Any]:
+    """Quarentena reversível de registro órfão após conferência física expressa.
+
+    Nunca elimina linhas: só deixa de contar um saldo comprovadamente inexistente,
+    preservando cópia JSON completa e justificativa de quem conferiu.
+    """
+    if getattr(request.state, "auth_role", None) != "admin":
+        raise HTTPException(403, "Somente administrador pode encerrar uma divergência.")
+    if not payload.physically_verified_empty:
+        raise HTTPException(400, "Confirme que o endereço foi conferido e que a mercadoria não está presente.")
+    with pg_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT a.*,c.id AS valid_card,i.id AS valid_item,p.address AS valid_address
+                FROM distrilog.card_allocations a
+                LEFT JOIN distrilog.cards c ON c.id=a.card_id
+                LEFT JOIN distrilog.items i ON i.id=a.item_id
+                LEFT JOIN distrilog.sector_positions p ON p.address=a.address AND p.setor=a.setor
+                WHERE a.id=%s AND a.active IS TRUE FOR UPDATE OF a
+            """, (allocation_id,))
+            source = cur.fetchone()
+            if not source:
+                raise HTTPException(409, "Alocação já alterada. Atualize a reconciliação.")
+            is_orphan = (
+                source["valid_card"] is None or
+                (source["item_id"] is not None and source["valid_item"] is None) or
+                source["valid_address"] is None
+            )
+            if not is_orphan:
+                raise HTTPException(409, "Esta alocação tem vínculos válidos e não pode ser baixada por reconciliação.")
+            actor = _actor(cur, request, str(source["setor"]), str(source["setor"]))
+            import json
+            snapshot = {k: v for k, v in dict(source).items()
+                        if k not in {"valid_card", "valid_item", "valid_address"}}
+            cur.execute("""
+                INSERT INTO distrilog.wms_reconciliation_actions
+                    (allocation_id,record_snapshot,action,reason,physically_verified,
+                     actor_user_id,actor_name)
+                VALUES(%s,%s::jsonb,'CONFIRMED_EMPTY_INACTIVATION',%s,TRUE,%s,%s)
+                RETURNING id
+            """, (allocation_id,json.dumps(snapshot,ensure_ascii=False,default=str),
+                  payload.reason.strip(),actor["id"],actor["name"]))
+            action_id = int(cur.fetchone()["id"])
+            cur.execute("UPDATE distrilog.card_allocations SET active=FALSE WHERE id=%s AND active IS TRUE", (allocation_id,))
+            if cur.rowcount != 1:
+                raise HTTPException(409, "Estoque alterado durante a conferência. Refaça a consulta.")
+        conn.commit()
+    return {"ok": True, "reconciliation_action_id": action_id, "allocation_id": allocation_id}
 
 
 def register_inventory_routes(app: FastAPI) -> None:
