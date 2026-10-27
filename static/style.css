@@ -1280,3 +1280,54 @@ input:disabled,select:disabled,textarea:disabled{
 
 /* Visão da Missão: usa a linguagem visual existente do DISTRILOG */
 .missao-header{display:flex;justify-content:space-between;align-items:end;gap:16px;flex-wrap:wrap;margin-bottom:18px}.missao-header h2{color:#f0f3f6;margin:0 0 5px;font-size:24px}.missao-header p,.missao-note{color:#9ba9b8;font-size:12px}.missao-header label{display:grid;gap:5px;color:#b4c0cc;font-size:11px}.missao-header select{background:#262a31;color:#fff;border:1px solid #454b53;border-radius:7px;padding:10px}.missao-kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:14px}.missao-kpi{background:linear-gradient(145deg,#262a31,#1e2126);border:1px solid #383f47;border-radius:9px;padding:17px;min-width:0}.missao-kpi span{display:block;color:#abb5c0;font-size:11px}.missao-kpi strong{display:block;color:#f4f7fa;font-size:27px;margin:9px 0 5px;overflow-wrap:anywhere}.missao-kpi small{color:#8fa1b2;font-size:11px}.missao-grid{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,.85fr);gap:14px}.missao-grid .panel{min-width:0}.missao-bar{margin-bottom:15px}.missao-bar>div{display:flex;justify-content:space-between;gap:10px;color:#d7e0e8;font-size:12px;margin-bottom:7px}.missao-bar>i{display:block;height:9px;background:#343b43;border-radius:6px;overflow:hidden}.missao-bar em{display:block;height:100%;background:#7ecf99;border-radius:6px}.missao-table{width:100%;border-collapse:collapse;color:#dce4ed;font-size:12px}.missao-table th,.missao-table td{padding:11px 7px;border-bottom:1px solid #373e47;text-align:right;white-space:nowrap}.missao-table th:first-child,.missao-table td:first-child{text-align:left}.missao-table th{color:#a9b7c5;font-size:10px}.missao-note{margin:16px 0;line-height:1.6}@media(max-width:1050px){.missao-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.missao-grid{grid-template-columns:1fr}}@media(max-width:550px){.missao-kpi{padding:12px}.missao-kpi strong{font-size:21px}}
+
+
+/* Central WMS: inspeção física e transferência no padrão grafite/verde. */
+.address-map-grid button.position-cell{cursor:pointer}
+.address-map-grid button.position-cell:hover{
+  transform:translateY(-1px);border-color:#78b887;
+  box-shadow:0 0 0 1px #427e52 inset;
+}
+.address-map-grid button.flat-casulo{
+  display:block;width:100%;text-align:left;cursor:pointer;
+  color:inherit;font:inherit;
+}
+.address-map-grid button.flat-casulo:hover{
+  border-color:#78b887;box-shadow:0 0 0 1px #427e52 inset;
+}
+.address-map-grid button:focus-visible{
+  outline:2px solid #9ad4a4;outline-offset:3px;
+}
+.wms-inventory-panel{
+  scroll-margin-top:24px;background:#191d22;
+  border:1px solid #384640;border-radius:14px;
+  padding:18px 20px;display:flex;flex-direction:column;gap:14px;
+  color:#e4ede7;min-width:0;
+}
+.wms-inventory-panel.hidden{display:none!important}
+.wms-panel-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.wms-panel-head h3{font-size:21px;color:#eff7f0;margin:5px 0}
+.wms-panel-head p{color:#a2ada7;margin:0}
+.wms-inventory-panel .table-wrap{overflow:auto}
+.wms-inventory-panel .compact-table{width:100%;min-width:600px}
+.wms-inventory-panel .compact-table td,
+.wms-inventory-panel .compact-table th{vertical-align:middle}
+.wms-inventory-panel small{display:block;color:#aeb8b0;margin-top:4px}
+.wms-alert{color:#e2bb6f!important}
+.wms-transfer-card{
+  border:1px solid #44614b;background:#1d2922;border-radius:10px;
+  padding:17px;display:grid;gap:12px;
+}
+.wms-transfer-card h4{margin:0;font-size:17px}
+.wms-transfer-card p{margin:0;color:#cbdad0}
+.wms-transfer-card .field{max-width:540px}
+.wms-anomaly-summary{
+  display:flex;align-items:center;flex-wrap:wrap;gap:12px;
+  border:1px solid #866b35!important;
+}
+.wms-anomaly-summary span{flex:1;min-width:200px}
+@media(max-width:700px){
+ .wms-inventory-panel{padding:12px}
+ .wms-panel-head{flex-direction:column}
+ .wms-inventory-panel .compact-table{min-width:500px}
+}
