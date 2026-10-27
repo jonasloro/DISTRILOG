@@ -380,7 +380,7 @@ async def complete(operation_id: int, request: Request):
         if matched!=len(item_ids): con.close(); raise HTTPException(409,"Conclua a conferência cega da Estocagem antes de finalizar.")
     unfinished = con.execute("SELECT COUNT(*) FROM downstream_assignments WHERE operation_id=? AND timer_state!='FINALIZADA'", (operation_id,)).fetchone()[0]
     if unfinished: con.close(); raise HTTPException(400,"Finalize o cronômetro de todas as atribuições antes de concluir o setor.")
-    nxt="ESTOCAGEM" if op["sector"]=="ETIQUETAGEM" else "ESTOCAGEM"; status="AGUARDANDO_ESTOCAGEM" if op["sector"]=="ETIQUETAGEM" else "FINALIZADO"
+    nxt="ESTOCAGEM" if op["sector"]=="ETIQUETAGEM" else "PROCESSAMENTO"; status="AGUARDANDO_ESTOCAGEM" if op["sector"]=="ETIQUETAGEM" else "AGUARDANDO_ENTRADA"
     con.execute("UPDATE downstream_operations SET status='CONCLUIDO',completed_at=?,completed_by=? WHERE id=?",(now(),uid,operation_id))
     if op["source_subset"]:
         item_ids = [row["item_id"] for row in con.execute(
