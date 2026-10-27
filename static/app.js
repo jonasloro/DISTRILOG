@@ -2441,15 +2441,38 @@ function analyticsBarsBody(rows){const max=Math.max(1,...rows.map(r=>Number(r.va
 
 async function renderDashboard() {
   setPage("Central de Operações", "");
-  const [data,quality,processing,returns,stockReport] = await Promise.all([
-    safeApi("/api/dashboard",{totals:{receiving:0,quality:0,processing:0,storage:0},recent:[],status_counts:[]}), safeApi("/api/cards?scope=quality",[]), safeApi("/api/cards?scope=processing",[]), safeApi("/api/unified/returns",[]), safeApi("/api/unified/stock-group-report/analytics",{groups:[],latest_report:null})
-  ]);
-  const active=[...processing,...data.recent.filter(c=>["QUALIDADE","PROCESSAMENTO","ETIQUETAGEM"].includes(c.current_sector))].filter((c,i,a)=>a.findIndex(x=>x.id===c.id)===i).slice(0,5);
-  const groups=(stockReport.groups||[]).slice(0,6).map(g=>({label:g.group_name,value:Number(g.quantity||0),hint:g.gender}));
-  $("mainContent").innerHTML=`<div class="reference-dashboard"><div class="hero-kpis">${heroKpi("Aguardando recebimento",data.totals.receiving,"Pedidos","▣","blue","receiving")}${heroKpi("Em qualidade",data.totals.quality,"Pedidos","◇","teal","quality")}${heroKpi("Em processamento",data.totals.processing,"Pedidos","⚙","blue","processing")}${heroKpi("Aguardando estocagem",data.totals.storage,"Cards","⌂","teal","storage")}</div>
-  <div class="dash-row dash-row-main">${dashboardPanel("⌁","Produção ativa",`<span class="live-indicator">◷ ${new Date().toLocaleTimeString('pt-BR')}</span>`,compactProductionTable(active))}${dashboardPanel("⇩","Aguardando recebimento",`<span class="panel-count">${data.totals.receiving}</span>`,awaitingTable([],data.recent))}${dashboardPanel("▣","Estoque por grupo",`<span class="online-pill">${stockReport.latest_report?esc(stockReport.latest_report.filename):"Sem relatório"}</span>`,analyticsBarsBody(groups))}</div>
-  <div class="dash-row dash-row-secondary">${dashboardPanel("◇","Qualidade",`<span class="panel-count">${quality.length}</span>`,qualityTable(quality.slice(0,5)))}${dashboardPanel("⚙","Processamento",`<span class="panel-count">${processing.length}</span>`,processingTable(processing.slice(0,5)))}${dashboardPanel("↩","Devoluções",`<span class="panel-count red-count">${returns.filter(r=>r.status!=="CONCLUIDA").length}</span>`,returnsTable(returns.slice(0,5)))}</div>
-  <div class="flow-strip">${[["🛒","Compras","import"],["⇩","Recebimento","receiving"],["◇","Qualidade","quality"],["⚙","Processamento","processing"],["♢","Etiquetagem","labeling"],["⌂","Estocagem","storage-hub"],["▣","Expedição / Devolução","returns-hub"]].map(([icon,label,view],i)=>`${i?'<i>→</i>':''}<button onclick="goTo('${view}')"><b>${icon}</b><span>${label}</span>${i===1?'<small>+ 10%</small>':''}</button>`).join("")}</div></div>`;
+  $("mainContent").innerHTML='<div class="state-panel"><b>Carregando Central de Operações…</b><span>Consultando os módulos operacionais.</span></div>';
+  try {
+    const results=await Promise.all([
+      safeApi("/api/dashboard",null),
+      safeApi("/api/cards?scope=quality",[]),
+      safeApi("/api/cards?scope=processing",[]),
+      safeApi("/api/unified/returns",[]),
+      safeApi("/api/unified/stock-group-report/analytics",null)
+    ]);
+    const rawData=results[0], rawQuality=results[1], rawProcessing=results[2], rawReturns=results[3], rawStock=results[4];
+    const data=(rawData&&typeof rawData==="object"&&!Array.isArray(rawData))?rawData:{};
+    const totals=(data.totals&&typeof data.totals==="object")?data.totals:{};
+    const recent=Array.isArray(data.recent)?data.recent:[];
+    const quality=Array.isArray(rawQuality)?rawQuality:[];
+    const processing=Array.isArray(rawProcessing)?rawProcessing:[];
+    const returns=Array.isArray(rawReturns)?rawReturns:[];
+    const stockReport=(rawStock&&typeof rawStock==="object"&&!Array.isArray(rawStock))?rawStock:{groups:[],latest_report:null};
+    const active=[...processing,...recent.filter(c=>["QUALIDADE","PROCESSAMENTO","ETIQUETAGEM","ESTOCAGEM"].includes(String(c?.current_sector||"").toUpperCase()))]
+      .filter((card,index,all)=>card&&card.id!=null&&all.findIndex(x=>x&&x.id===card.id)===index).slice(0,5);
+    const groups=(Array.isArray(stockReport.groups)?stockReport.groups:[]).slice(0,6).map(g=>({label:g?.group_name||"Sem grupo",value:Number(g?.quantity||0),hint:g?.gender||""}));
+    const dashboardData={totals:{
+      receiving:Number(totals.receiving||0),quality:Number(totals.quality||0),
+      processing:Number(totals.processing||0),storage:Number(totals.storage||0)
+    },recent};
+    $("mainContent").innerHTML=`<div class="reference-dashboard"><div class="hero-kpis">${heroKpi("Aguardando recebimento",dashboardData.totals.receiving,"Pedidos","▣","blue","receiving")}${heroKpi("Em qualidade",dashboardData.totals.quality,"Pedidos","◇","teal","quality")}${heroKpi("Em processamento",dashboardData.totals.processing,"Pedidos","⚙","blue","processing")}${heroKpi("Aguardando estocagem",dashboardData.totals.storage,"Cards","⌂","teal","storage")}</div>
+    <div class="dash-row dash-row-main">${dashboardPanel("⌁","Produção ativa",`<span class="live-indicator">◷ ${new Date().toLocaleTimeString('pt-BR')}</span>`,compactProductionTable(active))}${dashboardPanel("⇩","Aguardando recebimento",`<span class="panel-count">${dashboardData.totals.receiving}</span>`,awaitingTable([],recent))}${dashboardPanel("▣","Estoque por grupo",`<span class="online-pill">${stockReport.latest_report?esc(stockReport.latest_report.filename||"Relatório"):"Sem relatório"}</span>`,analyticsBarsBody(groups))}</div>
+    <div class="dash-row dash-row-secondary">${dashboardPanel("◇","Qualidade",`<span class="panel-count">${quality.length}</span>`,qualityTable(quality.slice(0,5)))}${dashboardPanel("⚙","Processamento",`<span class="panel-count">${processing.length}</span>`,processingTable(processing.slice(0,5)))}${dashboardPanel("↩","Devoluções",`<span class="panel-count red-count">${returns.filter(r=>r&&r.status!=="CONCLUIDA").length}</span>`,returnsTable(returns.slice(0,5)))}</div>
+    <div class="flow-strip">${[["🛒","Compras","import"],["⇩","Recebimento","receiving"],["◇","Qualidade","quality"],["⚙","Processamento","processing"],["♢","Etiquetagem","labeling"],["⌂","Estocagem","storage-hub"],["▣","Expedição / Devolução","returns-hub"]].map(([icon,label,view],i)=>`${i?'<i>→</i>':''}<button onclick="goTo('${view}')"><b>${icon}</b><span>${label}</span>${i===1?'<small>+ 10%</small>':''}</button>`).join("")}</div></div>`;
+  } catch(error) {
+    console.error("Falha ao renderizar Central de Operações",error);
+    $("mainContent").innerHTML='<div class="state-panel error-state"><b>Não foi possível carregar a Central de Operações.</b><span>'+esc(error?.message||"Erro inesperado ao montar o painel.")+'</span><button class="secondary" onclick="renderDashboard()">Tentar novamente</button></div>';
+  }
 }
 
 
