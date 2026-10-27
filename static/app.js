@@ -99,7 +99,6 @@ async function doLogin() {
       $("passwordChangeScreen").classList.remove("hidden");
       return;
     }
-    localStorage.setItem("cl_recebimento_user", JSON.stringify(currentUser));
     enterApp();
   } catch (error) {
     $("loginError").textContent = error.message;
@@ -113,11 +112,12 @@ async function submitFirstPasswordChange(){
     await api("/api/auth/change-password",{method:"POST",body:JSON.stringify({
       username:currentUser.username,current_password:$("loginPassword").value,new_password:next
     })});
-    currentUser.must_change_password=false;
-    localStorage.setItem("cl_recebimento_user",JSON.stringify(currentUser));
-    $("loginPassword").value="";$("newLoginPassword").value="";$("confirmLoginPassword").value="";
+    $("newLoginPassword").value="";$("confirmLoginPassword").value="";
     $("passwordChangeScreen").classList.add("hidden");
-    enterApp();
+    $("loginScreen").classList.remove("hidden");
+    $("loginError").textContent="Senha alterada. Entre novamente para iniciar uma sessão segura.";
+    $("loginPassword").value="";
+    currentUser=null;
   }catch(e){$("passwordChangeError").textContent=e.message;}
 }
 function cancelFirstPasswordChange(){localStorage.removeItem("cl_recebimento_user");location.reload();}
@@ -134,9 +134,8 @@ function enterApp() {
   goTo("dashboard");
 }
 
-function logout() {
-  localStorage.removeItem("cl_recebimento_user");
-  location.reload();
+async function logout() {
+  try { await api("/api/auth/logout",{method:"POST"}); } finally { localStorage.removeItem("cl_recebimento_user"); location.reload(); }
 }
 
 function setPage(title, subtitle) {
