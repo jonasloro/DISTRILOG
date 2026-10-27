@@ -2796,5 +2796,18 @@ def global_history(limit: int = 300):
 
 
 @app.get("/health")
-def health() -> dict[str, str]:
-    return {"status": "ok", "mode": "operacional", "database": "sqlite-with-optional-supabase"}
+def health():
+    """Render readiness: só responde 200 se o PostgreSQL estiver acessível."""
+    try:
+        con = db_connect()
+        try:
+            result = con.execute("SELECT 1 AS ok").fetchone()
+            if not result or int(result["ok"]) != 1:
+                raise RuntimeError("Banco operacional sem resposta.")
+        finally:
+            con.close()
+    except Exception:
+        import logging
+        logging.exception("Health check: PostgreSQL indisponível")
+        return JSONResponse({"status": "degraded", "database": "unavailable"}, status_code=503)
+    return {"status": "ok", "database": "supabase-postgresql"}
