@@ -5,6 +5,7 @@ const fs=require('node:fs');
 const vm=require('node:vm');
 const path=require('node:path');
 
+const localeJS=fs.readFileSync(path.join(__dirname,'..','static','i18n.js'),'utf8');
 const weeklyJS=fs.readFileSync(
   path.join(__dirname,'..','static','mission_weekly.js'),'utf8'
 );
@@ -39,6 +40,7 @@ async function render(data){
     setMissionMode:()=>{},
     console,
   });
+  vm.runInContext(localeJS,ctx);
   vm.runInContext(weeklyJS+'\nmissionWeeklyMonth="2026-11";',ctx);
   await vm.runInContext('showMissionWeekly()',ctx);
   return els.missionBody.innerHTML;
@@ -89,6 +91,7 @@ test('October is never requested as an automatic period; navigation stops at Nov
     setMissionMode:()=>{},
     console,
   });
+  vm.runInContext(localeJS,ctx);
   vm.runInContext(weeklyJS+'\nmissionWeeklyMonth="2026-10";',ctx);
   await vm.runInContext('showMissionWeekly()',ctx);
   assert.deepEqual(requested,['/api/mission/weekly?month=2026-11']);
