@@ -1,4 +1,4 @@
-let currentUser = JSON.parse(localStorage.getItem("cl_recebimento_user") || "null");
+let currentUser = null;
 let currentView = "dashboard";
 let currentCardId = null;
 let cardData = null;
@@ -2844,7 +2844,7 @@ async function createOperatorLogin(){
 async function renderSettings(){setPage("Configurações","");$("mainContent").innerHTML=`<div class="settings-grid"><button onclick="goTo('import')"><b>⇧</b><strong>Importar compras</strong><span>Atualizar Cards a partir do relatório Excel.</span></button><button onclick="goTo('tasks')"><b>☑</b><strong>Quadro de tarefas</strong><span>Responsáveis, prioridades e andamento.</span></button><button onclick="goTo('test')"><b>⚙</b><strong>Administração e testes</strong><span>Ferramentas controladas para validação.</span></button><button onclick="goTo('history')"><b>◷</b><strong>Histórico global</strong><span>Rastreabilidade das movimentações.</span></button></div><div class="state-panel"><b>DistriLog V3</b><span>Uma interface, um backend e uma base SQLite. As regras congeladas de Recebimento, Qualidade e Processamento permanecem no motor operacional.</span></div>`;}
 
 setInterval(() => { if ($("clock")) $("clock").textContent = new Date().toLocaleString("pt-BR"); }, 1000);
-if (currentUser) enterApp();
+// Exige autenticação novamente após recarregar a página.
 
 /* V10 — endereçamento por referência + mapa visual */
 function allocationItemRows(){
