@@ -2248,7 +2248,8 @@ async function renderDownstreamTab(sector) {
       ${cardData.purchase_mode==="GRADE"?"Cada colaborador assume um tamanho completo por vez.":"Saldo é dividido por quantidade geral, sem separar tamanhos."}
       ${importedItems.length?`<br><b>${importedItems.length}</b> item(ns) disponível(is) nesta etapa; os demais itens da compra não serão alterados.`:""}</div>
       ${allowed?`<div class="actions">${sector==="ETIQUETAGEM"?'<div class="field"><label>Tipo de etiquetagem</label><select id="labelingType"><option value="">Selecione</option><option value="APENAS_BRANCA">Apenas branca</option><option value="APENAS_VERMELHA">Apenas vermelha</option><option value="TAG_BRANCA">Tag + branca</option><option value="BRANCA_VERMELHA">Branca + vermelha</option></select></div>':""}<button class="primary" onclick="startDownstream('${sector}')">Iniciar controle</button></div>`:'<div class="notice warn">Entre com um perfil deste setor, Supervisor ou Administrador para iniciar.</div>'}
-      <div class="notice"><b>Endereçamento no fechamento</b><br>A posição física será escolhida somente ao concluir esta etapa.</div></div>`;\n    return;
+      <div class="notice"><b>Endereçamento no fechamento</b><br>A posição física será escolhida somente ao concluir esta etapa.</div></div>`;
+    return;
   }
   const grade=op.purchase_mode==="GRADE",open=op.status==="ABERTO";
   $("cardTab").innerHTML=`<div class="panel-body downstream-panel">
