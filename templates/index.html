@@ -67,6 +67,8 @@
       </nav>
       <div class="sidebar-footer">
         <div id="currentUser"></div>
+        <label for="userLanguage" style="display:block;margin:8px 0 4px;font-size:12px">Idioma / Idioma</label>
+        <select id="userLanguage" aria-label="Idioma da interface" onchange="changeUserLanguage(this.value)" style="width:100%;margin-bottom:8px"><option value="pt-BR">Português</option><option value="es">Español</option></select>
         <button onclick="logout()">Sair</button>
       </div>
     </aside>
