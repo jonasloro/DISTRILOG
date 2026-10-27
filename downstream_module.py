@@ -146,7 +146,7 @@ def downstream_card_data(con: "db.Connection", card_id: int, sector: str) -> dic
        COALESCE(i.real_qty,NULLIF((SELECT piq.processed_qty FROM processing_item_quantities piq
          JOIN processing_records pr ON pr.id=piq.processing_id WHERE pr.card_id=i.card_id AND piq.item_id=i.id
          ORDER BY pr.id DESC LIMIT 1),0),i.expected_qty) expected_qty,
-       COALESCE((SELECT SUM(a.assigned_qty) FROM downstream_assignments a WHERE a.operation_id=? AND a.item_id=i.id),0) assigned_qty,
+       COALESCE((SELECT SUM(CASE WHEN a.status='LIBERADA' THEN a.completed_qty ELSE a.assigned_qty END) FROM downstream_assignments a WHERE a.operation_id=? AND a.item_id=i.id),0) assigned_qty,
        COALESCE((SELECT SUM(a.completed_qty) FROM downstream_assignments a WHERE a.operation_id=? AND a.item_id=i.id),0) completed_qty
       FROM items i WHERE i.card_id=? {subset_filter}
       ORDER BY i.product,i.color,i.size,i.id""", item_params).fetchall()]
@@ -156,7 +156,7 @@ def downstream_card_data(con: "db.Connection", card_id: int, sector: str) -> dic
       LEFT JOIN items i ON i.id=a.item_id WHERE a.operation_id=? ORDER BY a.id DESC""", (op["id"],)).fetchall():
         data = dict(row); data["elapsed_seconds"] = elapsed(row); assignments.append(data)
     expected = sum(int(i["expected_qty"] or 0) for i in items)
-    assigned = sum(int(a["assigned_qty"] or 0) for a in assignments)
+    assigned = sum(int(a["completed_qty"] if a["status"]=="LIBERADA" else a["assigned_qty"] or 0) for a in assignments)
     completed = sum(int(a["completed_qty"] or 0) for a in assignments)
     result = dict(op)
     result.update({"items": items, "assignments": assignments,
@@ -230,7 +230,7 @@ async def claim(operation_id: int, request: Request):
         ).fetchone():
             con.close(); raise HTTPException(400, "Este tamanho não está disponível nesta etapa.")
         duplicate = con.execute("SELECT 1 FROM downstream_assignments WHERE operation_id=? AND item_id=? AND status!='LIBERADA'", (operation_id,item_id)).fetchone()
-        if duplicate: con.close(); raise HTTPException(409, "Este tamanho já foi assumido.")
+        if duplicate: con.close(); raise HTTPException(409, "Este tamanho já está em execução.")
         processed = con.execute("""SELECT piq.processed_qty FROM processing_item_quantities piq
           JOIN processing_records pr ON pr.id=piq.processing_id WHERE pr.card_id=? AND piq.item_id=?
           ORDER BY pr.id DESC LIMIT 1""", (op["card_id"], item_id)).fetchone()
@@ -239,8 +239,11 @@ async def claim(operation_id: int, request: Request):
         else:
             expected = int(processed["processed_qty"] or 0) if processed else 0
             if expected <= 0: expected = int(item["expected_qty"] or 0)
-        if op["sector"]=="ESTOCAGEM": qty=expected
-        if qty != expected: con.close(); raise HTTPException(400, f"Grade é assumida por tamanho completo ({expected} peças).")
+        consumed = int(con.execute("""SELECT COALESCE(SUM(CASE WHEN status='LIBERADA' THEN completed_qty ELSE assigned_qty END),0) n
+          FROM downstream_assignments WHERE operation_id=? AND item_id=?""",(operation_id,item_id)).fetchone()["n"] or 0)
+        remaining=max(0,expected-consumed)
+        if remaining<=0: con.close(); raise HTTPException(409,"Este tamanho já foi totalmente executado.")
+        qty=remaining
     else:
         item_id = None
         expected = sum(int(r[0] or 0) for r in con.execute("SELECT COALESCE(real_qty,expected_qty,0) FROM items WHERE card_id=?", (op["card_id"],)))
@@ -251,6 +254,36 @@ async def claim(operation_id: int, request: Request):
     cur = con.execute("INSERT INTO downstream_assignments(operation_id,item_id,worker_user_id,assigned_qty,created_at) VALUES(?,?,?,?,?)", (operation_id,item_id,worker_id,qty,now()))
     history(con, op["card_id"], f"{op['sector']}_ASSUMIDA", f"{actor['name']} atribuiu {qty} peça(s) a {con.execute('SELECT name FROM users WHERE id=?',(worker_id,)).fetchone()[0]}.", uid)
     con.commit(); aid=cur.lastrowid; con.close(); return {"id":aid}
+
+
+@router.post("/downstream/assignments/{assignment_id}/partial")
+async def partial_assignment(assignment_id: int, request: Request):
+    p=await request.json(); uid=int(p.get("user_id") or 0)
+    try: qty=int(p.get("completed_qty"))
+    except (TypeError,ValueError): raise HTTPException(400,"Informe quanto foi executado.") from None
+    con=db_connect(); con.execute("BEGIN")
+    try:
+        row=con.execute("""SELECT a.*,o.sector,o.card_id FROM downstream_assignments a
+          JOIN downstream_operations o ON o.id=a.operation_id WHERE a.id=?""",(assignment_id,)).fetchone()
+        if not row: raise HTTPException(404,"Atribuição não encontrada.")
+        actor=user(con,uid,row["sector"])
+        if actor["role"]==row["sector"].lower() and int(row["worker_user_id"])!=uid:
+            raise HTTPException(403,"Você altera somente o seu próprio apontamento.")
+        if row["status"]=="LIBERADA": raise HTTPException(409,"Esta atribuição já foi liberada.")
+        assigned=int(row["assigned_qty"] or 0)
+        if qty<0 or qty>=assigned:
+            raise HTTPException(400,"Informe uma quantidade menor que a assumida. Para concluir tudo, use Finalizar.")
+        stamp=now(); accum=int(row["accumulated_seconds"] or 0)
+        if row["timer_state"]=="EM_ANDAMENTO" and row["timer_started_at"]:
+            accum += max(0,int((datetime.now()-datetime.fromisoformat(row["timer_started_at"])).total_seconds()))
+        con.execute("""UPDATE downstream_assignments SET completed_qty=?,status='LIBERADA',timer_state='FINALIZADA',
+          timer_started_at=NULL,accumulated_seconds=?,completed_at=? WHERE id=?""",(qty,accum,stamp,assignment_id))
+        remaining=max(0,assigned-qty)
+        history(con,int(row["card_id"]),f"{row['sector']}_PARCIAL",
+                f"{actor['name']} informou que não terminou tudo: executou {qty} peça(s) e devolveu {remaining} peça(s) ao saldo da grade.",uid)
+        con.commit(); return {"ok":True,"completed_qty":qty,"returned_qty":remaining}
+    finally:
+        con.close()
 
 
 @router.post("/downstream/assignments/{assignment_id}/timer/{action}")
