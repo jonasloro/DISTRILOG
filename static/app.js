@@ -346,7 +346,7 @@ function renderAddressMapContent() {
         '<div class="field"><label for="addressMapSearch">Buscar endereço</label><input id="addressMapSearch" type="search" value="' + esc(state.search) + '" placeholder="Ex.: 1RM06A" oninput="filterAddressMap()"></div>' +
       '</div>' +
       '<div class="address-map-legend"><span><i class="address-map-dot is-free"></i>Livre</span><span><i class="address-map-dot is-occupied"></i>Ocupada</span><small>Os números nas posições representam unidades atualmente alocadas.</small></div>' +
-      '<div id="addressMapGrid" class="address-map-grid"></div>' +
+      '<div id="addressMapGrid" class="address-map-grid"></div><section id="addressInventoryPanel" class="wms-inventory-panel hidden" aria-live="polite"></section>' +
     '</section>';
   renderAddressMapGrid();
 }
@@ -413,16 +413,16 @@ function renderAddressMapGrid() {
             const p=rows[0],boxes=Math.max(0,Number(p?.ocupado||0)),colors=String(p?.colors||"").split(",").map(x=>x.trim()).filter(Boolean),used=Math.min(4,Number(p?.color_count||colors.length||0));
             const slots=Array.from({length:4},(_,idx)=>'<span class="position-color-slot '+(idx<used?'filled':'')+'">'+(colors[idx]?esc(colors[idx]):(idx<used?'Ocupada':'Livre'))+'</span>').join("");
             const title=(p?.address||casulo)+' • '+used+'/4 cores • '+boxes+' caixas pretas';
-            return '<div class="position-casulo flat-casulo" title="'+esc(title)+'"><div class="position-casulo-head"><span>CASULO</span><b>'+esc(p?.address||casulo)+'</b></div><div class="position-color-slots">'+slots+'</div><div class="position-flat-summary"><b>'+used+'/4 cores</b><span>'+boxes.toLocaleString("pt-BR")+' caixas pretas</span></div></div>';
+            return '<button type="button" class="position-casulo flat-casulo" data-address="'+esc(p?.address||casulo)+'" onclick="openAddressInventory(this.dataset.address)" title="'+esc(title)+'"><div class="position-casulo-head"><span>CASULO</span><b>'+esc(p?.address||casulo)+'</b></div><div class="position-color-slots">'+slots+'</div><div class="position-flat-summary"><b>'+used+'/4 cores</b><span>'+boxes.toLocaleString("pt-BR")+' caixas pretas</span></div></button>';
           }
           return '<div class="position-casulo"><div class="position-casulo-head"><span>CASULO</span><b>' + esc(casulo) + '</b></div><div class="position-levels">' +
             rows.sort((a, b) => String(a.nivel).localeCompare(String(b.nivel))).map((p) => {
               const quantity = Math.max(0, Number(p.ocupado || 0));
               const statusClassName = quantity > 0 ? "is-occupied" : "is-free";
               const title = p.address + " • " + (quantity > 0 ? quantity.toLocaleString("pt-BR") + " unidade(s) alocada(s)" : "Livre");
-              return '<div class="position-cell ' + statusClassName + '" title="' + esc(title) + '" aria-label="' + esc(title) + '">' +
+              return '<button type="button" class="position-cell ' + statusClassName + '" data-address="' + esc(p.address) + '" onclick="openAddressInventory(this.dataset.address)" title="' + esc(title) + '" aria-label="' + esc(title) + '">' +
                 '<span class="position-level">' + esc(p.nivel) + '</span><strong>' + esc(p.address) + '</strong>' +
-                '<small>' + (quantity > 0 ? quantity.toLocaleString("pt-BR") + ' alocado(s)' : 'Livre') + '</small></div>';
+                '<small>' + (quantity > 0 ? quantity.toLocaleString("pt-BR") + ' alocado(s)' : 'Livre') + '</small></button>';
             }).join("") + '</div></div>';
         }).join("");
       return '<section class="position-zone"><div class="position-zone-head"><div><b>' + esc(zoneLabel) + '</b><span>' + casulos.size + ' casulo(s) visível(is)</span></div><small>' + visibleCount + ' posições</small></div><div class="position-casulo-grid address-map-casulos">' + casuloHtml + '</div></section>';
@@ -435,6 +435,102 @@ function renderAddressMapGrid() {
   if ($("addressMapFree")) $("addressMapFree").textContent = free.toLocaleString("pt-BR");
   if ($("addressMapOccupied")) $("addressMapOccupied").textContent = occupied.toLocaleString("pt-BR");
   if ($("addressMapAllocated")) $("addressMapAllocated").textContent = allocated.toLocaleString("pt-BR");
+}
+
+// Consulta de conteúdo e transferência independente de conclusão de card.
+// O servidor continua sendo a autoridade sobre saldos, atores e limites físicos.
+let addressInventoryRequest = 0;
+async function openAddressInventory(address) {
+  const panel = $("addressInventoryPanel");
+  if (!panel || currentView !== "address-map") return;
+  const req = ++addressInventoryRequest;
+  panel.classList.remove("hidden");
+  panel.innerHTML = '<div class="state-panel">Consultando conteúdo de ' + esc(address) + '…</div>';
+  panel.scrollIntoView({behavior:"smooth",block:"start"});
+  try {
+    const [data,movements] = await Promise.all([
+      api("/api/positions/" + encodeURIComponent(address) + "/inventory"),
+      api("/api/positions/movements?address=" + encodeURIComponent(address) + "&limit=30"),
+    ]);
+    if (req !== addressInventoryRequest || currentView !== "address-map") return;
+    window.addressInventoryData = data;
+    const rows = data.items || [];
+    const total = rows.reduce((sum,r)=>sum+Number(data.unit==="CAIXA_PRETA"?r.box_count:r.quantidade),0);
+    const unit = data.unit==="CAIXA_PRETA" ? "caixas pretas" : "volumes";
+    const bad = rows.filter(r=>r.missing_card||r.missing_item);
+    const table = rows.map((r,i)=>{
+      const details = [r.product,r.reference||r.sku,r.color,r.size].filter(Boolean).map(esc).join(" · ") || (r.item_id ? "Item indisponível" : "Volumes sem grade vinculada");
+      const broken = r.missing_card || r.missing_item;
+      const rowUnit = data.unit==="CAIXA_PRETA" ? (Number(r.box_count||0)+" caixas / "+Number(r.quantidade||0)+" peças") : (Number(r.quantidade||0)+" volumes");
+      return '<tr><td><b>'+esc(r.purchase_id||("Card #"+r.card_id))+'</b><small>'+esc(r.brand||r.supplier||"")+'</small></td>'+
+        '<td>'+details+(broken?'<small class="wms-alert">Registro sem Card ou item correspondente</small>':'')+'</td>'+
+        '<td><b>'+esc(rowUnit)+'</b></td><td>'+
+        (broken?'<span class="badge orange">Reconciliar</span>':'<button class="secondary small-btn" type="button" onclick="chooseAddressTransfer('+i+')">Transferir</button>')+
+        '</td></tr>';
+    }).join("");
+    const hist = (movements||[]).map(m=>'<tr><td>'+esc(new Date(m.created_at).toLocaleString("pt-BR"))+'</td><td>'+esc(m.source_address)+' → '+esc(m.destination_address)+'</td><td>'+esc(m.box_count>0?m.box_count+" caixas":m.quantity+" volumes")+'</td><td>'+esc(m.actor_name||"")+'</td><td>'+esc(m.reason||"")+'</td></tr>').join("");
+    panel.innerHTML = '<div class="wms-panel-head"><div><span class="address-map-eyebrow">WMS · CONTEÚDO REAL</span><h3>'+esc(address)+'</h3><p>'+total.toLocaleString("pt-BR")+' '+unit+' · '+rows.length+' registros de alocação</p></div>'+
+      '<button class="secondary" type="button" onclick="closeAddressInventory()">Fechar ×</button></div>'+
+      (bad.length?'<div class="notice warn"><b>Atenção:</b> '+bad.length+' registro(s) legado(s) não possuem Card ou item válido. Não é seguro movimentá-los antes da reconciliação.</div>':'')+
+      '<div class="table-wrap"><table class="compact-table"><thead><tr><th>Card / compra</th><th>Referência · cor · tamanho</th><th>Saldo físico</th><th>Ação</th></tr></thead><tbody>'+
+      (table||'<tr><td colspan="4">Endereço sem alocações ativas.</td></tr>')+'</tbody></table></div>'+
+      '<div id="addressTransferForm"></div>'+
+      '<h4 class="section-heading">Histórico de transferências</h4><div class="table-wrap"><table class="compact-table"><thead><tr><th>Quando</th><th>Origem → destino</th><th>Quantidade</th><th>Operador</th><th>Motivo</th></tr></thead><tbody>'+
+      (hist||'<tr><td colspan="5">Nenhuma transferência registrada ainda.</td></tr>')+'</tbody></table></div>';
+  } catch (error) {
+    if (req === addressInventoryRequest) panel.innerHTML='<div class="notice error">'+esc(error.message||"Falha ao consultar posição.")+' <button class="secondary" type="button" onclick="closeAddressInventory()">Fechar</button></div>';
+  }
+}
+
+function closeAddressInventory() {
+  ++addressInventoryRequest;
+  $("addressInventoryPanel")?.classList.add("hidden");
+  window.addressInventoryData = null;
+}
+
+function chooseAddressTransfer(index) {
+  const data = window.addressInventoryData;
+  const item = data?.items?.[index], box=$("addressTransferForm");
+  if (!box || !item || item.missing_card || item.missing_item) return;
+  const from = data.location.setor;
+  const isBox = ["ET","EC"].includes(from);
+  const sectors = isBox?[from]:["RM","QA","PR"];
+  const state = window.addressMapState?.bySector || {};
+  const destinations = sectors.flatMap(sector=>(state[sector]||[]).map(p=>({address:p.address,sector,occupied:Number(p.ocupado||0)})))
+    .filter(p=>p.address !== data.location.address)
+    .sort((a,b)=>a.address.localeCompare(b.address,"pt-BR",{numeric:true}));
+  window.pendingWmsTransfer = item;
+  box.innerHTML = '<div class="wms-transfer-card"><h4>Transferir material</h4><p>Origem <b>'+esc(data.location.address)+'</b> · '+esc(item.reference||item.purchase_id||"Card "+item.card_id)+'</p>'+
+    (isBox?'<div class="notice">ET/EC: a transferência movimenta todas as caixas e tamanhos desta cor juntos. Não permite transferência parcial.</div>':
+      '<div class="field"><label>Volumes a transferir</label><input id="wmsTransferQty" type="number" min="1" max="'+Number(item.quantidade)+'" value="'+Number(item.quantidade)+'" step="1"></div>')+
+    '<div class="field"><label>Endereço de destino</label><select id="wmsTransferDestination"><option value="">Escolha o destino</option>'+
+    destinations.map(p=>'<option value="'+esc(p.address)+'">'+esc(p.address)+' · '+Number(p.occupied).toLocaleString("pt-BR")+' ocupados</option>').join("")+'</select></div>'+
+    '<div class="field"><label>Motivo da transferência</label><input id="wmsTransferReason" maxlength="500" placeholder="Ex.: reorganização de casulos"></div>'+
+    '<div class="actions"><button class="primary" type="button" onclick="submitAddressTransfer()">Confirmar transferência</button>'+
+    '<button class="ghost" type="button" onclick="$(\'addressTransferForm\').innerHTML=\'\'">Cancelar</button></div></div>';
+  box.scrollIntoView({behavior:"smooth",block:"nearest"});
+}
+
+async function submitAddressTransfer() {
+  const source=window.pendingWmsTransfer, data=window.addressInventoryData;
+  if (!source || !data) return;
+  const destination=$("wmsTransferDestination")?.value||"",reason=$("wmsTransferReason")?.value.trim()||"";
+  if (!destination || reason.length < 3) {toast("Escolha o destino e informe um motivo.");return;}
+  const isBox=data.unit==="CAIXA_PRETA";
+  const qty=isBox?null:Number($("wmsTransferQty")?.value||0);
+  if (!isBox && (!Number.isSafeInteger(qty)||qty<=0||qty>Number(source.quantidade))) {
+    toast("Quantidade inválida para o saldo disponível.");return;
+  }
+  if (!confirm("Confirmar a movimentação física de "+data.location.address+" para "+destination+"?")) return;
+  const button=$("addressTransferForm")?.querySelector(".primary");if(button)button.disabled=true;
+  try {
+    const result=await api("/api/positions/transfer",{method:"POST",body:JSON.stringify({
+      source_allocation_id:source.allocation_id,destination_address:destination,quantity:qty,reason
+    })});
+    toast("Movimentação #"+result.movement_id+" registrada com sucesso.");
+    await renderAddressMap();
+    await openAddressInventory(data.location.address);
+  } catch(error) {toast(error.message);if(button)button.disabled=false;}
 }
 
 async function renderCards(scope) {
