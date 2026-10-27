@@ -164,6 +164,14 @@ def downstream_card_data(con: "db.Connection", card_id: int, sector: str, reveal
     else:
         has_unassigned_pending = assigned < expected
     result = dict(op)
+    if sector == "ESTOCAGEM":
+        expected_items = _operation_expected_by_item(con, op)
+        checked = con.execute("""SELECT item_id,matched FROM storage_blind_checks s
+          WHERE operation_id=? AND id=(SELECT MAX(id) FROM storage_blind_checks
+            WHERE operation_id=s.operation_id AND item_id=s.item_id)""",(int(op["id"]),)).fetchall()
+        result["storage_check_complete"] = bool(expected_items) and {
+            int(row["item_id"]) for row in checked if int(row["matched"] or 0) == 1
+        } == set(expected_items)
     result.update({"items": items, "assignments": assignments, "has_pending": has_pending, "has_unassigned_pending": has_unassigned_pending,
                    "totals": {"expected": expected, "assigned": assigned, "completed": completed, "available": max(0, expected-assigned)}})
     if not reveal_expected:
