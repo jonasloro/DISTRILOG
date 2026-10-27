@@ -2298,7 +2298,7 @@ async function renderDownstreamTab(sector) {
   }
   const grade=op.purchase_mode==="GRADE",open=op.status==="ABERTO";
   const active=(op.assignments||[]).filter(a=>!["LIBERADA","CONCLUIDA"].includes(a.status));
-  const hasPending=(op.items||[]).some(i=>Number(i.completed_qty||0)<Number(i.expected_qty||0));
+  const hasPending=Boolean(op.has_pending);
   const workerNames=[...new Set(active.map(a=>a.worker_name).filter(Boolean))];
   const paused=active.length>0&&active.every(a=>a.timer_state==="PAUSADA");
   const elapsed=active.length?Math.max(...active.map(a=>Number(a.elapsed_seconds||0))):0;
