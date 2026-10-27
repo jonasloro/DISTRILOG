@@ -40,12 +40,14 @@ jobs:
       - name: Syntax check
         run: |
           python -m compileall -q .
+          node --check static/i18n.js
+          node --check static/goat_card_modal.js
           node --check static/app.js
           node --check static/collab.js
           node --check static/mission_history_2026.js
           node --check static/mission_weekly.js
           node --check static/mission.js
       - name: Mission frontend and archived history
-        run: node --test tests/test_mission_history.cjs tests/test_mission_weekly.cjs
+        run: node --test tests/test_i18n.cjs tests/test_mission_history.cjs tests/test_mission_weekly.cjs
       - name: WMS and chat integration checks
         run: python -m pytest tests -q
