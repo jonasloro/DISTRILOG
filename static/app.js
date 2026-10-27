@@ -327,7 +327,7 @@ function renderAddressMapContent() {
   const allocated = allPositions.reduce((sum, p) => sum + Math.max(0, Number(p.ocupado || 0)), 0);
   $("mainContent").innerHTML =
     '<section class="address-map-page">' +
-      '<div class="address-map-intro"><div><span class="address-map-eyebrow">WMS · CONSULTA</span><h2>Mapa físico de endereçamento</h2><p>Consulte a ocupação das posições sem precisar abrir um Card. Este painel é somente leitura.</p></div>' +
+      '<div class="address-map-intro"><div><span class="address-map-eyebrow">WMS · CONTROLE</span><h2>Central de Endereçamento</h2><p>Clique em uma posição para consultar seu conteúdo ou transferir material, sem precisar abrir um Card.</p></div>' +
       '<button class="secondary" type="button" onclick="renderAddressMap()">Atualizar mapa</button></div>' +
       '<div class="address-map-stats">' +
         '<div class="address-map-stat"><span>Posições no setor</span><strong id="addressMapTotal">' + allPositions.length.toLocaleString("pt-BR") + '</strong></div>' +
@@ -538,16 +538,34 @@ async function refreshWmsReconciliationSummary() {
   const box=$("wmsReconciliationSummary");
   if(!box || !["admin","supervisor"].includes(currentUser?.role)) return;
   try {
-    const result=await api("/api/positions/reconciliation?limit=1");
+    const [result, health] = await Promise.all([
+      api("/api/positions/reconciliation?limit=1"),
+      api("/api/positions/health-snapshots?limit=2")
+    ]);
     if (!box.isConnected) return;
     const count=Number(result.total||0);
-    box.innerHTML = count
-      ? '<div class="notice warn wms-anomaly-summary"><b>⚠ '+count+' divergência(s) de endereçamento</b>'+
-        '<span>Existem alocações ativas sem card, item ou endereço válido. Requerem conferência física.</span>'+
-        '<button class="secondary small-btn" type="button" onclick="openWmsReconciliation()">Revisar divergências</button></div>'
-      : '<div class="notice success-box">✓ Nenhuma alocação ativa órfã detectada no Supabase.</div>';
+    const last=health.latest;
+    const anomalyCount = last ? (Number(last.orphan_cards||0)+Number(last.orphan_items||0)+
+      Number(last.invalid_addresses||0)+Number(last.invalid_quantities||0)+
+      Number(last.overfilled_color_addresses||0)) : null;
+    const stale=last ? (Date.now()-new Date(last.checked_at).getTime()) > 2*60*60*1000 : true;
+    const timestamp=last ? new Date(last.checked_at).toLocaleString("pt-BR") : "Ainda não executada";
+    box.innerHTML =
+      '<div class="wms-health-summary">'+
+      '<div><b>Auditoria automática · Supabase</b><small>Última verificação: '+esc(timestamp)+
+      ' · execução a cada hora</small></div>'+
+      '<span class="badge '+(stale?'orange':anomalyCount>0?'orange':'green')+'">'+
+      (stale?'Verificação atrasada':anomalyCount>0?'Divergências detectadas':'Monitoramento ativo')+'</span></div>'+
+      (count
+        ? '<div class="notice warn wms-anomaly-summary"><b>⚠ '+count+' divergência(s) de endereçamento</b>'+
+          '<span>Há alocações sem card, item ou endereço válido. A baixa exige conferência física.</span>'+
+          '<button class="secondary small-btn" type="button" onclick="openWmsReconciliation()">Revisar divergências</button></div>'
+        : '<div class="notice success-box">✓ Nenhuma alocação ativa órfã detectada agora.</div>')+
+      (last && Number(last.overfilled_color_addresses||0)>0
+        ? '<div class="notice warn">'+Number(last.overfilled_color_addresses)+' endereço(s) ET/EC com mais de quatro cores. Conferir fisicamente.</div>'
+        : '');
   } catch(error) {
-    if(box.isConnected)box.innerHTML='<div class="notice warn">Não foi possível executar a verificação de integridade WMS. '+esc(error.message)+'</div>';
+    if(box.isConnected)box.innerHTML='<div class="notice warn">A auditoria WMS está indisponível. '+esc(error.message)+'</div>';
   }
 }
 
