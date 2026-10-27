@@ -784,7 +784,47 @@
   "COSTURA": "COSTURA",
   "AJUSTES": "AJUSTES",
   "ENTRADA": "ENTRADA",
-  "SEPARAÇÃO": "SEPARACIÓN"
+  "SEPARAÇÃO": "SEPARACIÓN",
+  "Você conferiu fisicamente esta posição e confirmou que a mercadoria NÃO está presente?\n\nA alocação será desativada, com histórico preservado.": "¿Verificó físicamente esta posición y confirmó que la mercancía NO está presente?\n\nLa asignación se desactivará y se conservará el historial.",
+  "Registre o motivo, quem conferiu e a evidência física da posição vazia (mínimo 12 caracteres):": "Registre el motivo, quién verificó y la evidencia física de la posición vacía (mínimo 12 caracteres):",
+  "Enviar este Card diretamente ao Processamento somente para teste?": "¿Enviar esta tarjeta directamente a Procesamiento solo para pruebas?",
+  "Transferir a Inspeção 2 para o Processamento? O Card sairá da Qualidade sem criar a inspeção.": "¿Transferir la Inspección 2 a Procesamiento? La tarjeta saldrá de Calidad sin crear la inspección.",
+  "Devolver este item e quantidade para a disponibilidade?": "¿Devolver este artículo y la cantidad a la disponibilidad?",
+  "Existem peças pendentes de separação para o setor Desenvolvimento. Deseja concluir a inspeção mesmo assim?": "Hay piezas pendientes de separación para el sector Desarrollo. ¿Desea finalizar la inspección de todos modos?",
+  "Concluir definitivamente esta inspeção e movimentar o Card?": "¿Finalizar definitivamente esta inspección y mover la tarjeta?",
+  "Concluir o Processamento e movimentar o Card para o próximo setor configurado?": "¿Finalizar Procesamiento y mover la tarjeta al siguiente sector configurado?",
+  "Setor da tarefa:": "Sector de la tarea:",
+  "Excluir este registro de limpeza?": "¿Eliminar este registro de limpieza?",
+  "Excluir este compromisso?": "¿Eliminar este evento?",
+  "Informe uma justificativa completa da conferência física.": "Ingrese una justificación completa de la verificación física.",
+  "Tarefas Operacionais": "Tareas operativas",
+  "Responsáveis, prioridades e andamento por setor": "Responsables, prioridades y progreso por sector",
+  "Atribuição devolvida.": "Asignación devuelta.",
+  "Mercadoria marcada como recebida. Recebimento liberado.": "Mercancía marcada como recibida. Recepción habilitada.",
+  "Inspeção concluída e Card movimentado.": "Inspección finalizada y tarjeta movida.",
+  "Processamento concluído.": "Procesamiento finalizado.",
+  "Informe o usuário e a senha.": "Ingrese el usuario y la contraseña.",
+  "Informe a quantidade.": "Ingrese la cantidad.",
+  "Sessão expirada.": "Sesión caducada.",
+  "Sessão inválida.": "Sesión no válida.",
+  "Selecione o operador, informe senha temporária forte e confirme sua senha.": "Seleccione al operador, ingrese una contraseña temporal segura y confirme su contraseña.",
+  "Não foi possível salvar os dados.": "No se pudieron guardar los datos.",
+  "Não há dados para exibir.": "No hay datos para mostrar.",
+  "Operação concluída.": "Operación finalizada.",
+  "Salvar e continuar": "Guardar y continuar",
+  "Confirmar e continuar": "Confirmar y continuar",
+  "Criar nova tarefa": "Crear nueva tarea",
+  "Nenhuma mensagem ainda. Comece a conversa!": "Todavía no hay mensajes. ¡Inicie la conversación!",
+  "Data prevista": "Fecha prevista",
+  "Última atualização": "Última actualización",
+  "Quantidade atribuída": "Cantidad asignada",
+  "Número de caixas pretas": "Número de cajas negras",
+  "Retornar ao fluxo": "Volver al flujo",
+  "Itens pendentes": "Artículos pendientes",
+  "Data de recebimento": "Fecha de recepción",
+  "Aguarde o recebimento": "Espere la recepción",
+  "Carteira de pedidos": "Cartera de pedidos",
+  "Falta de permissão": "Permiso insuficiente"
 });
   const SUPPORTED = Object.freeze(["pt-BR", "es"]);
   let language = "pt-BR";
@@ -801,6 +841,15 @@
   }
   function getLanguage() { return language; }
   function lookup(value) {
+    // Strictly matched dynamic confirmations preserve user and WMS identifiers.
+    let match = value.match(/^Confirmar a movimentação física de (.+?) para (.+)\?$/);
+    if (match) return "¿Confirmar el movimiento físico de " + match[1] + " a " + match[2] + "?";
+    match = value.match(/^Excluir definitivamente o Card (.+?)\?\n\nIsso removerá o card, seus itens, andamento e alocações físicas\.$/);
+    if (match) return "¿Eliminar definitivamente la tarjeta " + match[1] + "?\n\nEsto eliminará la tarjeta, sus artículos, su progreso y las asignaciones físicas.";
+    match = value.match(/^Marcar os (\d+) itens deste inspetor como inspecionados e aprovados\? Isso zera as quantidades de rejeição e retrabalho desta lista\.$/);
+    if (match) return "¿Marcar los " + match[1] + " artículos de este inspector como inspeccionados y aprobados? Las cantidades rechazadas y de retrabajo de esta lista se pondrán a cero.";
+    match = value.match(/^Revogar sessões e redefinir a senha de (.+?)\?$/);
+    if (match) return "¿Revocar las sesiones y restablecer la contraseña de " + match[1] + "?";
     if (Object.prototype.hasOwnProperty.call(ES, value)) return ES[value];
     const punctuation = value.match(/^(.+?)([.!?:…]+)$/);
     if (punctuation && Object.prototype.hasOwnProperty.call(ES, punctuation[1]))

@@ -225,6 +225,6 @@ async function calSave(id) {
   } catch (e) { toast(e.message); }
 }
 async function calDelete(id) {
-  if (!confirm("Excluir este compromisso?")) return;
+  if (!DISTRILOG_I18N.confirm("Excluir este compromisso?")) return;
   try { await api(`/api/calendar/events/${id}?user_id=${currentUser.id}`, { method: "DELETE" }); toast("Compromisso excluído."); renderCalendar(); } catch (e) { toast(e.message); }
 }

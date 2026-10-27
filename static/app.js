@@ -25,7 +25,7 @@ async function changeUserLanguage(language) {
     applyUserLanguage(updated.language);
   } catch (error) {
     applyUserLanguage(previous);
-    alert(error.message);
+    DISTRILOG_I18N.alert(error.message);
   }
 }
 
@@ -562,7 +562,7 @@ async function submitAddressTransfer() {
   if (!isBox && (!Number.isSafeInteger(qty)||qty<=0||qty>Number(source.quantidade))) {
     toast("Quantidade inválida para o saldo disponível.");return;
   }
-  if (!confirm("Confirmar a movimentação física de "+data.location.address+" para "+destination+"?")) return;
+  if (!DISTRILOG_I18N.confirm("Confirmar a movimentação física de "+data.location.address+" para "+destination+"?")) return;
   const button=$("addressTransferForm")?.querySelector(".primary");if(button)button.disabled=true;
   try {
     const result=await api("/api/positions/transfer",{method:"POST",body:JSON.stringify({
@@ -638,8 +638,8 @@ async function openWmsReconciliation() {
 
 async function resolveEmptyWmsAllocation(allocationId) {
   if (currentUser?.role!=="admin") return;
-  if(!confirm("Você conferiu fisicamente esta posição e confirmou que a mercadoria NÃO está presente?\n\nA alocação será desativada, com histórico preservado."))return;
-  const reason=prompt("Registre o motivo, quem conferiu e a evidência física da posição vazia (mínimo 12 caracteres):");
+  if(!DISTRILOG_I18N.confirm("Você conferiu fisicamente esta posição e confirmou que a mercadoria NÃO está presente?\n\nA alocação será desativada, com histórico preservado."))return;
+  const reason=DISTRILOG_I18N.prompt("Registre o motivo, quem conferiu e a evidência física da posição vazia (mínimo 12 caracteres):");
   if(!reason || reason.trim().length<12) {toast("Informe uma justificativa completa da conferência física.");return;}
   try {
     await api("/api/positions/reconciliation/"+allocationId+"/clear",{method:"POST",body:JSON.stringify({
@@ -824,7 +824,7 @@ async function simulateReturn(cardId) {
 }
 
 async function simulateSendProcessing(cardId) {
-  if (!confirm("Enviar este Card diretamente ao Processamento somente para teste?")) return;
+  if (!DISTRILOG_I18N.confirm("Enviar este Card diretamente ao Processamento somente para teste?")) return;
   try {
     await api(`/api/test/cards/${cardId}/send-processing`, { method: "POST", body: JSON.stringify({ user_id: currentUser.id, purchase_mode: document.getElementById("testMode"+cardId)?.value }) });
     toast("Card enviado ao Processamento para teste.");
@@ -846,7 +846,7 @@ async function deleteCard(cardId){
   }
   const id=Number(cardId);
   const label=cardData?.purchase_id || ("#" + id);
-  if(!confirm("Excluir definitivamente o Card "+label+"?\n\nIsso removerá o card, seus itens, andamento e alocações físicas.")) return;
+  if(!DISTRILOG_I18N.confirm("Excluir definitivamente o Card "+label+"?\n\nIsso removerá o card, seus itens, andamento e alocações físicas.")) return;
   try{
     const result=await api("/api/cards/"+id+"?user_id="+encodeURIComponent(currentUser.id),{method:"DELETE"});
     toast("Card "+(result.purchase_id||label)+" excluído.");
@@ -1120,7 +1120,7 @@ function transitHtml() {
 }
 
 async function markArrived(cardId, fromList = false) {
-  if (!confirm("Confirmar que esta mercadoria chegou ao CD?")) return;
+  if (!DISTRILOG_I18N.confirm("Confirmar que esta mercadoria chegou ao CD?")) return;
   try {
     await api(`/api/cards/${cardId}/mark-arrived`, { method:"POST", body:JSON.stringify({ user_id:currentUser.id }) });
     toast("Mercadoria marcada como recebida. Recebimento liberado.");
@@ -1572,7 +1572,7 @@ function qualitySetupHtml(previousInspection=null, sourceSubset=false) {
 }
 
 async function transferInspectionToProcessing() {
-  if (!confirm("Transferir a Inspeção 2 para o Processamento? O Card sairá da Qualidade sem criar a inspeção.")) return;
+  if (!DISTRILOG_I18N.confirm("Transferir a Inspeção 2 para o Processamento? O Card sairá da Qualidade sem criar a inspeção.")) return;
   try {
     await api(`/api/cards/${currentCardId}/quality/transfer-processing`, {
       method: "POST",
@@ -2074,7 +2074,7 @@ async function saveQualityResultsBatch(workerId) {
 async function qualityApproveAllWorker(workerId) {
   const worker = cardData.quality?.workers?.find((item) => Number(item.id) === Number(workerId));
   if (!worker || !worker.assignments.length) { toast("Este inspetor não tem itens atribuídos."); return; }
-  if (!confirm(`Marcar os ${worker.assignments.length} itens deste inspetor como inspecionados e aprovados? Isso zera as quantidades de rejeição e retrabalho desta lista.`)) return;
+  if (!DISTRILOG_I18N.confirm(`Marcar os ${worker.assignments.length} itens deste inspetor como inspecionados e aprovados? Isso zera as quantidades de rejeição e retrabalho desta lista.`)) return;
   worker.assignments.forEach((assignment) => {
     const id = assignment.id;
     if ($(`qaInspected_${id}`)) $(`qaInspected_${id}`).value = assignment.assigned_qty;
@@ -2140,7 +2140,7 @@ async function qualityTimerAction(workerId, action) {
 }
 
 async function releaseQualityAssignment(id) {
-  if (!confirm("Devolver este item e quantidade para a disponibilidade?")) return;
+  if (!DISTRILOG_I18N.confirm("Devolver este item e quantidade para a disponibilidade?")) return;
   try {
     await api(`/api/quality/assignments/${id}/release`,{method:"POST",body:JSON.stringify({user_id:currentUser.id})});
     toast("Atribuição devolvida.");
@@ -2160,9 +2160,9 @@ async function completeQualityInspection() {
   const q=cardData.quality;
   let confirmPending=false;
   if (q.development_warning) {
-    confirmPending=confirm("Existem peças pendentes de separação para o setor Desenvolvimento. Deseja concluir a inspeção mesmo assim?");
+    confirmPending=DISTRILOG_I18N.confirm("Existem peças pendentes de separação para o setor Desenvolvimento. Deseja concluir a inspeção mesmo assim?");
     if (!confirmPending) return;
-  } else if (!confirm("Concluir definitivamente esta inspeção e movimentar o Card?")) return;
+  } else if (!DISTRILOG_I18N.confirm("Concluir definitivamente esta inspeção e movimentar o Card?")) return;
   try {
     await api(`/api/quality/inspections/${q.id}/complete`,{method:"POST",body:JSON.stringify({user_id:currentUser.id,confirm_development_pending:confirmPending})});
     toast("Inspeção concluída e Card movimentado.");
@@ -2502,7 +2502,7 @@ async function copyStoredToProcessed() {
 }
 
 async function completeProcessing() {
-  if (!confirm("Concluir o Processamento e movimentar o Card para o próximo setor configurado?")) return;
+  if (!DISTRILOG_I18N.confirm("Concluir o Processamento e movimentar o Card para o próximo setor configurado?")) return;
   try {
     await api(`/api/processing/${cardData.processing.id}/complete`, {method:"POST",body:JSON.stringify({user_id:currentUser.id})});
     toast("Processamento concluído.");
@@ -2686,7 +2686,7 @@ async function finalizeLabelingAfterAllocation(id){
 async function renderSgo(){setPage("SGO e Entradas","Previsão de compras e distribuição de serviço por setor");const rows=await api("/api/unified/sgo");unifiedCache.sgo=rows;const counts=Object.fromEntries(["EM_TRANSITO","QUALIDADE","PROCESSAMENTO","ESTOCAGEM","CONCLUIDO"].map(s=>[s,rows.filter(r=>r.status===s).length]));$("mainContent").innerHTML=`<div class="kpi-grid compact-kpis">${Object.entries(counts).map(([s,n])=>`<div class="kpi"><div class="kpi-label">${s.replaceAll('_',' ')}</div><div class="kpi-value">${n}</div></div>`).join("")}</div><div class="panel" style="margin-top:14px"><div class="panel-header">Relatório SGO <button class="primary small-btn" onclick="document.getElementById('sgoFile').click()">Importar Excel</button><input id="sgoFile" class="hidden" type="file" accept=".xlsx,.xlsm" onchange="importSgo(this)"></div><div class="panel-body"><div class="queue-search"><span>⌕</span><input id="sgoSearch" placeholder="Compra, grupo, descrição ou marca" oninput="filterSgoRows()"></div></div><div class="table-wrap"><table class="compact-table"><thead><tr><th>Compra</th><th>Grupo / descrição</th><th>Marca</th><th>Quantidade</th><th>Previsão</th><th>Etapa</th><th>Ação</th></tr></thead><tbody>${rows.map(r=>`<tr class="sgo-row" data-search="${esc(normalizeSearch([r.purchase_id,r.group_name,r.description,r.brand].join(' ')))}"><td><b>${esc(r.purchase_id||'—')}</b><small>${esc(r.origin||'')}</small></td><td><b>${esc(r.group_name||'—')}</b><small>${esc(r.description||'')}</small></td><td>${esc(r.brand||'—')}</td><td><b>${r.quantity}</b></td><td>${esc(r.forecast_date||'—')}</td><td>${statusBadge(r.status)}</td><td><button class="secondary small-btn" onclick="createSgoTask(${r.id},'${r.status}')">Criar tarefa</button></td></tr>`).join("")||'<tr><td colspan="7">Importe um relatório SGO para iniciar.</td></tr>'}</tbody></table></div></div>`;}
 function filterSgoRows(){const t=normalizeSearch($("sgoSearch")?.value||"");document.querySelectorAll(".sgo-row").forEach(r=>r.classList.toggle("hidden",t&&!r.dataset.search.includes(t)));}
 async function importSgo(input){if(!input.files?.[0])return;const form=new FormData();form.append("file",input.files[0]);try{const d=await api(`/api/unified/sgo/import?user_id=${currentUser.id}`,{method:"POST",body:form});toast(`${d.rows} entradas SGO importadas.`);renderSgo();}catch(e){toast(e.message)}}
-async function createSgoTask(id,status){const sector=prompt("Setor da tarefa:",status||"RECEBIMENTO");if(!sector)return;try{await api(`/api/unified/sgo/${id}/task`,{method:"POST",body:JSON.stringify({user_id:currentUser.id,sector})});toast("Tarefa criada.");}catch(e){toast(e.message)}}
+async function createSgoTask(id,status){const sector=DISTRILOG_I18N.prompt("Setor da tarefa:",status||"RECEBIMENTO");if(!sector)return;try{await api(`/api/unified/sgo/${id}/task`,{method:"POST",body:JSON.stringify({user_id:currentUser.id,sector})});toast("Tarefa criada.");}catch(e){toast(e.message)}}
 
 async function renderTasks(){setPage("Tarefas Operacionais","Responsáveis, prioridades e andamento por setor");const rows=await api("/api/unified/tasks");unifiedCache.tasks=rows;const cols=["PENDENTE","EM_ANDAMENTO","CONCLUIDA"];$("mainContent").innerHTML=`<div class="tasks-toolbar"><button class="primary" onclick="showTaskForm()">+ Nova tarefa</button><select id="taskSectorFilter" onchange="filterTaskCards()"><option value="">Todos os setores</option>${[...new Set(rows.map(r=>r.sector))].map(s=>`<option>${esc(s)}</option>`).join("")}</select></div><div id="taskForm" class="panel hidden"></div><div class="task-board">${cols.map(status=>`<section><h3>${status.replaceAll('_',' ')} <span>${rows.filter(r=>r.status===status).length}</span></h3>${rows.filter(r=>r.status===status).map(t=>taskCard(t)).join("")||'<div class="empty-column">Nenhuma tarefa</div>'}</section>`).join("")}</div>`;}
 function taskCard(t){return `<article class="task-card" data-sector="${esc(t.sector)}"><div><span class="priority ${String(t.priority).toLowerCase()}">${esc(t.priority)}</span><small>${esc(t.sector)}</small></div><h4>${esc(t.title)}</h4><p>${esc(t.description||'Sem descrição')}</p><footer><span>${esc(t.responsible_name||'Não atribuída')}</span>${t.status!=="CONCLUIDA"?`<button class="small-btn ${t.status==='PENDENTE'?'primary':'success'}" onclick="advanceTask(${t.id},'${t.status==='PENDENTE'?'EM_ANDAMENTO':'CONCLUIDA'}')">${t.status==='PENDENTE'?'Iniciar':'Concluir'}</button>`:''}</footer></article>`;}
@@ -3052,7 +3052,7 @@ async function resetOperatorPassword() {
   const temporary=$("resetOperatorTempPassword")?.value||"";
   const admin=$("resetOperatorAdminPassword")?.value||"";
   if (!username || temporary.length<12 || !admin) {toast("Selecione o operador, informe senha temporária forte e confirme sua senha.");return;}
-  if (!confirm("Revogar sessões e redefinir a senha de "+username+"?")) return;
+  if (!DISTRILOG_I18N.confirm("Revogar sessões e redefinir a senha de "+username+"?")) return;
   try {
     await api("/api/admin/users/"+encodeURIComponent(username)+"/reset-password",{
       method:"POST",body:JSON.stringify({temporary_password:temporary,admin_password:admin})
@@ -3710,7 +3710,7 @@ async function cleaningAction(id, action) {
 }
 
 async function deleteCleaning(id) {
-  if (!confirm("Excluir este registro de limpeza?")) return;
+  if (!DISTRILOG_I18N.confirm("Excluir este registro de limpeza?")) return;
   try {
     await api(`/api/cleaning/tasks/${id}?user_id=${currentUser.id}`, { method: "DELETE" });
     await renderCleaning();

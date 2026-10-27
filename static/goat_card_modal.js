@@ -256,7 +256,7 @@ function collectManualGrade() {
 }
 
 async function processManualCard(isTest = false) {
-  const say = (m) => (typeof toast === "function" ? toast(m) : alert(m));
+  const say = (m) => (typeof toast === "function" ? toast(m) : DISTRILOG_I18N.alert(m));
   const reference = (document.getElementById("manualCardReference")?.value || "").trim();
   const supplier = (document.getElementById("manualCardSupplier")?.value || "").trim();
   const nf = (document.getElementById("manualCardNf")?.value || "").trim();
