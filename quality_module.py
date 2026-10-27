@@ -1964,7 +1964,7 @@ async def complete_inspection(inspection_id: int, request: Request):
     merged_sample_location = None
     if should_merge_sample:
         try:
-            merged_sample_location = move_ten_percent_sample_into_balance(int(inspection["card_id"]))
+            merged_sample_location = move_ten_percent_sample_into_balance(int(inspection["card_id"]), con=con)
         except Exception:
             con.close()
             raise
