@@ -36,8 +36,8 @@ def test_language_migration_is_idempotent_and_per_account():
                 f"SELECT usuario,idioma_preferido FROM {schema}.usuarios ORDER BY usuario"
             ).fetchall()
             assert result == [('operador_es', 'es'), ('operador_pt', 'pt-BR')]
-            with con.transaction():
-                with pytest.raises(psycopg.errors.CheckViolation):
+            with pytest.raises(psycopg.errors.CheckViolation):
+                with con.transaction():
                     con.execute(
                         f"UPDATE {schema}.usuarios SET idioma_preferido='fr' WHERE usuario='operador_pt'"
                     )
