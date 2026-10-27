@@ -84,47 +84,9 @@ def init_positions_db() -> None:
                     "CREATE INDEX IF NOT EXISTS idx_card_allocations_item "
                     "ON distrilog.card_allocations(item_id, setor, address)"
                 )
-                cur.execute(
-                    """CREATE TABLE IF NOT EXISTS distrilog.outlog_migrations (
-                        version TEXT PRIMARY KEY,
-                        applied_at TEXT NOT NULL DEFAULT now()::text
-                    )"""
-                )
-                cur.execute(
-                    """INSERT INTO distrilog.outlog_migrations(version)
-                       VALUES(%s) ON CONFLICT (version) DO NOTHING""",
-                    ("reset-card-allocations-2026-10-01",),
-                )
-                if cur.rowcount == 1:
-                    cur.execute("DELETE FROM distrilog.card_allocations")
-                    print("[migracao] Alocações de peças zeradas; tabela card_allocations preservada.")
-                cur.execute(
-                    """UPDATE distrilog.card_allocations AS a SET active=FALSE
-                       WHERE a.active IS TRUE AND a.setor = ANY(%s)
-                         AND EXISTS (
-                             SELECT 1 FROM distrilog.cards c
-                             WHERE c.id=a.card_id AND c.status IN ('EM_COSTURA_CD01','DESPACHO_CD02')
-                         )""",
-                    (["RM", "QA", "PR"],),
-                )
-                cur.execute(
-                    """UPDATE distrilog.card_allocations AS a SET active=FALSE
-                       WHERE a.active IS TRUE AND a.setor = ANY(%s)
-                         AND (
-                             a.created_at < (
-                                 SELECT MAX(r.created_at) FROM distrilog.receivings r
-                                 WHERE r.card_id=a.card_id AND r.receiving_type='RETORNO'
-                             )
-                             OR (
-                                 a.allocation_purpose='TEN_PERCENT_SAMPLE'
-                                 AND EXISTS (
-                                     SELECT 1 FROM distrilog.receivings r
-                                     WHERE r.card_id=a.card_id AND r.receiving_type='RETORNO'
-                                 )
-                             )
-                         )""",
-                    (["RM", "QA", "PR"],),
-                )
+                # Não alteramos o estoque automaticamente durante o boot.
+                # Alocações históricas e divergências são tratadas pelo
+                # relatório de reconciliação WMS com verificação física.
                 rows = []
                 for setor, zonas in SECTOR_ZONES.items():
                     for zona in zonas:
@@ -137,7 +99,8 @@ def init_positions_db() -> None:
                     "INSERT INTO distrilog.sector_positions(address,setor,zona,casulo,nivel) VALUES(%s,%s,%s,%s,%s) ON CONFLICT (address) DO NOTHING",
                     rows,
                 )
-                cur.execute("DELETE FROM distrilog.sector_positions WHERE setor = ANY(%s) AND nivel<>''", (list(FLAT_SECTORS),))
+                # Endereços legados com níveis em ET/EC permanecem preservados:
+                # a remoção de posições só pode ocorrer após reconciliação.
             con.commit()
     except RuntimeError as e:
         print(f"[aviso] Endereçamento: {e}")
