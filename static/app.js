@@ -3511,27 +3511,14 @@ async function openEntryConfirmation(id) {
   try {
     const data=await api("/api/processing/entry/queue?user_id="+currentUser.id),entry=(data.pending||[]).find(e=>Number(e.id)===Number(id));
     if(!entry)throw new Error("Entrada não encontrada ou já confirmada.");
-    const rows=entry.items.map(item=>'<tr><td><b>'+esc(item.reference||"—")+'</b>'+(item.is_extra?'<small>Combinação extra</small>':"")+'</td><td>'+esc(item.color||"—")+'</td><td>'+esc(item.size||"—")+'</td><td>'+Number(item.triage_qty||0).toLocaleString("pt-BR")+'</td><td><input type="number" min="0" step="1" class="stored-entry-qty" data-row-id="'+item.id+'" data-base="'+Number(item.triage_qty||0)+'" value="'+Number(item.triage_qty||0)+'" required oninput="toggleEntryReason('+item.id+')"></td><td><input class="stored-entry-reason" data-reason-id="'+item.id+'" placeholder="Obrigatório se houver diferença" disabled></td></tr>').join("");
-    $("modalBody").innerHTML='<div class="card-title"><div><h2>Confirmar Entrada da Estocagem</h2><div class="card-subtitle">'+esc(entry.purchase_id||("Card "+entry.card_id))+' · '+esc(entry.supplier||"—")+'</div></div></div><div class="notice">Quantidade divergente precisa de justificativa por linha.</div><div class="table-wrap"><table class="compact-table"><thead><tr><th>Referência</th><th>Cor</th><th>Tamanho</th><th>Qtd. triagem</th><th>Qtd. guardada</th><th>Motivo</th></tr></thead><tbody>'+rows+'</tbody></table></div><div class="field"><label>Observação geral (opcional)</label><textarea id="entryNotes" rows="2"></textarea></div><div class="actions"><button class="success" onclick="confirmProcessingEntry('+entry.id+')">Confirmar Entrada</button></div>';
+    const rows=entry.items.map(item=>'<tr><td><b>'+esc(item.reference||"—")+'</b>'+(item.is_extra?'<small>Combinação extra</small>':"")+'</td><td>'+esc(item.color||"—")+'</td><td>'+esc(item.size||"—")+'</td><td><b>'+Number(item.stored_qty||0).toLocaleString("pt-BR")+'</b></td></tr>').join("");
+    $("modalBody").innerHTML='<div class="card-title"><div><h2>Confirmar Entrada da Estocagem</h2><div class="card-subtitle">'+esc(entry.purchase_id||("Card "+entry.card_id))+' · '+esc(entry.supplier||"—")+'</div></div></div><div class="notice"><b>Somente confirmação.</b> As quantidades já foram conferidas na Estocagem. Alterações de grade não são feitas na Entrada.</div><div class="table-wrap"><table class="compact-table"><thead><tr><th>Referência</th><th>Cor</th><th>Tamanho</th><th>Quantidade conferida</th></tr></thead><tbody>'+rows+'</tbody></table></div><div class="field"><label>Observação geral (opcional)</label><textarea id="entryNotes" rows="2"></textarea></div><div class="actions"><button class="success" onclick="confirmProcessingEntry('+entry.id+')">Dar Entrada e concluir</button></div>';
     $("modal").classList.remove("hidden");
   } catch(error) { toast(error.message); }
 }
-function toggleEntryReason(id) {
-  const qty=document.querySelector('.stored-entry-qty[data-row-id="'+id+'"]'),reason=document.querySelector('.stored-entry-reason[data-reason-id="'+id+'"]');
-  if(!qty||!reason)return;const diff=qty.value.trim()!==""&&Number(qty.value)!==Number(qty.dataset.base||0);
-  reason.disabled=!diff;reason.required=diff;if(!diff)reason.value="";
-}
 async function confirmProcessingEntry(id) {
   try {
-    const data=await api("/api/processing/entry/queue?user_id="+currentUser.id),entry=(data.pending||[]).find(e=>Number(e.id)===Number(id));
-    if(!entry)throw new Error("Entrada não encontrada ou já confirmada.");
-    const items=entry.items.map(item=>{
-      const qty=document.querySelector('.stored-entry-qty[data-row-id="'+item.id+'"]'),reason=document.querySelector('.stored-entry-reason[data-reason-id="'+item.id+'"]');
-      if(!qty||qty.value.trim()===""||!Number.isSafeInteger(Number(qty.value))||Number(qty.value)<0)throw new Error("Preencha todas as quantidades guardadas com inteiros >= 0.");
-      const diff=Number(qty.value)-Number(item.triage_qty||0);if(diff&&!reason.value.trim())throw new Error("Justifique a divergência em "+item.reference+" / "+item.color+" / "+item.size+".");
-      return {id:Number(item.id),stored_qty:Number(qty.value),reason:reason.value.trim()};
-    });
-    const result=await api("/api/processing/entry/"+id+"/confirm",{method:"POST",body:JSON.stringify({user_id:currentUser.id,items,notes:$("entryNotes")?.value||""})});
-    closeModal();toast(result.has_divergence?"Entrada confirmada com divergências.":"Entrada confirmada sem divergências.");await renderProcessingEntry();
+    await api("/api/processing/entry/"+id+"/confirm",{method:"POST",body:JSON.stringify({user_id:currentUser.id,notes:$("entryNotes")?.value||""})});
+    closeModal();toast("Entrada confirmada.");await renderProcessingEntry();
   } catch(error) { toast(error.message); }
 }
