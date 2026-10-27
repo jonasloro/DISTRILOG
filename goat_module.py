@@ -418,50 +418,10 @@ def register_goat_routes(app: FastAPI) -> None:
 
 @router.post("/confirm-receiving")
 def confirm_receiving(payload: dict[str, Any], request: Request) -> dict[str, Any]:
-    """Confirma o recebimento físico de um card: volumes, peças, casulo e tratativa."""
-    _authorize(request, {"recebimento", "admin", "supervisor"})
-    card_id = payload.get("id") or payload.get("item_id") or payload.get("card_id")
-    casulo = str(payload.get("casulo") or "").strip().upper()
-    if not card_id:
-        raise HTTPException(400, "ID do card é obrigatório.")
-    if not casulo:
-        raise HTTPException(400, "Informe o casulo de destino.")
-    try:
-        card_id = int(card_id)
-        vol = int(payload.get("qtd_volumes") or 0)
-        pecas = int(payload.get("qtd_pecas") or 0)
-    except (TypeError, ValueError):
-        raise HTTPException(400, "Volumes, peças e ID precisam ser números.")
-    status = str(payload.get("status_conferencia") or "Conforme")
-    obs = str(payload.get("observacao") or "").strip()
-    now = _iso_now()
-    con = db_connect()
-    try:
-        con.execute("PRAGMA foreign_keys=ON")
-        card = con.execute("SELECT current_sector FROM cards WHERE id=?", (card_id,)).fetchone()
-        if not card:
-            raise HTTPException(404, "Card não encontrado.")
-        if card["current_sector"] != "RECEBIMENTO":
-            raise HTTPException(409, "Este Card não está sob responsabilidade do Recebimento.")
-        rec = con.execute(
-            "SELECT id FROM receivings WHERE card_id=? AND closed_at IS NULL ORDER BY id DESC LIMIT 1", (card_id,)
-        ).fetchone()
-        note = f"[{status}] {obs}".strip()
-        if rec:
-            con.execute("UPDATE receivings SET volumes=?, received_qty=?, notes=? WHERE id=?", (vol, pecas, note, rec["id"]))
-        else:
-            con.execute(
-                "INSERT INTO receivings(card_id,receiving_type,volumes,received_qty,notes,created_at) VALUES(?,?,?,?,?,?)",
-                (card_id, "NOVA", vol, pecas, note, now),
-            )
-        # Rota legada: não altere o endereço físico fora do motor WMS.
-        # A localização oficial é gerida exclusivamente por /api/positions.
-        # Mantemos apenas a conferência de peças e volumes.
-        con.execute(
-            "INSERT INTO history(card_id,user_id,event_type,description,created_at) VALUES(?,?,?,?,?)",
-            (card_id, None, "CONFERENCIA", f"Conferência {status}: {pecas} peças, {vol} volumes, casulo {casulo}. {obs}".strip(), now),
-        )
-        con.commit()
-    finally:
-        con.close()
-    return {"success": True, "message": f"Card alocado no casulo {casulo} com sucesso!", "casulo": casulo, "status": status}
+    """Descontinuado: a rota antiga não executava a transação física do WMS."""
+    _authorize(request, {"recebimento", "supervisor", "admin"})
+    raise HTTPException(
+        410,
+        "Esta rota de recebimento foi substituída pelo fluxo de Recebimento e "
+        "Endereçamento WMS do Card. Atualize a aplicação antes de continuar.",
+    )
