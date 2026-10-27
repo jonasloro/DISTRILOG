@@ -15,13 +15,20 @@ const MISSION_PHASE_STATE = {
 let missionWeeklyMonth = null;
 let missionWeeklyRequestId = 0;
 
-function missionCurrentMonth() {
+function missionCurrentParts() {
   const parts = new Intl.DateTimeFormat("pt-BR", {
-    timeZone:"America/Sao_Paulo",year:"numeric",month:"2-digit"
+    timeZone:"America/Sao_Paulo",year:"numeric",month:"2-digit",day:"2-digit"
   }).formatToParts(new Date());
-  const year = parts.find(p=>p.type==="year").value;
-  const month = parts.find(p=>p.type==="month").value;
-  return year+"-"+month;
+  const part = name => parts.find(p=>p.type===name).value;
+  return {year:part("year"),month:part("month"),day:part("day")};
+}
+function missionCurrentMonth() {
+  const p=missionCurrentParts();
+  return p.year+"-"+p.month;
+}
+function missionCurrentDate() {
+  const p=missionCurrentParts();
+  return p.year+"-"+p.month+"-"+p.day;
 }
 function missionMoveMonth(change) {
   if (!missionWeeklyMonth) missionWeeklyMonth=missionCurrentMonth();
@@ -71,9 +78,7 @@ async function showMissionWeekly(){
   if(sequence!==missionWeeklyRequestId || !$("missionWeeklyTab")?.classList.contains("primary") || !$("missionBody"))return;
   const sectors=data.sectors||[];
   const weeks=data.weeks||[];
-  const currentNowDate=new Intl.DateTimeFormat("en-CA", {
-    timeZone:"America/Sao_Paulo",year:"numeric",month:"2-digit",day:"2-digit"
-  }).format(new Date());
+  const currentNowDate=missionCurrentDate();
   const active=weeks.find(w=>w.week_start<=currentNowDate && currentNowDate<=w.week_end) ||
     [...weeks].reverse().find(w=>w.week_start<=currentNowDate);
   const first=active?.rows||[];
@@ -81,7 +86,6 @@ async function showMissionWeekly(){
   const totalProduced=active?.slots.WED.status==="captured"||active?.slots.FRI.status==="captured"?
     missionMetricTotal(first,"produced"):null;
   const percent=totalBacklog>0 && totalProduced!==null?Math.round(totalProduced/totalBacklog*1000)/10:null;
-  const monthStart=selectedMonth+"-01";
   const [yy,mm]=selectedMonth.split("-").map(Number);
   const monthLabel=new Date(Date.UTC(yy,mm-1,15)).toLocaleDateString("pt-BR",{month:"long",year:"numeric",timeZone:"UTC"});
 
@@ -132,8 +136,8 @@ async function showMissionWeekly(){
     '<button type="button" class="secondary" onclick="missionMoveMonth(1)">Próximo mês ›</button>'+
     '<button type="button" class="secondary" onclick="showMissionWeekly()">Atualizar ↻</button></div></div>'+
     '<div class="missao-kpis">'+
-    '<div class="missao-kpi"><span>Backlog inicial da semana</span><strong>'+missionValue(totalBacklog)+'</strong><small>Congelado na segunda, 08h10</small></div>'+
-    '<div class="missao-kpi"><span>Produzido registrado</span><strong>'+missionValue(totalProduced)+'</strong>'+
+    '<div class="missao-kpi"><span>Backlog inicial da semana</span><div class="mission-kpi-value">'+missionValue(totalBacklog)+'</div><small>Congelado na segunda, 08h10</small></div>'+
+    '<div class="missao-kpi"><span>Produzido registrado</span><div class="mission-kpi-value">'+missionValue(totalProduced)+'</div>'+
       '<small>'+(active?.slots.FRI.status==="captured"?"Fechado na sexta, 16h":
         active?.slots.WED.status==="captured"?"Prévia de quarta, 12h":"Aguardando o primeiro corte")+'</small></div>'+
     '<div class="missao-kpi"><span>Entrega sobre backlog</span><strong>'+(percent===null?'—':percent.toLocaleString("pt-BR")+"%")+'</strong>'+
