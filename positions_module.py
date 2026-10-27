@@ -462,11 +462,14 @@ def allocate(card_id: int, payload: dict[str, Any]) -> dict[str, Any]:
                             )
 
                     allocation_purpose = "TEN_PERCENT_SAMPLE" if is_ten_percent_sample else "STOCK"
+                    box_count = int(a.get("box_count") or 0) if setor in FLAT_SECTORS else 0
+                    if setor in FLAT_SECTORS and box_count <= 0:
+                        raise HTTPException(400, "Informe quantas caixas pretas foram deixadas neste casulo.")
                     cur.execute(
                         """INSERT INTO distrilog.card_allocations(
-                               card_id,setor,address,quantidade,responsavel,created_at,item_id,allocation_purpose
-                           ) VALUES(%s,%s,%s,%s,%s,%s,%s,%s)""",
-                        (card_id, setor, address, qty, responsavel, now, item_id, allocation_purpose),
+                               card_id,setor,address,quantidade,responsavel,created_at,item_id,allocation_purpose,box_count
+                           ) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                        (card_id, setor, address, qty, responsavel, now, item_id, allocation_purpose, box_count),
                     )
             con.commit()
     except RuntimeError as e:
