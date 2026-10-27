@@ -199,6 +199,8 @@ def transfer(payload: TransferRequest, request: Request) -> dict[str, Any]:
             card_id = int(source["card_id"])
             moved_ids = []
             if from_sector in _BOXES:
+                if payload.quantity is not None:
+                    raise HTTPException(400, "Em ET/EC selecione uma cor inteira; quantidades parciais de caixas não são permitidas.")
                 # As caixas são registradas por cor, com os demais tamanhos
                 # vinculados à mesma cor. A movimentação é indivisível.
                 if source["item_id"] is None:
