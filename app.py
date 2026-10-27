@@ -38,6 +38,7 @@ from processing_flow_module import init_processing_flow_db, backfill_cadastro_ta
 import db
 from sample_math import proportional_allocation
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
 from collections import defaultdict
 from threading import Lock
 from supabase_module import pg_connect, verificar_login_supabase, seed_usuarios_supabase, change_password_supabase, create_operator_supabase, reset_operator_password_supabase, ALLOWED_ROLES
@@ -47,7 +48,15 @@ DATA_DIR = Path(os.getenv("OUTLOG_DATA_DIR", str(BASE_DIR / "data"))).resolve()
 UPLOAD_DIR = DATA_DIR / "uploads"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
-app = FastAPI(title="DistriLog - Operação Logística Integrada", version="3.1.0")
+@asynccontextmanager
+async def distrilog_lifespan(application: FastAPI):
+    """Modern ASGI startup lifecycle; avoids deprecated on_event hooks."""
+    startup()
+    yield
+
+
+app = FastAPI(title="DistriLog - Operação Logística Integrada", version="3.1.0",
+              lifespan=distrilog_lifespan)
 
 
 @app.middleware("http")
@@ -1354,7 +1363,6 @@ def reconcile_completed_subset_returns(con: "db.Connection") -> int:
     return repaired
 
 
-@app.on_event("startup")
 def startup() -> None:
     init_db()
     init_quality_db()
