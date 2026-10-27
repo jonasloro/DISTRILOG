@@ -3072,7 +3072,6 @@ async function loadReceivingAllocationStep(cardId) {
   window.qaSampleAllocationComplete = false;
   const box=$("posAllocBox");
   if(!box) return;
-  window.positionAllocatorRetry={cardId,setor,tenPercentSample,tenPercentTarget,sourceItemsOverride,fixedDestination};
   try {
     const status=await apiWithTimeout("/api/positions/cards/"+cardId+"/status?setor=QA");
     const receiving=cardData?.receiving||{};
@@ -3105,6 +3104,7 @@ function retryPositionAllocator(){
   loadPositionAllocator(r.cardId,r.setor,r.tenPercentSample,r.tenPercentTarget,r.sourceItemsOverride,r.fixedDestination);
 }
 async function loadPositionAllocator(cardId,setor,tenPercentSample=false,tenPercentTarget=0,sourceItemsOverride=null,fixedDestination=false) {
+  window.positionAllocatorRetry={cardId,setor,tenPercentSample,tenPercentTarget,sourceItemsOverride,fixedDestination};
   const box=$("posAllocBox");
   if(!box) return;
   const requestId=(window.positionMapRequestId||0)+1;
