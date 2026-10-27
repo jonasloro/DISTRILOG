@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import db
-from positions_module import total_allocated
+from positions_module import item_allocation_totals, deactivate_card_allocations
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -101,7 +101,8 @@ def ensure_operation(con: "db.Connection", card_id: int, sector: str) -> db.Row:
             raise HTTPException(400, f"Não há itens disponíveis em {sector.title()}.")
     elif card["current_sector"] != sector:
         raise HTTPException(400, f"O Card não está em {sector.title()}.")
-    if sector == "ETIQUETAGEM" and not source_subset:
+    is_test = str(card["original_type"] or "").strip().upper() == "TESTE" or "CARD DE TESTE" in str(card["source_notes"] or "").upper()
+    if sector == "ETIQUETAGEM" and not source_subset and not is_test:
         cadastro_total = int(con.execute("SELECT COUNT(*) n FROM processing_cadastro_tasks WHERE card_id=?",(card_id,)).fetchone()["n"] or 0)
         pending_labels = int(con.execute("""SELECT COUNT(*) n FROM processing_cadastro_tasks
           WHERE card_id=? AND (status<>'CONCLUIDO' OR COALESCE(labels_ready,0)=0)""",(card_id,)).fetchone()["n"] or 0)
@@ -142,9 +143,9 @@ def downstream_card_data(con: "db.Connection", card_id: int, sector: str) -> dic
     item_params = (op["id"], op["id"], card_id, op["id"]) if source_subset else (op["id"], op["id"], card_id)
     items = [dict(r) for r in con.execute(f"""
       SELECT i.id item_id,i.product,i.reference,i.sku,i.color,i.size,
-       COALESCE(NULLIF((SELECT piq.processed_qty FROM processing_item_quantities piq
+       COALESCE(i.real_qty,NULLIF((SELECT piq.processed_qty FROM processing_item_quantities piq
          JOIN processing_records pr ON pr.id=piq.processing_id WHERE pr.card_id=i.card_id AND piq.item_id=i.id
-         ORDER BY pr.id DESC LIMIT 1),0),i.real_qty,i.expected_qty) expected_qty,
+         ORDER BY pr.id DESC LIMIT 1),0),i.expected_qty) expected_qty,
        COALESCE((SELECT SUM(a.assigned_qty) FROM downstream_assignments a WHERE a.operation_id=? AND a.item_id=i.id),0) assigned_qty,
        COALESCE((SELECT SUM(a.completed_qty) FROM downstream_assignments a WHERE a.operation_id=? AND a.item_id=i.id),0) completed_qty
       FROM items i WHERE i.card_id=? {subset_filter}
@@ -172,6 +173,26 @@ def downstream_card_data(con: "db.Connection", card_id: int, sector: str) -> dic
     result.update({"items": items, "assignments": assignments,
                    "totals": {"expected": expected, "assigned": assigned, "completed": completed, "available": max(0, expected-assigned)}})
     return result
+
+
+def _operation_expected_by_item(con: "db.Connection", op: db.Row) -> dict[int,int]:
+    params: list[Any] = [int(op["card_id"])]
+    sql = "SELECT id,COALESCE(real_qty,expected_qty,0) qty FROM items WHERE card_id=?"
+    if bool(op["source_subset"]):
+        ids=[int(r["item_id"]) for r in con.execute(
+            "SELECT item_id FROM downstream_operation_items WHERE operation_id=? ORDER BY item_id",(int(op["id"]),)).fetchall()]
+        if not ids:
+            return {}
+        sql += " AND id IN (" + ",".join("?" for _ in ids) + ")"
+        params.extend(ids)
+    rows=con.execute(sql+" ORDER BY id",params).fetchall()
+    return {int(r["id"]):int(r["qty"] or 0) for r in rows}
+
+
+def _missing_allocations(setor: str, card_id: int, expected: dict[int,int]) -> dict[int,int]:
+    allocated=item_allocation_totals(card_id,setor)
+    return {iid:max(0,qty-int(allocated.get(iid,0))) for iid,qty in expected.items()
+            if int(allocated.get(iid,0)) < qty}
 
 
 @router.get("/downstream/users")
@@ -224,8 +245,11 @@ async def claim(operation_id: int, request: Request):
         processed = con.execute("""SELECT piq.processed_qty FROM processing_item_quantities piq
           JOIN processing_records pr ON pr.id=piq.processing_id WHERE pr.card_id=? AND piq.item_id=?
           ORDER BY pr.id DESC LIMIT 1""", (op["card_id"], item_id)).fetchone()
-        expected = int(processed["processed_qty"] or 0) if processed else 0
-        if expected <= 0: expected = int(item["real_qty"] if item["real_qty"] is not None else item["expected_qty"] or 0)
+        if item["real_qty"] is not None:
+            expected = int(item["real_qty"] or 0)
+        else:
+            expected = int(processed["processed_qty"] or 0) if processed else 0
+            if expected <= 0: expected = int(item["expected_qty"] or 0)
         if qty != expected: con.close(); raise HTTPException(400, f"Grade é assumida por tamanho completo ({expected} peças).")
     else:
         item_id = None
@@ -277,8 +301,9 @@ async def labeling_final_check(operation_id: int, request: Request):
     try:
         con.execute("BEGIN"); op=con.execute("SELECT * FROM downstream_operations WHERE id=?",(operation_id,)).fetchone()
         if not op or op["sector"]!="ETIQUETAGEM": raise HTTPException(404,"Operação de Etiquetagem não encontrada.")
-        actor=user(con,uid,"ETIQUETAGEM"); data=downstream_card_data(con,int(op["card_id"]),"ETIQUETAGEM")
-        expected={int(x["item_id"]):int(x["expected_qty"] or 0) for x in data["items"]}; seen=set(); divergences=[]
+        if op["status"]!="ABERTO": raise HTTPException(409,"A Etiquetagem já foi concluída.")
+        actor=user(con,uid,"ETIQUETAGEM")
+        expected=_operation_expected_by_item(con,op); seen=set(); divergences=[]
         for value in supplied:
             try: iid=int(value.get("item_id")); qty=int(value.get("counted_qty"))
             except (TypeError,ValueError,AttributeError): raise HTTPException(400,"Contagem inválida.") from None
@@ -308,8 +333,9 @@ async def storage_blind_check(operation_id: int, request: Request):
         con.execute("BEGIN")
         op=con.execute("SELECT * FROM downstream_operations WHERE id=?",(operation_id,)).fetchone()
         if not op or op["sector"]!="ESTOCAGEM": raise HTTPException(404,"Operação de Estocagem não encontrada.")
-        actor=user(con,uid,"ESTOCAGEM"); data=downstream_card_data(con,int(op["card_id"]),"ESTOCAGEM")
-        expected={int(x["item_id"]):int(x["expected_qty"] or 0) for x in data["items"]}; seen=set(); divergences=[]
+        if op["status"]!="ABERTO": raise HTTPException(409,"A Estocagem já foi concluída.")
+        actor=user(con,uid,"ESTOCAGEM")
+        expected=_operation_expected_by_item(con,op); seen=set(); divergences=[]
         for value in supplied:
             try: iid=int(value.get("item_id")); qty=int(value.get("counted_qty"))
             except (TypeError,ValueError,AttributeError): raise HTTPException(400,"Contagem inválida.") from None
@@ -335,25 +361,23 @@ async def storage_blind_check(operation_id: int, request: Request):
 async def complete(operation_id: int, request: Request):
     p=await request.json(); uid=int(p.get("user_id") or 0); con=db_connect(); op=con.execute("SELECT * FROM downstream_operations WHERE id=?",(operation_id,)).fetchone()
     if not op: con.close(); raise HTTPException(404,"Operação não encontrada.")
+    if op["status"]!="ABERTO": con.close(); raise HTTPException(409,"Esta operação já foi concluída.")
     actor=user(con,uid,op["sector"]); data=downstream_card_data(con,op["card_id"],op["sector"])
+    expected_map=_operation_expected_by_item(con,op)
+    item_ids=list(expected_map)
+    if not item_ids: con.close(); raise HTTPException(400,f"A {op['sector'].title()} não possui itens para conferir.")
+    missing_ec=_missing_allocations("EC",int(op["card_id"]),expected_map)
+    if missing_ec:
+        con.close(); raise HTTPException(409,f"Antes de concluir, enderece toda a mercadoria em EC. Restam {sum(missing_ec.values())} peça(s) sem endereço.")
+    marks=",".join("?" for _ in item_ids)
     if op["sector"]=="ETIQUETAGEM":
-        required_ec=sum(int(x["expected_qty"] or 0) for x in data["items"])
-        allocated_ec=int(total_allocated("EC",int(op["card_id"])) or 0)
-        if allocated_ec < required_ec: con.close(); raise HTTPException(409,f"Antes de concluir a Etiquetagem, enderece toda a mercadoria em EC. Alocado: {allocated_ec}; necessário: {required_ec}.")
-        item_ids=[int(x["item_id"]) for x in data["items"]]
-        if not item_ids: con.close(); raise HTTPException(400,"A Etiquetagem não possui itens para conferir.")
-        marks=",".join("?" for _ in item_ids)
         matched=int(con.execute(f"""SELECT COUNT(*) n FROM labeling_final_checks s WHERE s.operation_id=? AND s.item_id IN ({marks}) AND s.matched=1
           AND s.id=(SELECT MAX(s2.id) FROM labeling_final_checks s2 WHERE s2.operation_id=s.operation_id AND s2.item_id=s.item_id)""",(operation_id,*item_ids)).fetchone()["n"] or 0)
         if matched!=len(item_ids): con.close(); raise HTTPException(409,"Conclua a conferência final da Etiquetagem antes de enviar para Estocagem.")
     elif op["sector"]=="ESTOCAGEM":
-        item_ids=[int(x["item_id"]) for x in data["items"]]
-        if not item_ids: con.close(); raise HTTPException(400,"A Estocagem não possui itens para conferir.")
-        marks=",".join("?" for _ in item_ids)
         matched=int(con.execute(f"""SELECT COUNT(*) n FROM storage_blind_checks s WHERE s.operation_id=? AND s.item_id IN ({marks}) AND s.matched=1
           AND s.id=(SELECT MAX(s2.id) FROM storage_blind_checks s2 WHERE s2.operation_id=s.operation_id AND s2.item_id=s.item_id)""",(operation_id,*item_ids)).fetchone()["n"] or 0)
         if matched!=len(item_ids): con.close(); raise HTTPException(409,"Conclua a conferência cega da Estocagem antes de finalizar.")
-    elif data["totals"]["expected"] <= 0 or data["totals"]["completed"] != data["totals"]["expected"]: con.close(); raise HTTPException(400,"Conclua toda a quantidade antes de finalizar o setor.")
     unfinished = con.execute("SELECT COUNT(*) FROM downstream_assignments WHERE operation_id=? AND timer_state!='FINALIZADA'", (operation_id,)).fetchone()[0]
     if unfinished: con.close(); raise HTTPException(400,"Finalize o cronômetro de todas as atribuições antes de concluir o setor.")
     nxt="ESTOCAGEM" if op["sector"]=="ETIQUETAGEM" else "ESTOCAGEM"; status="AGUARDANDO_ESTOCAGEM" if op["sector"]=="ETIQUETAGEM" else "FINALIZADO"
@@ -378,6 +402,9 @@ async def complete(operation_id: int, request: Request):
         con.execute("UPDATE cards SET updated_at=? WHERE id=?", (now(), op["card_id"]))
     else:
         con.execute("UPDATE cards SET current_sector=?,status=?,updated_at=? WHERE id=?",(nxt,status,now(),op["card_id"]))
+    moved_item_ids = [int(r["item_id"]) for r in con.execute(
+        "SELECT item_id FROM downstream_operation_items WHERE operation_id=?",(operation_id,)).fetchall()] if op["source_subset"] else None
+    deactivate_card_allocations(int(op["card_id"]),("ET",),moved_item_ids)
     if op["sector"] == "ESTOCAGEM":
         from processing_flow_module import ensure_storage_entry
         ensure_storage_entry(con,int(op["card_id"]),int(operation_id))
