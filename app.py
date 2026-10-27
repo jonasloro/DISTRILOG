@@ -39,8 +39,7 @@ import db
 from sample_math import proportional_allocation
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
-from collections import defaultdict
-from threading import Lock
+from login_guard import reserve_login_attempt, clear_successful_account
 from supabase_module import pg_connect, verificar_login_supabase, seed_usuarios_supabase, change_password_supabase, create_operator_supabase, reset_operator_password_supabase, ALLOWED_ROLES
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -74,30 +73,6 @@ async def disable_stale_interface_cache(request: Request, call_next):
 _SESSION_COOKIE = "distrilog_session"
 _SESSION_TTL = 8 * 3600
 _PUBLIC_API = {"/api/login", "/api/auth/change-password"}
-_LOGIN_ATTEMPTS = defaultdict(list)
-_LOGIN_LOCK = Lock()
-_LOGIN_WINDOW_SECONDS = 600
-_LOGIN_MAX_FAILURES = 8
-
-def _check_login_throttle(request: Request, username: str) -> tuple[str, str]:
-    key = (str(request.client.host if request.client else "unknown"), username.strip().lower()[:100])
-    now = clock_time.monotonic()
-    with _LOGIN_LOCK:
-        if len(_LOGIN_ATTEMPTS) > 10000:
-            _LOGIN_ATTEMPTS.clear()
-        attempts = [t for t in _LOGIN_ATTEMPTS[key] if now - t < _LOGIN_WINDOW_SECONDS]
-        _LOGIN_ATTEMPTS[key] = attempts
-        if len(attempts) >= _LOGIN_MAX_FAILURES:
-            raise HTTPException(429, "Muitas tentativas. Tente novamente mais tarde.")
-    return key
-
-def _login_attempt_result(key: tuple[str, str], success: bool) -> None:
-    with _LOGIN_LOCK:
-        if success:
-            _LOGIN_ATTEMPTS.pop(key, None)
-        else:
-            _LOGIN_ATTEMPTS[key].append(clock_time.monotonic())
-
 def _session_secret():
     secret = os.getenv("AUTH_SESSION_SECRET", "")
     if len(secret) < 32:
@@ -1426,8 +1401,13 @@ def index(request: Request):
 @app.post("/api/login")
 async def login(request: Request):
     data = await request.json()
+    if not isinstance(data, dict):
+        raise HTTPException(400, "Credenciais inválidas.")
     usuario = data.get("username", "")
     senha = data.get("password", "")
+    if (not isinstance(usuario, str) or not isinstance(senha, str)
+            or not 1 <= len(usuario.strip()) <= 40 or not 1 <= len(senha) <= 256):
+        raise HTTPException(400, "Informe usuário e senha válidos.")
 
     if not os.getenv("SUPABASE_DATABASE_URL"):
         raise HTTPException(503, "Configure SUPABASE_DATABASE_URL nas variáveis do Render para habilitar o login seguro.")
@@ -1440,16 +1420,16 @@ async def login(request: Request):
     # texto puro). O id/nome/papel que o resto do app usa (tarefas, cards,
     # etc.) continua vindo do SQLite local, pra não quebrar nada que já
     # depende desse id — os dois ficam sincronizados pelo username.
-    key = _check_login_throttle(request, str(usuario))
+    reserve_login_attempt(usuario, request.client.host if request.client else "unknown")
     try:
         confirmado = verificar_login_supabase(usuario, senha)
     except Exception:
         import logging
         logging.exception("Falha no serviço de autenticação")
         raise HTTPException(503, "Autenticação temporariamente indisponível.") from None
-    _login_attempt_result(key, bool(confirmado))
     if not confirmado:
         raise HTTPException(401, "Usuário ou senha inválidos.")
+    clear_successful_account(usuario)
 
     con = db_connect()
     user = con.execute(
@@ -1470,14 +1450,15 @@ async def login(request: Request):
 @app.post("/api/auth/change-password")
 async def change_login_password(request: Request):
     payload=await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(400, "Requisição inválida.")
     username=str(payload.get("username") or "")
-    key=_check_login_throttle(request, username)
+    reserve_login_attempt(username, request.client.host if request.client else "unknown")
     try:
         change_password_supabase(username,str(payload.get("current_password") or ""),str(payload.get("new_password") or ""))
     except ValueError as exc:
-        _login_attempt_result(key, False)
         raise HTTPException(400,str(exc)) from None
-    _login_attempt_result(key, True)
+    clear_successful_account(username)
     con=db_connect()
     try:
         con.execute("UPDATE users SET session_revoked_after_ns=? WHERE username=?", (clock_time.time_ns(),username))
