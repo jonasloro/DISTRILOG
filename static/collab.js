@@ -9,61 +9,161 @@ const KIND_LABEL = { COMPROMISSO: "Compromisso", REUNIAO: "Reunião", PRAZO: "Pr
 /* ------------------------------ CHAT ------------------------------ */
 async function renderChat() {
   stopChatTimer();
-  chatState.users = (await api("/api/users")).filter((u) => u.id !== currentUser.id);
-  chatState.lastId = 0;
+  chatState.generation = (chatState.generation || 0) + 1;
+  chatState.polling = false;
+  try {
+    chatState.users = (await api("/api/users")).filter(u => u.id !== currentUser.id);
+  } catch (error) {
+    $("mainContent").innerHTML = '<div class="notice error">Não foi possível carregar os participantes das conversas: ' +
+      esc(error.message || "Falha de conexão") + '</div><button class="secondary" onclick="renderChat()">Tentar novamente</button>';
+    return;
+  }
+  if (currentView !== "chat") return;
   $("mainContent").innerHTML = `<div class="collab-chat">
-    <aside class="collab-side" id="chatSide"></aside>
+    <aside class="collab-side" id="chatSide" aria-label="Canais e conversas"></aside>
     <section class="collab-main"><header id="chatTitle" class="collab-title"></header>
-      <div id="chatBox" class="collab-msgs"></div>
-      <div class="collab-input"><input id="chatInput" maxlength="2000" placeholder="Escreva uma mensagem e tecle Enter" onkeydown="if(event.key==='Enter')sendChat()"><button class="primary" onclick="sendChat()">Enviar</button></div>
+      <div id="chatBox" class="collab-msgs" aria-live="polite"></div>
+      <div id="chatLoadError" class="collab-load-error hidden" role="alert"></div>
+      <div class="collab-input"><input id="chatInput" maxlength="2000" placeholder="Escreva uma mensagem e tecle Enter" onkeydown="if(event.key==='Enter' && !event.repeat){event.preventDefault();sendChat();}">
+      <button id="chatSendButton" class="primary" onclick="sendChat()">Enviar</button></div>
     </section></div>`;
   await openChannel(chatState.channel);
-  chatState.timer = setInterval(() => { if (!$("chatBox")) return stopChatTimer(); pollChat(); }, 4000);
+  if (currentView !== "chat") return;
+  chatState.timer = setInterval(() => {
+    if (currentView !== "chat" || !$("chatBox")) return stopChatTimer();
+    pollChat(false);
+  }, 4000);
 }
-function stopChatTimer() { if (chatState.timer) clearInterval(chatState.timer); chatState.timer = null; }
-function chatChannelTitle(ch) { return ch === "geral" ? "Geral — toda a equipe" : (chatState.users.find((u) => "dm:" + u.id === ch)?.name || "Conversa"); }
+function stopChatTimer() {
+  if (chatState.timer) clearInterval(chatState.timer);
+  chatState.timer = null;
+}
+function chatChannelTitle(ch) {
+  return ch === "geral" ? "Geral — toda a equipe" :
+    (chatState.users.find(u => "dm:" + u.id === ch)?.name || "Conversa");
+}
 async function renderChatSide() {
-  const unread = await api(`/api/chat/unread?user_id=${currentUser.id}`).catch(() => ({}));
-  const dmCount = (uid) => { const a = Math.min(uid, currentUser.id), b = Math.max(uid, currentUser.id); return unread[`dm:${a}:${b}`] || 0; };
-  const item = (ch, label, n) => `<button class="collab-contact ${chatState.channel === ch ? "active" : ""}" onclick="openChannel('${ch}')"><span>${esc(label)}</span>${n ? `<b class="collab-badge">${n}</b>` : ""}</button>`;
-  $("chatSide").innerHTML = item("geral", "# Geral", unread.geral || 0) + '<div class="collab-sep">Conversas diretas</div>' + chatState.users.map((u) => item("dm:" + u.id, u.name, dmCount(u.id))).join("");
+  if (!$("chatSide")) return;
+  let unread = {};
+  try {
+    unread = await api(`/api/chat/unread?user_id=${currentUser.id}`);
+  } catch (error) {
+    const warning = $("chatLoadError");
+    if (warning && chatState.channel) {
+      warning.textContent = "Não foi possível atualizar os avisos de novas mensagens.";
+      warning.classList.remove("hidden");
+    }
+  }
+  if (!$("chatSide") || currentView !== "chat") return;
+  const dmCount = (uid) => {
+    const a = Math.min(uid, currentUser.id), b = Math.max(uid, currentUser.id);
+    return Number(unread[`dm:${a}:${b}`] || 0);
+  };
+  const item = (ch, label, n) =>
+    `<button class="collab-contact ${chatState.channel===ch?"active":""}" onclick="openChannel('${ch}')">` +
+      `<span>${esc(label)}</span>${n?`<b class="collab-badge">${n}</b>`:""}</button>`;
+  $("chatSide").innerHTML = item("geral", "# Geral", Number(unread.geral||0)) +
+    '<div class="collab-sep">Conversas diretas</div>' +
+    chatState.users.map(u => item("dm:" + u.id, u.name, dmCount(u.id))).join("");
 }
 async function openChannel(ch) {
-  chatState.channel = ch; chatState.lastId = 0;
-  $("chatTitle").textContent = chatChannelTitle(ch); $("chatBox").innerHTML = "";
-  await pollChat(true); renderChatSide(); $("chatInput")?.focus();
-}
-async function pollChat(initial) {
+  const isGeneral = ch === "geral";
+  const recipient = !isGeneral ? Number(String(ch).slice(3)) : null;
+  if (!isGeneral && (!Number.isSafeInteger(recipient) || !chatState.users.some(u=>u.id===recipient))) {
+    toast("Destinatário da conversa não encontrado.");
+    return;
+  }
+  chatState.channel = ch;
+  chatState.lastId = 0;
+  chatState.polling = false;
+  chatState.generation = (chatState.generation || 0) + 1;
   if (!$("chatBox")) return;
-  const ch = chatState.channel;
-  const msgs = await api(`/api/chat/messages?user_id=${currentUser.id}&channel=${encodeURIComponent(ch)}&after_id=${chatState.lastId}`).catch(() => []);
-  if (ch !== chatState.channel) return;
-  if (msgs.length) {
-    const box = $("chatBox"), atEnd = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
-    box.insertAdjacentHTML("beforeend", msgs.map((m) => `<div class="collab-msg ${m.sender_id === currentUser.id ? "mine" : ""}"><small>${esc(m.sender_name)} · ${fmtDateTime(m.created_at)}</small><div>${esc(m.body)}</div></div>`).join(""));
-    chatState.lastId = msgs[msgs.length - 1].id;
-    if (atEnd || initial) box.scrollTop = box.scrollHeight;
-    if (!initial) renderChatSide();
-  } else if (initial && !$("chatBox").children.length) {
-    $("chatBox").innerHTML = '<div class="collab-empty">Nenhuma mensagem ainda. Comece a conversa!</div>';
+  $("chatTitle").textContent = chatChannelTitle(ch);
+  $("chatBox").innerHTML = '<div class="collab-empty">Carregando mensagens…</div>';
+  $("chatLoadError")?.classList.add("hidden");
+  await pollChat(true);
+  if (currentView === "chat" && chatState.channel === ch) {
+    await renderChatSide();
+    $("chatInput")?.focus();
+  }
+}
+async function pollChat(initial=false) {
+  if (!$("chatBox") || chatState.polling || currentView !== "chat") return;
+  const channel = chatState.channel;
+  const generation = chatState.generation;
+  const afterId = chatState.lastId;
+  chatState.polling = true;
+  try {
+    const msgs = await api(`/api/chat/messages?user_id=${currentUser.id}&channel=${encodeURIComponent(channel)}&after_id=${afterId}`);
+    if (generation !== chatState.generation || channel !== chatState.channel || !$("chatBox")) return;
+    if (!Array.isArray(msgs)) throw new Error("Resposta inválida ao consultar mensagens.");
+    const unique = msgs.filter(m => Number(m.id) > chatState.lastId);
+    const box = $("chatBox");
+    if (unique.length) {
+      const atEnd = box.scrollHeight - box.scrollTop - box.clientHeight < 100;
+      box.querySelector(".collab-empty")?.remove();
+      box.insertAdjacentHTML("beforeend", unique.map(m =>
+        `<div class="collab-msg ${Number(m.sender_id)===Number(currentUser.id)?"mine":""}"><small>${esc(m.sender_name)} · ${fmtDateTime(m.created_at)}</small><div>${esc(m.body)}</div></div>`
+      ).join(""));
+      chatState.lastId = Math.max(chatState.lastId, ...unique.map(m=>Number(m.id)));
+      if (atEnd || initial) box.scrollTop = box.scrollHeight;
+      if (!initial) void renderChatSide();
+    } else if (initial && !box.querySelector(".collab-msg")) {
+      box.innerHTML = '<div class="collab-empty">Nenhuma mensagem ainda. Comece a conversa!</div>';
+    }
+    $("chatLoadError")?.classList.add("hidden");
+  } catch (error) {
+    if (generation !== chatState.generation || !$("chatBox")) return;
+    const banner = $("chatLoadError");
+    if (banner) {
+      banner.textContent = "Mensagens indisponíveis: " +
+        (error.message || "Falha de conexão") + ". A conversa será atualizada novamente.";
+      banner.classList.remove("hidden");
+    }
+    if (initial) $("chatBox").innerHTML = '<div class="collab-empty">Não foi possível carregar a conversa. A atualização automática tentará novamente.</div>';
+  } finally {
+    if (generation === chatState.generation) chatState.polling = false;
   }
 }
 async function sendChat() {
-  const input = $("chatInput"), body = input.value.trim();
+  const input = $("chatInput"), button = $("chatSendButton");
+  if (!input || chatState.sending || currentView !== "chat") return;
+  const body = input.value.trim();
   if (!body) return;
+  chatState.sending = true;
+  if (button) button.disabled = true;
+  const channel = chatState.channel;
   try {
-    await api("/api/chat/messages", { method: "POST", body: JSON.stringify({ user_id: currentUser.id, user_name: currentUser.name, channel: chatState.channel, body }) });
-    input.value = ""; $("chatBox").querySelector(".collab-empty")?.remove(); await pollChat();
-  } catch (e) { toast(e.message); }
+    await api("/api/chat/messages", {
+      method: "POST",
+      body: JSON.stringify({user_id:currentUser.id, channel, body})
+    });
+    if (chatState.channel === channel && $("chatInput") === input) {
+      input.value = "";
+      $("chatBox")?.querySelector(".collab-empty")?.remove();
+      // Se o polling atual estiver pendente, o próximo ciclo trará a mensagem.
+      if (!chatState.polling) await pollChat(false);
+    }
+  } catch (error) {
+    toast("Não foi possível enviar: " + (error.message || "Falha na conexão."));
+  } finally {
+    chatState.sending = false;
+    if (button) button.disabled = false;
+  }
 }
 async function refreshChatBadge() {
   if (!currentUser) return;
-  const un = await api(`/api/chat/unread?user_id=${currentUser.id}`).catch(() => null);
-  if (!un) return;
-  const n = Object.values(un).reduce((a, b) => a + b, 0), el = $("chatNavBadge");
-  if (el) { el.textContent = n; el.style.display = n ? "inline-block" : "none"; }
+  try {
+    const un = await api(`/api/chat/unread?user_id=${currentUser.id}`);
+    const n = Object.values(un).reduce((a,b)=>a+Number(b||0),0);
+    const el = $("chatNavBadge");
+    if (el) {el.textContent = n;el.style.display=n?"inline-block":"none";}
+  } catch (_) {
+    // Falhas pontuais não alteram silenciosamente o contador anterior.
+  }
 }
-setInterval(refreshChatBadge, 20000); setTimeout(refreshChatBadge, 3000);
+setInterval(refreshChatBadge, 20000);
+setTimeout(refreshChatBadge, 3000);
 
 /* ---------------------------- CALENDÁRIO --------------------------- */
 async function renderCalendar() {
