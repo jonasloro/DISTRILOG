@@ -2300,7 +2300,7 @@ async function renderDownstreamTab(sector) {
   const grade=op.purchase_mode==="GRADE",open=op.status==="ABERTO";
   $("cardTab").innerHTML=`<div class="panel-body downstream-panel">
     <div class="notice success-box"><b>${sector==="ETIQUETAGEM"?"Etiquetagem":"Estocagem"} • ${grade?"Grade":"Saldo"}</b><br>${grade?"Escolha e assuma somente um tamanho por vez. Tamanhos já assumidos ficam indisponíveis.":"Saldo é dividido por quantidade geral, sem separar tamanhos."}</div>
-    <div class="summary-grid compact-summary"><div class="summary-box"><span>Prevista</span><strong>${op.totals.expected}</strong></div><div class="summary-box"><span>Assumida</span><strong>${op.totals.assigned}</strong></div><div class="summary-box"><span>Concluída</span><strong>${op.totals.completed}</strong></div><div class="summary-box"><span>Disponível</span><strong>${op.totals.available}</strong></div></div>
+    <div class="notice"><b>Execução cega</b><br>As quantidades esperadas e o saldo da grade ficam ocultos durante a atividade. A conferência numérica acontece somente no encerramento.</div>
     ${open&&allowed?(grade?downstreamGradePicker(op,sector):downstreamSaldoPicker(op,sector)):""}
     <h3 class="section-heading">Em execução</h3>${op.assignments.length?op.assignments.map(a=>downstreamAssignmentHtml(a,sector,allowed&&open)).join(""):'<div class="notice">Nenhum material assumido.</div>'}
     <div class="actions">${sector==="ESTOCAGEM"?`<button class="success" ${open&&allowed?"":"disabled"} onclick="openStorageBlindCheck(${op.id})">Conferir e concluir Estocagem</button>`:`<button class="success" ${op.totals.completed===op.totals.expected&&open&&allowed?"":"disabled"} onclick="completeDownstream(${op.id},'ETIQUETAGEM')">Concluir Etiquetagem</button>`}</div>
