@@ -1939,8 +1939,11 @@ async function renderProcessingTab() {
   const sector=String(cardData.current_sector||"").toUpperCase();
   const history=cardData.history||[];
   const hasEvent=(...types)=>history.some(e=>types.includes(e.event_type));
-  let cadastroTasks=[];
+  let cadastroTasks=[],downstreamDivergence={operation:null,pending:[],awaiting_recount:[]};
   try{cadastroTasks=await api("/api/processing/cadastro/card/"+cardData.id+"?user_id="+currentUser.id);}catch(_error){}
+  if(["processamento","supervisor","admin"].includes(currentUser.role)){
+    try{downstreamDivergence=await api("/api/processing/downstream-divergence/card/"+cardData.id+"?user_id="+currentUser.id);}catch(_error){}
+  }
   const triageDone=hasEvent("TRIAGEM_CONCLUIDA") || ["ETIQUETAGEM","ESTOCAGEM","FINALIZADO"].includes(sector);
   const cadastroDone=cadastroTasks.length>0&&cadastroTasks.every(t=>t.status==="CONCLUIDO");
   const labelingDone=hasEvent("ETIQUETAGEM_CONCLUIDA","ETIQUETAGEM_CONFERENCIA_OK") || ["ESTOCAGEM","FINALIZADO"].includes(sector);
@@ -1957,7 +1960,32 @@ async function renderProcessingTab() {
   const qty=p?.totals||{};
   const responsible=[...history].reverse().find(e=>["TRIAGEM_INICIADA","CADASTRO_INICIADO","ETIQUETAGEM_INICIADA","ESTOCAGEM_INICIADA"].includes(e.event_type));
   const divergence=[...history].reverse().find(e=>String(e.event_type||"").includes("DIVERGENTE"));
-  $("cardTab").innerHTML='<div class="panel-body"><div class="notice"><b>Visão geral do Processamento</b><br>Esta aba acompanha o caminho do Card. As operações são realizadas nas etapas correspondentes do fluxo.</div><div class="summary-grid processing-summary">'+flow+'</div><h3 class="section-heading">Situação do Card</h3><div class="form-grid"><div class="field"><label>Setor atual</label><input class="readonly" readonly value="'+esc(cardData.current_sector||"—")+'"></div><div class="field"><label>Status</label><input class="readonly" readonly value="'+esc(cardData.status||"—")+'"></div><div class="field"><label>Tipo da compra</label><input class="readonly" readonly value="'+esc(cardData.purchase_mode==="GRADE"?"Grade":"Saldo")+'"></div><div class="field"><label>Quantidade prevista</label><input class="readonly" readonly value="'+Number(qty.expected??cardData.expected_total??0).toLocaleString("pt-BR")+'"></div>'+(responsible?'<div class="field"><label>Último responsável operacional</label><input class="readonly" readonly value="'+esc(responsible.user_name||responsible.description||"Registrado no histórico")+'"></div>':"")+'</div>'+(divergence?'<div class="notice warn"><b>Última divergência registrada</b><br>'+esc(divergence.description||"Existe uma conferência divergente pendente de verificação.")+'</div>':"")+'<div class="notice success-box"><b>Sem configuração paralela.</b><br>Triagem, Cadastro, Etiquetagem, Estocagem e Entrada mantêm suas próprias regras e responsáveis.</div></div>';
+  const correctionRows=(downstreamDivergence.pending||[]).map(row=>'<tr class="processing-divergence-row" data-item-id="'+Number(row.item_id)+'"><td><b>'+esc(row.reference||row.product||"—")+'</b></td><td>'+esc(row.color||"—")+'</td><td>'+esc(row.size||"—")+'</td><td>'+Number(row.counted_qty||0).toLocaleString("pt-BR")+'</td><td><input class="processing-corrected-qty" type="number" min="0" step="1" value="'+Number(row.current_qty||0)+'" required></td></tr>').join("");
+  const correctionPanel=downstreamDivergence.operation&&((downstreamDivergence.pending||[]).length||(downstreamDivergence.awaiting_recount||[]).length)
+    ? '<h3 class="section-heading">Divergência persistente · '+esc(downstreamDivergence.operation.sector||"")+'</h3>'+
+      ((downstreamDivergence.pending||[]).length
+        ? '<div class="notice warn"><b>Intervenção do Processamento necessária.</b><br>Essas linhas continuaram divergentes após a recontagem. Somente o Processamento pode confirmar a grade correta. Depois da correção, o setor deverá fazer uma nova conferência.</div><div class="table-wrap"><table class="compact-table"><thead><tr><th>Referência</th><th>Cor</th><th>Tamanho</th><th>Última contagem</th><th>Grade correta</th></tr></thead><tbody>'+correctionRows+'</tbody></table></div><div class="field"><label>Motivo da correção</label><textarea id="processingCorrectionReason" rows="2" placeholder="Explique por que a grade está sendo alterada"></textarea></div><div class="actions"><button class="warning" onclick="submitProcessingDivergenceCorrection('+Number(downstreamDivergence.operation.id)+')">Confirmar grade corrigida</button></div>'
+        : '')+
+      ((downstreamDivergence.awaiting_recount||[]).length
+        ? '<div class="notice success-box"><b>Grade corrigida pelo Processamento.</b><br>Aguardando nova conferência de '+esc(downstreamDivergence.operation.sector||"setor")+'.</div>'
+        : '')
+    : "";
+  $("cardTab").innerHTML='<div class="panel-body"><div class="notice"><b>Visão geral do Processamento</b><br>Esta aba acompanha o caminho do Card. As operações são realizadas nas etapas correspondentes do fluxo.</div><div class="summary-grid processing-summary">'+flow+'</div><h3 class="section-heading">Situação do Card</h3><div class="form-grid"><div class="field"><label>Setor atual</label><input class="readonly" readonly value="'+esc(cardData.current_sector||"—")+'"></div><div class="field"><label>Status</label><input class="readonly" readonly value="'+esc(cardData.status||"—")+'"></div><div class="field"><label>Tipo da compra</label><input class="readonly" readonly value="'+esc(cardData.purchase_mode==="GRADE"?"Grade":"Saldo")+'"></div><div class="field"><label>Quantidade prevista</label><input class="readonly" readonly value="'+Number(qty.expected??cardData.expected_total??0).toLocaleString("pt-BR")+'"></div>'+(responsible?'<div class="field"><label>Último responsável operacional</label><input class="readonly" readonly value="'+esc(responsible.user_name||responsible.description||"Registrado no histórico")+'"></div>':"")+'</div>'+(divergence?'<div class="notice warn"><b>Última divergência registrada</b><br>'+esc(divergence.description||"Existe uma conferência divergente pendente de verificação.")+'</div>':"")+correctionPanel+'<div class="notice success-box"><b>Sem configuração paralela.</b><br>Triagem, Cadastro, Etiquetagem, Estocagem e Entrada mantêm suas próprias regras e responsáveis.</div></div>';
+}
+async function submitProcessingDivergenceCorrection(operationId){
+  try{
+    const rows=[...document.querySelectorAll(".processing-divergence-row")];
+    const items=rows.map(row=>{
+      const input=row.querySelector(".processing-corrected-qty"),quantity=Number(input?.value);
+      if(!input||input.value===""||!Number.isSafeInteger(quantity)||quantity<0)throw new Error("Informe a grade correta de todas as linhas divergentes.");
+      return {item_id:Number(row.dataset.itemId),quantity};
+    });
+    const reason=$("processingCorrectionReason")?.value.trim()||"";
+    if(!reason)throw new Error("Informe o motivo da correção da grade.");
+    await api("/api/processing/downstream-divergence/"+operationId+"/correct",{method:"POST",body:JSON.stringify({user_id:currentUser.id,items,reason})});
+    toast("Grade corrigida. O setor deve fazer uma nova conferência.");
+    await renderProcessingTab();
+  }catch(error){toast(error.message);}
 }
 
 function processingSetupHtml(importedItems=[]) {
