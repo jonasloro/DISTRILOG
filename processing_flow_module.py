@@ -900,7 +900,7 @@ async def entry_confirm(entry_id: int,request: Request):
         if changed.rowcount!=1: raise HTTPException(409,"Esta Entrada foi confirmada por outra pessoa.")
         op=con.execute("SELECT source_subset FROM downstream_operations WHERE id=?",(int(entry["downstream_operation_id"]),)).fetchone()
         if op and not bool(op["source_subset"]):
-            card_changed=con.execute("""UPDATE cards SET status='FINALIZADO',updated_at=?
+            card_changed=con.execute("""UPDATE cards SET current_sector='FINALIZADO',status='FINALIZADO',updated_at=?
               WHERE id=? AND current_sector='PROCESSAMENTO' AND status='AGUARDANDO_ENTRADA'""",
               (stamp,int(entry["card_id"])))
             if card_changed.rowcount!=1:
