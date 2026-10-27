@@ -246,28 +246,18 @@ def allocate(card_id: int, payload: dict[str, Any]) -> dict[str, Any]:
     allocations = payload.get("allocations") or []
     if setor not in SECTOR_ZONES:
         raise HTTPException(400, "Setor inválido.")
-    # Do Processamento em diante, o destino físico é controlado pelo setor de origem.
-    # Triagem/Processamento -> ET; Etiquetagem -> EC. A validação é backend-side para
-    # impedir que a interface ou uma chamada manual contorne o fluxo.
-    try:
-        with _connection() as gate_con:
-            with gate_con.cursor() as gate_cur:
-                gate_cur.execute("SELECT current_sector FROM cards WHERE id=%s",(card_id,))
-                gate_card=gate_cur.fetchone()
-        current_sector=str((gate_card or {}).get("current_sector") or "").upper()
-    except Exception:
-        current_sector=""
-    if current_sector=="PROCESSAMENTO" and setor!="ET":
-        raise HTTPException(409,"Na saída da Triagem, a mercadoria só pode ser endereçada em ET.")
-    if current_sector=="ETIQUETAGEM" and setor!="EC":
-        raise HTTPException(409,"Na saída da Etiquetagem, a mercadoria só pode ser endereçada em EC.")
     if not allocations:
         raise HTTPException(400, "Informe ao menos uma posição e quantidade.")
 
     try:
         with pg_connect() as con:
             with con.cursor() as cur:
-                _card_or_404(cur, card_id, lock=True)
+                card = _card_or_404(cur, card_id, lock=True)
+                current_sector = str(card.get("current_sector") or "").upper()
+                if current_sector == "PROCESSAMENTO" and setor != "ET":
+                    raise HTTPException(409,"Na saída da Triagem, a mercadoria só pode ser endereçada em ET.")
+                if current_sector in {"ETIQUETAGEM","ESTOCAGEM"} and setor != "EC":
+                    raise HTTPException(409,"A partir da Etiquetagem/Estocagem, a mercadoria só pode ser endereçada em EC.")
                 receiving_id = int(payload.get("receiving_id") or 0)
                 if receiving_id:
                     cur.execute(
@@ -668,6 +658,29 @@ def total_allocated(setor: str, card_id: int) -> int:
                 return int(cur.fetchone()["t"] or 0)
     except RuntimeError:
         return 0
+
+
+def deactivate_card_allocations(card_id: int, sectors: list[str] | tuple[str, ...], item_ids: Optional[list[int]] = None) -> int:
+    """Desativa endereços de origem após uma movimentação física concluída, preservando a trilha histórica."""
+    normalized = [str(s or "").upper() for s in sectors if str(s or "").strip()]
+    if not normalized:
+        return 0
+    with pg_connect() as con:
+        with con.cursor() as cur:
+            sql = """UPDATE distrilog.card_allocations
+                     SET active=FALSE
+                     WHERE card_id=%s AND setor = ANY(%s) AND active IS TRUE"""
+            params: list[Any] = [card_id, normalized]
+            if item_ids is not None:
+                clean_ids = [int(i) for i in item_ids if int(i) > 0]
+                if not clean_ids:
+                    return 0
+                sql += " AND item_id = ANY(%s)"
+                params.append(clean_ids)
+            cur.execute(sql, tuple(params))
+            changed = int(cur.rowcount or 0)
+        con.commit()
+    return changed
 
 
 def release_card_allocations(card_id: int, keep_quality_qty: int = 0) -> int:
