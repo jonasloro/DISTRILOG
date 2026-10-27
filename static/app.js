@@ -2410,12 +2410,9 @@ async function submitStorageBlindCheck(opId){
       toast(result.detail);return;
     }
     rows.forEach(row=>row.querySelector(".storage-blind-count").disabled=true);
-    const byId=new Map((op.items||[]).map(i=>[Number(i.item_id),i]));
-    const allocItems=items.map(x=>{const src=byId.get(Number(x.item_id))||{};return {id:Number(x.item_id),product:src.product||src.reference||"",reference:src.reference||"",sku:src.sku||"",color:src.color||"",size:src.size||"",expected_qty:Number(x.counted_qty),source_stage:"ESTOCAGEM"};});
     if($("storageCheckActions"))$("storageCheckActions").classList.add("hidden");
     const host=$("storageAllocationPhase");
-    host.innerHTML='<h3 class="section-heading">Endereçamento final — EC</h3><div class="notice"><b>Contagem validada.</b> Confirme o endereço EC. Se o material já veio endereçado da Etiquetagem, basta conferir e concluir.</div><div id="posAllocBox" class="notice">Carregando posições EC...</div><div class="actions"><button class="success" onclick="finalizeStorageAfterAllocation('+opId+')">Concluir Estocagem</button></div>';
-    await loadPositionAllocator(cardData.id,"EC",false,0,allocItems,true);
+    host.innerHTML='<h3 class="section-heading">Conferência concluída</h3><div class="notice"><b>Contagem validada.</b> A Estocagem pode ser finalizada sem uma nova alocação. Os endereços e caixas pretas já registrados permanecem preservados.</div><div class="actions"><button class="success" onclick="finalizeStorageAfterAllocation('+opId+')">Concluir Estocagem</button></div>';
   }catch(e){toast(e.message);}
 }
 async function finalizeStorageAfterAllocation(opId){
