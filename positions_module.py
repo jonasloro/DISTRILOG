@@ -408,10 +408,12 @@ def allocate(card_id: int, payload: dict[str, Any]) -> dict[str, Any]:
                         color_items=cur.fetchall()
                         if not color_items: raise HTTPException(400,"A cor selecionada não pertence a este Card.")
                         boxes=int(a.get("box_count") or 0)
+                        first_color_item = True
                         for color_item in color_items:
                             piece_qty=int(color_item["real_qty"] if color_item.get("real_qty") is not None else color_item["expected_qty"] or 0)
                             if piece_qty>0:
-                                expanded_allocations.append({"address":a.get("address"),"quantidade":piece_qty,"item_id":int(color_item["id"]),"box_count":boxes if not expanded_allocations or expanded_allocations[-1].get("_color")!=color else 0,"_color":color})
+                                expanded_allocations.append({"address":a.get("address"),"quantidade":piece_qty,"item_id":int(color_item["id"]),"box_count":boxes if first_color_item else 0,"_color":color})
+                                first_color_item = False
                     else:
                         expanded_allocations.append(a)
                 for a in expanded_allocations:
