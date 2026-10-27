@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import json
+import uuid
 from datetime import date, datetime, time as dtime
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import APIRouter, FastAPI, File, HTTPException, UploadFile
+from fastapi import APIRouter, FastAPI, File, HTTPException, UploadFile, Request
 from openpyxl import load_workbook
 
 from supabase_module import pg_connect
@@ -14,6 +15,24 @@ BASE_DIR = Path(__file__).resolve().parent
 router = APIRouter(prefix="/api/production", tags=["Produção"])
 
 SECTORS = ["Triagem", "Qualidade", "Processamento", "Etiquetagem", "Estocagem", "Expedição"]
+
+_PRODUCTION_SECTOR_ROLES = {
+    "Triagem": {"processamento"},
+    "Qualidade": {"qualidade"},
+    "Processamento": {"processamento"},
+    "Etiquetagem": {"etiquetagem"},
+    "Estocagem": {"estocagem"},
+    "Expedição": {"expedicao"},
+}
+
+
+def _authorize(request: Request, sector: str, management_only: bool = False) -> None:
+    allowed = {"admin", "supervisor"}
+    if not management_only:
+        allowed.update(_PRODUCTION_SECTOR_ROLES.get(sector, set()))
+    if getattr(request.state, "auth_role", None) not in allowed:
+        raise HTTPException(403, "Seu setor não possui permissão para esta operação de produção.")
+
 
 QTY_HEADERS = {"quantidade", "quantidade feita", "quantidade total", "quantidade de volumes"}
 RESP_HEADERS = {"responsavel"}
@@ -72,11 +91,12 @@ def _row(r: dict[str, Any]) -> dict[str, Any]:
 
 
 @router.post("/entries")
-def start_entry(payload: dict[str, Any]) -> dict[str, Any]:
+def start_entry(payload: dict[str, Any], request: Request) -> dict[str, Any]:
     sector = str(payload.get("sector") or "").strip()
     responsavel = str(payload.get("responsavel") or "").strip()
     if sector not in SECTORS:
         raise HTTPException(400, "Setor inválido.")
+    _authorize(request, sector)
     if not responsavel:
         raise HTTPException(400, "Informe o responsável.")
     now = iso_now()
@@ -105,10 +125,11 @@ def _get_entry(cur, entry_id: int) -> dict[str, Any]:
 
 
 @router.post("/entries/{entry_id}/pause")
-def pause_entry(entry_id: int) -> dict[str, Any]:
+def pause_entry(entry_id: int, request: Request) -> dict[str, Any]:
     with pg_connect() as con:
         with con.cursor() as cur:
             entry = _get_entry(cur, entry_id)
+            _authorize(request, entry["sector"])
             if entry["status"] != "EM_ANDAMENTO":
                 raise HTTPException(400, "Só é possível pausar uma tarefa em andamento.")
             cur.execute(
@@ -121,10 +142,11 @@ def pause_entry(entry_id: int) -> dict[str, Any]:
 
 
 @router.post("/entries/{entry_id}/resume")
-def resume_entry(entry_id: int) -> dict[str, Any]:
+def resume_entry(entry_id: int, request: Request) -> dict[str, Any]:
     with pg_connect() as con:
         with con.cursor() as cur:
             entry = _get_entry(cur, entry_id)
+            _authorize(request, entry["sector"])
             if entry["status"] != "PAUSADO":
                 raise HTTPException(400, "Essa tarefa não está pausada.")
             elapsed = (datetime.fromisoformat(iso_now()) - datetime.fromisoformat(entry["pause_started_at"])).total_seconds()
@@ -139,11 +161,12 @@ def resume_entry(entry_id: int) -> dict[str, Any]:
 
 
 @router.post("/entries/{entry_id}/complete")
-def complete_entry(entry_id: int, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+def complete_entry(entry_id: int, request: Request, payload: dict[str, Any] | None = None) -> dict[str, Any]:
     payload = payload or {}
     with pg_connect() as con:
         with con.cursor() as cur:
             entry = _get_entry(cur, entry_id)
+            _authorize(request, entry["sector"])
             if entry["status"] == "CONCLUIDO":
                 raise HTTPException(400, "Essa tarefa já foi concluída.")
             pausas = entry["pausas_seconds"]
@@ -212,10 +235,11 @@ def production_by_person(sector: Optional[str] = None) -> dict[str, Any]:
 
 
 @router.post("/entries/{entry_id}/feedback")
-def submit_feedback(entry_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+def submit_feedback(entry_id: int, payload: dict[str, Any], request: Request) -> dict[str, Any]:
     with pg_connect() as con:
         with con.cursor() as cur:
             entry = _get_entry(cur, entry_id)
+            _authorize(request, entry["sector"])
             cur.execute(
                 """INSERT INTO production_feedback(entry_id,sector,teve_dificuldade,comentario,created_at)
                    VALUES(%s,%s,%s,%s,%s)""",
@@ -233,13 +257,16 @@ def _cell_to_text(value: Any) -> Any:
 
 
 @router.post("/import")
-async def import_sheet(sector: str, file: UploadFile = File(...)) -> dict[str, Any]:
+async def import_sheet(request: Request, sector: str, file: UploadFile = File(...)) -> dict[str, Any]:
     if sector not in SECTORS:
         raise HTTPException(400, "Setor inválido.")
+    _authorize(request, sector, management_only=True)
     if not (file.filename or "").lower().endswith((".xlsx", ".xlsm")):
         raise HTTPException(400, "Envie um arquivo Excel .xlsx ou .xlsm.")
-    content = await file.read()
-    tmp = BASE_DIR / "data" / f"import_producao_{sector}.xlsx"
+    content = await file.read(25 * 1024 * 1024 + 1)
+    if not content or len(content) > 25 * 1024 * 1024:
+        raise HTTPException(413, "Envie um relatório de até 25 MB.")
+    tmp = BASE_DIR / "data" / f"import_producao_{uuid.uuid4().hex}.xlsx"
     tmp.parent.mkdir(parents=True, exist_ok=True)
     tmp.write_bytes(content)
     wb = load_workbook(tmp, read_only=True, data_only=True)
@@ -311,6 +338,8 @@ async def import_sheet(sector: str, file: UploadFile = File(...)) -> dict[str, A
             con.commit()
     except RuntimeError as e:
         raise HTTPException(503, str(e))
+    wb.close()
+    tmp.unlink(missing_ok=True)
     return {"sector": sector, "imported": imported, "skipped": skipped}
 
 
