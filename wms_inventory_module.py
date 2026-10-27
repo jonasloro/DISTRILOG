@@ -125,6 +125,25 @@ def inventory(address: str) -> dict[str, Any]:
     }
 
 
+@router.get("/health-snapshots")
+def wms_health_snapshots(request: Request, limit: int = 24) -> dict[str, Any]:
+    """Periodic WMS health, captured by Supabase Cron. No writes on dashboard reads."""
+    if getattr(request.state, "auth_role", None) not in {"admin", "supervisor"}:
+        raise HTTPException(403, "Somente Gestão pode consultar a auditoria de estoque.")
+    limit = max(1, min(int(limit), 72))
+    with pg_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT id,checked_at,active_allocations,orphan_cards,orphan_items,
+                       invalid_addresses,invalid_quantities,overfilled_color_addresses
+                FROM distrilog.wms_health_snapshots
+                ORDER BY id DESC LIMIT %s
+            """, (limit,))
+            rows = [dict(row) for row in cur.fetchall()]
+    return {"latest": rows[0] if rows else None, "history": rows,
+            "schedule": "7 * * * *", "timezone": "UTC"}
+
+
 @router.get("/movements")
 def movement_history(address: str = "", limit: int = 100) -> list[dict[str, Any]]:
     limit = max(1, min(int(limit), 200))
