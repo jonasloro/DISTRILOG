@@ -4,7 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>DistriLog — Operação Logística Integrada</title>
-  <link rel="stylesheet" href="/static/style.css?v=4.0.7">
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+  <link rel="stylesheet" href="/static/style.css?v=4.0.8">
   <script src="/static/goat_card_modal.js?v=4.0.2"></script>
   <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
 </head>
@@ -46,6 +47,7 @@
       <nav>
         <div class="nav-group">Operação</div>
         <button class="nav-item active" data-view="dashboard" onclick="goTo('dashboard')"><span class="nav-icon">⌂</span>Central de Operações</button>
+        <button class="nav-item" data-view="mission" onclick="goTo('mission')"><span class="nav-icon">▤</span>Visão da Missão</button>
         <button class="nav-item" data-view="receiving" onclick="goTo('receiving')"><span class="nav-icon">▣</span>Recebimento</button>
         <button class="nav-item" data-view="quality" onclick="goTo('quality')"><span class="nav-icon">◇</span>Qualidade</button>
         <button class="nav-item" data-view="processing" onclick="goTo('processing-hub')"><span class="nav-icon">⚙</span>Processamento</button>
@@ -96,6 +98,7 @@
 
   <div id="toast" class="toast hidden"></div>
   <script src="/static/collab.js?v=1.0.0"></script>
-  <script src="/static/app.js?v=4.5.2"></script>
+  <script src="/static/mission.js?v=1.0.0"></script>
+  <script src="/static/app.js?v=4.5.3"></script>
 </body>
 </html>
