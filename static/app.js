@@ -167,6 +167,7 @@ async function goTo(view) {
   }
   try {
     if (view === "dashboard") await renderDashboard();
+    if (view === "mission") renderMissao();
     if (view === "receiving") await renderCards("receiving");
     if (view === "quality") await renderCards("quality");
     if (view === "processing") await renderCards("processing");
