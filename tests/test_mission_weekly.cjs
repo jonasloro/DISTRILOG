@@ -75,3 +75,25 @@ test('operational board uses only weekly API, never legacy spreadsheet globals',
   assert.match(weeklyJS,/\/api\/mission\/weekly/);
   assert.doesNotMatch(weeklyJS,/MISSAO_HISTORICO_2026|MISSAO_SEMANAS|MISSAO_MESES_2026/);
 });
+
+test('October is never requested as an automatic period; navigation stops at November',async()=>{
+  let requested=[];
+  const dom={
+    missionBody:{innerHTML:''},
+    missionWeeklyTab:{classList:{contains:value=>value==='primary'}},
+  };
+  const ctx=vm.createContext({
+    api:async url=>{requested.push(url);return {month:'2026-11',sectors:[],weeks:[]};},
+    $:id=>dom[id]||null,
+    esc:v=>String(v||''),
+    setMissionMode:()=>{},
+    console,
+  });
+  vm.runInContext(weeklyJS+'\nmissionWeeklyMonth="2026-10";',ctx);
+  await vm.runInContext('showMissionWeekly()',ctx);
+  assert.deepEqual(requested,['/api/mission/weekly?month=2026-11']);
+  await vm.runInContext('missionMoveMonth(-1)',ctx);
+  assert.deepEqual(requested,['/api/mission/weekly?month=2026-11']);
+  assert.match(dom.missionBody.innerHTML,/O quadro autom.tico come.a em novembro de 2026/);
+  assert.equal(vm.runInContext('missionWeeklyMonth',ctx),'2026-11');
+});
