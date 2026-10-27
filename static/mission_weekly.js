@@ -85,13 +85,15 @@ async function showMissionWeekly(){
   const totalBacklog=active?.slots.BACKLOG.status==="captured"?missionMetricTotal(first,"backlog"):null;
   const totalProduced=active?.slots.WED.status==="captured"||active?.slots.FRI.status==="captured"?
     missionMetricTotal(first,"produced"):null;
+  const incompleteSectors=(active?.slots.WED.status==="captured" || active?.slots.FRI.status==="captured")?
+    first.filter(r=>r.produced===null).length:0;
   const percent=totalBacklog>0 && totalProduced!==null?Math.round(totalProduced/totalBacklog*1000)/10:null;
   const [yy,mm]=selectedMonth.split("-").map(Number);
   const monthLabel=new Date(Date.UTC(yy,mm-1,15)).toLocaleDateString("pt-BR",{month:"long",year:"numeric",timeZone:"UTC"});
 
   const tableHeader='<tr><th class="mission-week-head">SEMANA</th><th class="mission-indicator-head">INDICADOR</th>'+
     sectors.map(s=>'<th class="mission-sector-head">'+esc(s)+'</th>').join("")+
-    '<th class="mission-total-head">SOMA SETORES</th></tr>';
+    '<th class="mission-total-head">SOMA INFORMADA</th></tr>';
   const bodyRows=weeks.map(week=>{
     const phase=week.slots;
     const byName=Object.fromEntries(week.rows.map(r=>[r.sector,r]));
@@ -109,7 +111,7 @@ async function showMissionWeekly(){
     const td=(values,type)=>values.map((v,i)=>{
       const row=byName[sectors[i]];
       const unsupported=type==="produced" && state && row?.source_supported===false;
-      return '<td class="mission-val">'+(unsupported?'<span class="mission-nodata" title="Não há apontamento de peças concluídas confiável">s/ fonte</span>':
+      return '<td class="mission-val">'+(unsupported?'<span class="mission-nodata" title="'+esc(row?.source_detail||"Não há apontamento de peças concluídas confiável")+'">s/ fonte</span>':
         missionValue(v,type==="backlog"?"is-backlog":"is-produced"))+'</td>';
     }).join("");
     return '<tr class="mission-matrix-row is-backlog">'+common+
@@ -139,7 +141,8 @@ async function showMissionWeekly(){
     '<div class="missao-kpi"><span>Backlog inicial da semana</span><div class="mission-kpi-value">'+missionValue(totalBacklog)+'</div><small>Congelado na segunda, 08h10</small></div>'+
     '<div class="missao-kpi"><span>Produzido registrado</span><div class="mission-kpi-value">'+missionValue(totalProduced)+'</div>'+
       '<small>'+(active?.slots.FRI.status==="captured"?"Fechado na sexta, 16h":
-        active?.slots.WED.status==="captured"?"Prévia de quarta, 12h":"Aguardando o primeiro corte")+'</small></div>'+
+        active?.slots.WED.status==="captured"?"Prévia de quarta, 12h":"Aguardando o primeiro corte")+
+        (incompleteSectors?" · Soma parcial ("+incompleteSectors+" sem fonte)":"")+'</small></div>'+
     '<div class="missao-kpi"><span>Entrega sobre backlog</span><strong>'+(percent===null?'—':percent.toLocaleString("pt-BR")+"%")+'</strong>'+
        '<small>Pode superar 100% · não é limite</small></div>'+
     '<div class="missao-kpi"><span>Horários oficiais</span><strong class="mission-cutoff-clock">08h10 · 12h · 16h</strong>'+
@@ -155,6 +158,6 @@ async function showMissionWeekly(){
     '<p class="missao-note"><b>Regras:</b> backlog de segunda-feira às 08h10 permanece fixo; produzido só é atualizado na prévia de quarta às 12h e no fechamento de sexta às 16h. '+
     'Atividades posteriores ao fechamento não alteram a semana. A produção pode superar o backlog inicial. '+
     'Um travessão antes do horário indica dado ainda não capturado; após o horário indica captura ausente, não zero. '+
-    'AJUSTES aparece sem produção enquanto não existir fonte operacional de peças concluídas. '+
+    'Números faltantes por unidade ou por fonte são identificados como “s/ fonte”; totais com setores faltantes são parciais. '+
     '<b>Histórico anterior:</b> o arquivo de planilha permanece separado na aba Histórico legado.</p>';
 }
