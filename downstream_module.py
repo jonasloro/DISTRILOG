@@ -575,9 +575,12 @@ async def complete(operation_id: int, request: Request):
     expected_map=_operation_expected_by_item(con,op)
     item_ids=list(expected_map)
     if not item_ids: con.close(); raise HTTPException(400,f"A {op['sector'].title()} não possui itens para conferir.")
-    missing_ec=_missing_allocations("EC",int(op["card_id"]),expected_map)
-    if missing_ec:
-        con.close(); raise HTTPException(409,f"Antes de concluir, enderece toda a mercadoria em EC. Restam {sum(missing_ec.values())} peça(s) sem endereço.")
+    # A Etiquetagem endereça o material para EC. A Estocagem apenas
+    # confere e encerra a operação; não exige uma segunda alocação.
+    if op["sector"] == "ETIQUETAGEM":
+        missing_ec=_missing_allocations("EC",int(op["card_id"]),expected_map)
+        if missing_ec:
+            con.close(); raise HTTPException(409,f"Antes de concluir, enderece toda a mercadoria em EC. Restam {sum(missing_ec.values())} peça(s) sem endereço.")
     marks=",".join("?" for _ in item_ids)
     if op["sector"]=="ETIQUETAGEM":
         matched=int(con.execute(f"""SELECT COUNT(*) n FROM labeling_final_checks s WHERE s.operation_id=? AND s.item_id IN ({marks}) AND s.matched=1
