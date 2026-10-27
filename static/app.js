@@ -2435,6 +2435,19 @@ async function finishReturn(id){try{await api(`/api/unified/returns/${id}`,{meth
 
 async function safeApi(url, fallback) { try { return await api(url); } catch (error) { console.warn(url,error); return fallback; } }
 const shortStatus = value => String(value||"—").replaceAll("_"," ");
+function statusBadge(value){
+  const raw=String(value||"—");
+  const label=shortStatus(raw);
+  const normalized=raw.toUpperCase();
+  const tone = normalized.includes("CONCL") || normalized.includes("FINAL") || normalized.includes("DISPONIVEL")
+    ? "green"
+    : normalized.includes("ERRO") || normalized.includes("DIVERG") || normalized.includes("REPROV")
+      ? "red"
+      : normalized.includes("AGUARD") || normalized.includes("PEND") || normalized.includes("PAUS")
+        ? "warning"
+        : "blue";
+  return '<span class="badge '+tone+'">'+esc(label)+'</span>';
+}
 const progressFor = card => card.status?.includes("FINAL")||card.status?.includes("CONCL")?100:card.status?.includes("PROCESS")?68:card.status?.includes("ETIQU")?82:card.status?.includes("QUAL")||card.status?.includes("INSPE")?38:card.status?.includes("RECEB")?18:12;
 
 function analyticsBarsBody(rows){const max=Math.max(1,...rows.map(r=>Number(r.value)||0));return `<div class="analytics-bars">${rows.slice(0,15).map(r=>`<div><span>${esc(r.label)}</span><i><b style="width:${Number(r.value)*100/max}%"></b></i><strong>${Number(r.value).toLocaleString('pt-BR')}</strong><small>${esc(r.hint||'')}</small></div>`).join('')||'<div class="empty-visual">Sem dados para exibir.</div>'}</div>`;}
