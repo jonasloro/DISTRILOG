@@ -81,6 +81,8 @@ STATUS_LABELS = {
     "PROCESSAMENTO_PAUSADO": "Processamento pausado",
     "AGUARDANDO_CONCLUSAO_PROCESSAMENTO": "Aguardando conclusão do Processamento",
     "AGUARDANDO_TRIAGEM": "Aguardando Triagem",
+    "AGUARDANDO_ETIQUETAS": "Aguardando etiquetas",
+    "ETIQUETAS_DISPONIVEIS": "Etiquetas disponíveis",
     "AGUARDANDO_ETIQUETAGEM": "Aguardando Etiquetagem",
     "AGUARDANDO_ESTOCAGEM": "Aguardando Estocagem",
     "AGUARDANDO_ENTRADA": "Aguardando Entrada no Processamento",
