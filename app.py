@@ -1401,6 +1401,10 @@ async def login(request: Request):
 
     if not os.getenv("SUPABASE_DATABASE_URL"):
         raise HTTPException(503, "Configure SUPABASE_DATABASE_URL nas variáveis do Render para habilitar o login seguro.")
+    try:
+        _session_secret()
+    except RuntimeError:
+        raise HTTPException(503, "Configure AUTH_SESSION_SECRET no Render para habilitar sessões seguras.") from None
 
     # A senha é conferida no Supabase (hash de verdade, PBKDF2 — não é mais
     # texto puro). O id/nome/papel que o resto do app usa (tarefas, cards,
@@ -1421,6 +1425,8 @@ async def login(request: Request):
     con.close()
     if not user:
         raise HTTPException(401, "Usuário existe no Supabase mas não está cadastrado localmente — fale com o administrador.")
+    if user["role"] != confirmado["papel"]:
+        raise HTTPException(403, "Função divergente entre os cadastros de autenticação e operação. Contate o administrador.")
     response = JSONResponse({**dict(user), "must_change_password": confirmado["must_change_password"]})
     if not confirmado["must_change_password"]:
         response.set_cookie(_SESSION_COOKIE, _sign_session(int(user["id"])), httponly=True, secure=True, samesite="strict", max_age=_SESSION_TTL, path="/")
