@@ -5,7 +5,7 @@ Grava direto no Supabase (Postgres) — SUPABASE_DATABASE_URL é obrigatória.
 from __future__ import annotations
 
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -101,7 +101,9 @@ def _user(uid: int, fallback: Any = "") -> dict[str, Any]:
 
 
 def _now() -> str:
-    return datetime.now().replace(microsecond=0).isoformat()
+    # Timestamps novos possuem offset explícito: o navegador converte
+    # corretamente para o horário local do operador.
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
 def _channel(user_id: int, channel: str) -> str:
