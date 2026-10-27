@@ -6,7 +6,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 from fastapi import APIRouter, HTTPException, Request
 import db
-from positions_module import total_allocated, deactivate_card_allocations
+from positions_module import item_allocation_totals, deactivate_card_allocations
 
 router = APIRouter(prefix="/api/processing", tags=["Processamento - fluxo"])
 PROCESSING_ROLES = {"processamento", "supervisor", "admin"}
@@ -666,15 +666,19 @@ async def triage_action(triage_id: int,action: str,request: Request):
         divergences = [{"item_id":x["item_id"],"reference":x["reference"],"color":x["color"],"size":x["size"]}
                        for x in counts if not x["is_extra"] and x["expected_qty"] != x["counted_qty"]]
         extras = [{"reference":x["reference"],"color":x["color"],"size":x["size"]} for x in counts if x["is_extra"]]
-        if divergences or extras:
-            return {"ok":False,"requires_recount":True,"divergences":divergences,"extras":extras,
+        if extras:
+            raise HTTPException(409,"Combinação fora da grade não pode ser incluída pela Triagem. Corrija a grade no Processamento antes de concluir.")
+        if divergences:
+            return {"ok":False,"requires_recount":True,"divergences":divergences,
                     "detail":"A conferência encontrou divergências. Reconte somente as linhas indicadas antes de concluir a Triagem."}
-        required_et=sum(x["counted_qty"] for x in counts if not x["is_extra"])
-        allocated_et=int(total_allocated("ET",int(triage["card_id"])) or 0)
-        if allocated_et < required_et:
+        expected_et={int(x["item_id"]):int(x["counted_qty"]) for x in counts if x["item_id"] is not None}
+        allocated_et=item_allocation_totals(int(triage["card_id"]),"ET")
+        missing_et={iid:max(0,qty-int(allocated_et.get(iid,0))) for iid,qty in expected_et.items()
+                    if int(allocated_et.get(iid,0)) < qty}
+        if missing_et:
             return {"ok":False,"requires_allocation":True,"allocation_sector":"ET",
-                    "required_total":required_et,"allocated_total":allocated_et,
-                    "detail":"Contagem validada. Enderece toda a mercadoria em ET para concluir a Triagem."}
+                    "required_total":sum(expected_et.values()),"allocated_total":sum(int(allocated_et.get(iid,0)) for iid in expected_et),
+                    "detail":f"Contagem validada. Ainda faltam {sum(missing_et.values())} peça(s) para endereçar em ET."}
         con.execute("INSERT INTO processing_triage_events(triage_id,event,occurred_at,user_id) VALUES(?,?,?,?)",(triage_id,"FINISH",stamp,int(actor["id"])))
         summary=_summary(con,"processing_triage_events","triage_id",triage_id,datetime.fromisoformat(stamp))
         for item in counts:
