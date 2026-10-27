@@ -246,6 +246,21 @@ def allocate(card_id: int, payload: dict[str, Any]) -> dict[str, Any]:
     allocations = payload.get("allocations") or []
     if setor not in SECTOR_ZONES:
         raise HTTPException(400, "Setor inválido.")
+    # Do Processamento em diante, o destino físico é controlado pelo setor de origem.
+    # Triagem/Processamento -> ET; Etiquetagem -> EC. A validação é backend-side para
+    # impedir que a interface ou uma chamada manual contorne o fluxo.
+    try:
+        with _connection() as gate_con:
+            with gate_con.cursor() as gate_cur:
+                gate_cur.execute("SELECT current_sector FROM cards WHERE id=%s",(card_id,))
+                gate_card=gate_cur.fetchone()
+        current_sector=str((gate_card or {}).get("current_sector") or "").upper()
+    except Exception:
+        current_sector=""
+    if current_sector=="PROCESSAMENTO" and setor!="ET":
+        raise HTTPException(409,"Na saída da Triagem, a mercadoria só pode ser endereçada em ET.")
+    if current_sector=="ETIQUETAGEM" and setor!="EC":
+        raise HTTPException(409,"Na saída da Etiquetagem, a mercadoria só pode ser endereçada em EC.")
     if not allocations:
         raise HTTPException(400, "Informe ao menos uma posição e quantidade.")
 
