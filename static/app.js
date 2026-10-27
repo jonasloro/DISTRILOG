@@ -73,7 +73,7 @@ function fmtSeconds(value) {
 }
 
 function statusClass(status) {
-  if (["AGUARDANDO_QUALIDADE", "RETORNO_CONCLUIDO", "AGUARDANDO_INSPECAO", "AGUARDANDO_CONCLUSAO_QUALIDADE", "AGUARDANDO_PROCESSAMENTO", "AGUARDANDO_INICIO_PROCESSAMENTO", "AGUARDANDO_CONCLUSAO_PROCESSAMENTO", "AGUARDANDO_TRIAGEM", "AGUARDANDO_ETIQUETAS", "ETIQUETAS_DISPONIVEIS", "AGUARDANDO_ETIQUETAGEM", "AGUARDANDO_ESTOCAGEM"].includes(status)) return "green";
+  if (["AGUARDANDO_QUALIDADE", "RETORNO_CONCLUIDO", "AGUARDANDO_INSPECAO", "AGUARDANDO_CONCLUSAO_QUALIDADE", "AGUARDANDO_PROCESSAMENTO", "AGUARDANDO_INICIO_PROCESSAMENTO", "AGUARDANDO_CONCLUSAO_PROCESSAMENTO", "AGUARDANDO_TRIAGEM", "AGUARDANDO_ETIQUETAS", "ETIQUETAS_DISPONIVEIS", "AGUARDANDO_ETIQUETAGEM", "AGUARDANDO_ESTOCAGEM", "AGUARDANDO_ENTRADA"].includes(status)) return "green";
   if (["RECEBIMENTO_FISICO_CONCLUIDO_10_PENDENTE", "SEPARACAO_10_CONCLUIDA_RECEBIMENTO_PENDENTE", "RETORNO_FISICO_CONCLUIDO_10_PENDENTE", "SEPARACAO_RETORNO_10_CONCLUIDA_FISICO_PENDENTE", "EM_TRANSITO", "ORIGEM_TRANSITO", "AGUARDANDO_DESPACHO_COSTURA", "INSPECAO_PAUSADA", "PROCESSAMENTO_PAUSADO"].includes(status)) return "orange";
   if (status === "DESPACHO_CD02") return "red";
   if (["EM_COSTURA_CD01", "EM_INSPECAO", "EM_PROCESSAMENTO"].includes(status)) return "purple";
@@ -2890,6 +2890,7 @@ async function loadReceivingAllocationStep(cardId) {
   window.qaSampleAllocationComplete = false;
   const box=$("posAllocBox");
   if(!box) return;
+  window.positionAllocatorRetry={cardId,setor,tenPercentSample,tenPercentTarget,sourceItemsOverride,fixedDestination};
   try {
     const status=await apiWithTimeout("/api/positions/cards/"+cardId+"/status?setor=QA");
     const receiving=cardData?.receiving||{};
@@ -2912,6 +2913,15 @@ async function loadReceivingAllocationStep(cardId) {
   }
 }
 
+function scopedPieceAllocatedTotal(status,sourceItems){
+  const ids=new Set((sourceItems||[]).map(item=>Number(item.id)).filter(Boolean));
+  return (status?.item_allocations||[]).reduce((sum,row)=>ids.has(Number(row.item_id))?sum+Number(row.total_alocado||0):sum,0);
+}
+function retryPositionAllocator(){
+  const r=window.positionAllocatorRetry;
+  if(!r)return;
+  loadPositionAllocator(r.cardId,r.setor,r.tenPercentSample,r.tenPercentTarget,r.sourceItemsOverride,r.fixedDestination);
+}
 async function loadPositionAllocator(cardId,setor,tenPercentSample=false,tenPercentTarget=0,sourceItemsOverride=null,fixedDestination=false) {
   const box=$("posAllocBox");
   if(!box) return;
@@ -2951,10 +2961,11 @@ async function loadPositionAllocator(cardId,setor,tenPercentSample=false,tenPerc
   const firstAllocated=status.item_allocations?.find(function(i){return Number(i.total_alocado||0)>0;}) || null;
   const sampleAllocated=Number(status.ten_percent_sample_allocated||0);
 
+  const scopedAllocated=isPieceSector?scopedPieceAllocatedTotal(status,sourceItems):Number(status.global_total_alocado||0);
   window.allocCtx={
     cardId:cardId,setor:setor,sourceTotal:sourceTotal,tenPercentSample:isTenPercentSample,
     sourceItems:sourceItems,fixedDestination:Boolean(fixedDestination),
-    remaining:isTenPercentSample?Math.max(0,sourceTotal-sampleAllocated):Math.max(0,sourceTotal-Number(isPieceSector?status.total_alocado:status.global_total_alocado||0)),
+    remaining:isTenPercentSample?Math.max(0,sourceTotal-sampleAllocated):Math.max(0,sourceTotal-scopedAllocated),
     positions:positions,status:status,suggestion:suggestion,
     selectedItemId:isVolumeOnly?0:Number(firstAvailable?.id||firstAllocated?.item_id||0),
     selectedAddress:suggestion?.address||firstAllocated?.posicoes?.[0]?.address||"",
@@ -2992,7 +3003,7 @@ async function loadPositionAllocator(cardId,setor,tenPercentSample=false,tenPerc
         '</div>') +
 
       '<div class="position-stat-grid">' +
-        '<div class="position-stat"><span>'+(isTenPercentSample?"10% endereçados na QA":"Total alocado")+'</span><strong id="positionAllocatedTotal">'+Number(isTenPercentSample?sampleAllocated:(isPieceSector?status.total_alocado:status.global_total_alocado||0)).toLocaleString("pt-BR")+
+        '<div class="position-stat"><span>'+(isTenPercentSample?"10% endereçados na QA":"Total alocado")+'</span><strong id="positionAllocatedTotal">'+Number(isTenPercentSample?sampleAllocated:(isPieceSector?scopedAllocated:status.global_total_alocado||0)).toLocaleString("pt-BR")+
           '</strong><small>'+(isTenPercentSample?"de "+Number(tenPercentTarget).toLocaleString("pt-BR")+" volume(s) obrigatórios":(isPieceSector?"peças alocadas em "+setor:"volumes globais · RM "+Number(status.global_por_setor?.RM||0).toLocaleString("pt-BR")+
           ' · QA '+Number(status.global_por_setor?.QA||0).toLocaleString("pt-BR")+
           ' · PR '+Number(status.global_por_setor?.PR||0).toLocaleString("pt-BR")) )+'</small></div>' +
@@ -3040,7 +3051,7 @@ async function loadPositionAllocator(cardId,setor,tenPercentSample=false,tenPerc
     window.allocCtx=null;
     const activeBox=$("posAllocBox");
     if(!activeBox || !activeBox.isConnected) return;
-    activeBox.innerHTML='<div class="position-empty large"><strong>Não foi possível gerar o mapa de posições.</strong><p>'+esc(error?.message||"Falha ao carregar ou montar os endereços.")+'</p><button type="button" class="secondary" onclick="loadPositionAllocator('+Number(cardId)+', \''+esc(setor)+'\', '+Boolean(tenPercentSample)+', '+Number(tenPercentTarget||0)+')">Tentar novamente</button></div>';
+    activeBox.innerHTML='<div class="position-empty large"><strong>Não foi possível gerar o mapa de posições.</strong><p>'+esc(error?.message||"Falha ao carregar ou montar os endereços.")+'</p><button type="button" class="secondary" onclick="retryPositionAllocator()">Tentar novamente</button></div>';
   }
 
 }
@@ -3161,10 +3172,11 @@ async function submitAllocation(cardId,setor){
       }
       return;
     }
-    ctx.remaining=Math.max(0,Number(ctx.sourceTotal||0)-Number(isPieceSector?result.total_alocado:result.global_total_alocado||0));
+    const scopedNow=isPieceSector?scopedPieceAllocatedTotal(result,ctx.sourceItems):Number(result.global_total_alocado||0);
+    ctx.remaining=Math.max(0,Number(ctx.sourceTotal||0)-scopedNow);
     ctx.positions=await api("/api/positions?setor="+setor);
     $("posQty").value="";
-    if($("positionAllocatedTotal"))$("positionAllocatedTotal").textContent=Number(isPieceSector?result.total_alocado:result.global_total_alocado||0).toLocaleString("pt-BR");
+    if($("positionAllocatedTotal"))$("positionAllocatedTotal").textContent=Number(isPieceSector?scopedNow:result.global_total_alocado||0).toLocaleString("pt-BR");
     if($("positionUsedCount"))$("positionUsedCount").textContent=String(result.posicoes?.length||0);
     toast((isVolumeOnlyRM?"Volumes":"Referência "+referenceLabel(item))+" alocados em "+address+" com "+qty.toLocaleString("pt-BR")+" "+unit+".");
     renderAllocationItemPicker();renderCurrentItemAllocations();updateReferenceRemaining();renderPositionMap();
