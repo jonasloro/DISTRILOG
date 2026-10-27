@@ -60,6 +60,7 @@ def build_week_view(monday: date, data: dict, now: datetime) -> dict:
     due = deadlines(monday)
     runs = data.get("runs", {})
     metrics = data.get("metrics", {})
+    source_notes = data.get("notes", {})
     slots = {
         phase: {
             "label": PHASE_NAMES[phase],
@@ -83,6 +84,8 @@ def build_week_view(monday: date, data: dict, now: datetime) -> dict:
         else:
             produced = None
             produced_source = None
+        source_detail = source_notes.get((produced_source, sector), "") if produced_source else ""
+        source_supported = sector != "AJUSTES" and not source_detail.startswith("DADOS INCOMPLETOS")
         pct = None
         if isinstance(backlog, int) and backlog > 0 and isinstance(produced, int):
             pct = round(produced / backlog * 100, 2)
@@ -94,7 +97,8 @@ def build_week_view(monday: date, data: dict, now: datetime) -> dict:
             "produced": produced,
             "produced_source": produced_source,
             "achievement_pct": pct,
-            "source_supported": sector != "AJUSTES",
+            "source_supported": source_supported,
+            "source_detail": source_detail,
         })
     return {
         "week_start": monday.isoformat(),
@@ -118,7 +122,7 @@ def mission_weekly(month: str | None = None) -> dict:
     weeks = mondays_in_month(year, month_num)
     first_monday, last_monday = weeks[0], weeks[-1]
     by_week: dict[date, dict] = {
-        monday: {"runs": {}, "metrics": {}} for monday in weeks
+        monday: {"runs": {}, "metrics": {}, "notes": {}} for monday in weeks
     }
     con = db.connect()
     try:
@@ -129,7 +133,7 @@ def mission_weekly(month: str | None = None) -> dict:
             (first_monday, last_monday),
         ).fetchall()
         metrics = con.execute(
-            """SELECT week_start,snapshot_kind,sector,pieces
+            """SELECT week_start,snapshot_kind,sector,pieces,source_label
                  FROM distrilog.mission_weekly_metrics
                  WHERE week_start>=? AND week_start<=?""",
             (first_monday, last_monday),
@@ -145,7 +149,9 @@ def mission_weekly(month: str | None = None) -> dict:
         week = row["week_start"]
         if week in by_week:
             v = row["pieces"]
-            by_week[week]["metrics"][(row["snapshot_kind"], row["sector"])] = None if v is None else int(v)
+            key = (row["snapshot_kind"], row["sector"])
+            by_week[week]["metrics"][key] = None if v is None else int(v)
+            by_week[week]["notes"][key] = str(row["source_label"] or "")
     return {
         "source": "Dados operacionais do DISTRILOG · Supabase",
         "timezone": "America/Sao_Paulo",
