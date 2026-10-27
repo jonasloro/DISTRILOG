@@ -43,7 +43,8 @@ def init_downstream_db() -> None:
     CREATE TABLE IF NOT EXISTS downstream_operations(
       id INTEGER PRIMARY KEY AUTOINCREMENT, card_id INTEGER NOT NULL, sector TEXT NOT NULL,
       purchase_mode TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'ABERTO', created_at TEXT NOT NULL,
-      completed_at TEXT, completed_by INTEGER, source_subset INTEGER NOT NULL DEFAULT 0, UNIQUE(card_id,sector),
+      completed_at TEXT, completed_by INTEGER, source_subset INTEGER NOT NULL DEFAULT 0,
+      labeling_type TEXT, UNIQUE(card_id,sector),
       FOREIGN KEY(card_id) REFERENCES cards(id), FOREIGN KEY(completed_by) REFERENCES users(id));
     CREATE TABLE IF NOT EXISTS downstream_operation_items(
       operation_id INTEGER NOT NULL, item_id INTEGER NOT NULL, PRIMARY KEY(operation_id,item_id),
@@ -69,6 +70,8 @@ def init_downstream_db() -> None:
     columns = {row["name"] for row in con.execute("PRAGMA table_info(downstream_operations)").fetchall()}
     if "source_subset" not in columns:
         con.execute("ALTER TABLE downstream_operations ADD COLUMN source_subset INTEGER NOT NULL DEFAULT 0")
+    if "labeling_type" not in columns:
+        con.execute("ALTER TABLE downstream_operations ADD COLUMN labeling_type TEXT")
     con.commit()
     con.close()
 
@@ -178,7 +181,14 @@ def downstream_users(sector: str):
 async def create_operation(card_id: int, sector: str, request: Request):
     payload = await request.json(); uid = int(payload.get("user_id") or 0); sector = sector.upper()
     con = db_connect(); actor = user(con, uid, sector); op = ensure_operation(con, card_id, sector)
-    history(con, card_id, f"{sector}_INICIADA", f"{actor['name']} iniciou o controle de {sector.title()}.", uid)
+    labeling_type = str(payload.get("labeling_type") or "").strip().upper()
+    if sector == "ETIQUETAGEM":
+        allowed_types = {"APENAS_BRANCA","APENAS_VERMELHA","TAG_BRANCA","BRANCA_VERMELHA"}
+        if labeling_type not in allowed_types:
+            con.close(); raise HTTPException(400,"Selecione o tipo de etiquetagem.")
+        con.execute("UPDATE downstream_operations SET labeling_type=? WHERE id=?",(labeling_type,int(op["id"])))
+    history(con, card_id, f"{sector}_INICIADA",
+            f"{actor['name']} iniciou o controle de {sector.title()}"+(f" ({labeling_type})." if sector=="ETIQUETAGEM" else "."), uid)
     con.commit(); data = downstream_card_data(con, card_id, sector); con.close(); return data
 
 
