@@ -1,7 +1,7 @@
 name: Stock 3D - Build experimental
 on:
   push:
-    branches: [feature/stock-3d]
+    branches: [feature/stock-3d, feature/stock3d-persistencia-e-localizacao]
     paths:
       - 'stock3d/**'
       - '.github/workflows/stock3d-build.yml'
@@ -49,5 +49,5 @@ jobs:
             git config user.name 'github-actions[bot]'
             git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
             git commit -m 'build(stock3d): publish verified frontend assets [skip ci]'
-            git push origin HEAD:feature/stock-3d
+            git push origin HEAD:${GITHUB_REF_NAME}
           fi
