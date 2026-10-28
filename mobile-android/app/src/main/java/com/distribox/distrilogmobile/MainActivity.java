@@ -233,7 +233,7 @@ public final class MainActivity extends Activity {
 
     private void scanQr() {
         new IntentIntegrator(this)
-            .setDesiredBarcodeFormats(IntentIntegrator.QR_CODE_TYPES)
+            .setDesiredBarcodeFormats(java.util.Collections.singletonList("QR_CODE"))
             .setPrompt("Aponte a câmera para a etiqueta Rack ou endereço WMS")
             .setBeepEnabled(false)
             .setOrientationLocked(true)
