@@ -417,7 +417,7 @@ function cadastroPanel(c){
     body+='<div class="line-row"><b>'+esc(t.reference||c.purchase_id)+'</b>'+
       '<small>'+esc(stat)+' • '+number(t.reference_qty||0)+' peças • '+esc(t.user_name||'Não atribuído')+'</small>'+
       '<div class="actions">'+(canOperate&&myTask?(
-        stat==='PENDENTE'?button('▶ Iniciar','cadastro-start','button small','data-task="'+taskId+'"'):'')+
+        (stat==='PENDENTE'?button('▶ Iniciar','cadastro-start','button small','data-task="'+taskId+'"'):'')+
         (stat==='EM_ANDAMENTO'?button('⏸ Pausar','cadastro-pause','button light small','data-task="'+taskId+'"'):'')+
         (stat==='PAUSADA'?button('▶ Retomar','cadastro-resume','button small','data-task="'+taskId+'"'):'')+
         (['EM_ANDAMENTO','PAUSADA'].includes(stat)?button('✓ Concluir','cadastro-finish','button small','data-task="'+taskId+'"'):'')+
