@@ -9,6 +9,19 @@ import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.net.Uri;
+import android.content.ActivityNotFoundException;
+import android.content.pm.PackageInfo;
+import android.provider.Settings;
+import android.os.Handler;
+import android.os.Looper;
+import androidx.core.content.FileProvider;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.security.MessageDigest;
+import org.json.JSONObject;
 import android.os.Build;
 import android.os.Bundle;
 import android.text.InputType;
@@ -36,6 +49,9 @@ public final class MainActivity extends Activity {
     private static final String PREFS = "distrilog_mobile_settings";
     private static final int REQUEST_FILES = 8701;
     private static final int REQUEST_CAMERA = 8702;
+    private static final String UPDATE_URL = "https://raw.githubusercontent.com/jonasloro/DISTRILOG/mobile-apk-homologacao/mobile-android/update.json";
+    private static final int REQUEST_INSTALL = 8703;
+    private volatile boolean checkingUpdate;
     private WebView webView;
     private TextView status;
     private String baseUrl;
@@ -146,6 +162,7 @@ public final class MainActivity extends Activity {
         });
         root.addView(webView, new LinearLayout.LayoutParams(-1, 0, 1f));
         setContentView(root);
+        checkForUpdates();
 
         String saved = getPreferences(MODE_PRIVATE).getString(PREFS, "");
         if (validServer(saved)) {
@@ -153,6 +170,102 @@ public final class MainActivity extends Activity {
         } else {
             configureServer();
         }
+    }
+
+
+    private void checkForUpdates() {
+        if (checkingUpdate) return;
+        checkingUpdate = true;
+        new Thread(() -> {
+            try {
+                HttpURLConnection conn = (HttpURLConnection)new URL(UPDATE_URL).openConnection();
+                conn.setConnectTimeout(8000);
+                conn.setReadTimeout(8000);
+                conn.setInstanceFollowRedirects(true);
+                if (conn.getResponseCode() != 200) throw new IllegalStateException("Manifesto indisponível");
+                byte[] data;
+                try (InputStream in = conn.getInputStream()) { data = readLimited(in, 16384); }
+                conn.disconnect();
+                JSONObject manifest = new JSONObject(new String(data, java.nio.charset.StandardCharsets.UTF_8));
+                int remoteCode = manifest.getInt("versionCode");
+                int localCode = getPackageManager().getPackageInfo(getPackageName(), 0).versionCode;
+                if (remoteCode <= localCode) return;
+                String apkUrl = manifest.getString("apkUrl");
+                String checksum = manifest.getString("sha256");
+                boolean mandatory = manifest.optBoolean("mandatory", false);
+                if (!apkUrl.startsWith("https://") || !checksum.matches("[a-fA-F0-9]{64}"))
+                    throw new SecurityException("Metadados inválidos");
+                runOnUiThread(() -> new AlertDialog.Builder(this)
+                    .setTitle("Atualização disponível")
+                    .setMessage("Versão " + manifest.optString("versionName", String.valueOf(remoteCode))
+                        + " disponível. Deseja baixar e instalar?" + (mandatory ? "\\nAtualização obrigatória para novas operações." : ""))
+                    .setCancelable(!mandatory)
+                    .setPositiveButton("Baixar", (d, w) -> downloadUpdate(apkUrl, checksum))
+                    .setNegativeButton(mandatory ? "Sair" : "Depois", (d, w) -> { if (mandatory) finish(); })
+                    .show()));
+            } catch (Exception e) {
+                android.util.Log.w("DistrilogUpdate", "Verificação indisponível", e);
+            } finally { checkingUpdate = false; }
+        }).start();
+    }
+
+    private static byte[] readLimited(InputStream input, int max) throws Exception {
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        byte[] buffer = new byte[8192];
+        int n;
+        while ((n = input.read(buffer)) != -1) {
+            if (out.size() + n > max) throw new java.io.IOException("Resposta excede limite");
+            out.write(buffer, 0, n);
+        }
+        return out.toByteArray();
+    }
+
+    private void downloadUpdate(String url, String sha256) {
+        status.setVisibility(View.VISIBLE);
+        status.setText("Baixando atualização...");
+        new Thread(() -> {
+            File apk = new File(getCacheDir(), "distrilog-update.apk");
+            try {
+                HttpURLConnection conn = (HttpURLConnection)new URL(url).openConnection();
+                conn.setConnectTimeout(12000);
+                conn.setReadTimeout(30000);
+                if (conn.getResponseCode() != 200) throw new java.io.IOException("Download HTTP " + conn.getResponseCode());
+                long length = conn.getContentLengthLong();
+                if (length > 150L * 1024 * 1024) throw new java.io.IOException("APK muito grande");
+                MessageDigest digest = MessageDigest.getInstance("SHA-256");
+                long total = 0;
+                try (InputStream in = conn.getInputStream(); FileOutputStream out = new FileOutputStream(apk)) {
+                    byte[] buffer = new byte[16384];
+                    int n;
+                    while ((n = in.read(buffer)) != -1) {
+                        total += n;
+                        if (total > 150L * 1024 * 1024) throw new java.io.IOException("APK excede limite");
+                        digest.update(buffer, 0, n);
+                        out.write(buffer, 0, n);
+                    }
+                }
+                conn.disconnect();
+                StringBuilder hex = new StringBuilder();
+                for (byte b : digest.digest()) hex.append(String.format(Locale.ROOT, "%02x", b & 0xff));
+                if (!hex.toString().equalsIgnoreCase(sha256)) throw new SecurityException("Assinatura de integridade incorreta");
+                Uri uri = FileProvider.getUriForFile(this, getPackageName() + ".fileprovider", apk);
+                Intent install = new Intent(Intent.ACTION_VIEW);
+                install.setDataAndType(uri, "application/vnd.android.package-archive");
+                install.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+                runOnUiThread(() -> {
+                    status.setText("Atualização baixada. Confirme a instalação no Android.");
+                    try { startActivity(install); }
+                    catch (Exception e) { Toast.makeText(this, "Não foi possível abrir o instalador.", Toast.LENGTH_LONG).show(); }
+                });
+            } catch (Exception e) {
+                apk.delete();
+                android.util.Log.e("DistrilogUpdate", "Falha ao atualizar", e);
+                runOnUiThread(() -> {
+                    status.setText("Não foi possível baixar ou validar a atualização.");
+                    Toast.makeText(this, "Atualização indisponível. Tente novamente.", Toast.LENGTH_LONG).show();
+                });
+            }
+        }).start();
     }
 
     private int dp(int value) { return (int)(value * getResources().getDisplayMetrics().density + 0.5f); }
