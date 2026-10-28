@@ -215,6 +215,7 @@ async function goTo(view) {
     if (view === "storage") await renderCards("storage");
     if (view === "storage-hub") await renderStorageHub();
     if (view === "address-map") await renderAddressMap();
+    if (view === "stock-3d") renderStock3D();
     if (view === "sgo") await renderSgo();
     if (view === "sgo-indicators") await renderSgoIndicators();
     if (view === "production") await renderProduction();
@@ -301,6 +302,18 @@ function metricCardsHtml(scope, totals) {
   return "";
 }
 
+
+function renderStock3D() {
+  setPage("Stock 3D", "Visualização interativa do centro de distribuição · consulta WMS somente leitura.");
+  $("mainContent").innerHTML = `
+    <section class="stock3d-shell" aria-label="Stock 3D — visualização do CD">
+      <div class="stock3d-toolbar">
+        <span><strong>Stock 3D</strong> · Importação local do modelo · Saldos consultados no WMS</span>
+        <a href="/stock-3d" target="_blank" rel="noopener noreferrer">Abrir em tela cheia ↗</a>
+      </div>
+      <iframe title="Stock 3D — centro de distribuição" src="/stock-3d" loading="lazy"></iframe>
+    </section>`;
+}
 
 let addressMapLoadId = 0;
 

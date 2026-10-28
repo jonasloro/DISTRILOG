@@ -1,0 +1,8 @@
+node_modules/
+dist/
+*.glb
+*.skp
+*.skb
+.env*
+PRIVADO_PREVIAS/
+MODELO_ANALISADO.json

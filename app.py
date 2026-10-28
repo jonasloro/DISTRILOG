@@ -32,6 +32,7 @@ from goat_module import init_goat_db, register_goat_routes
 from positions_module import init_positions_db, register_positions_routes, total_allocated, item_allocation_totals
 from wms_inventory_module import init_inventory_db, register_inventory_routes
 from mission_module import register_mission_routes
+from stock3d_module import register_stock3d_routes
 from collab_module import init_collab_db, register_collab_routes
 from unified_module import init_unified_db, register_unified_routes
 from cleaning_module import init_cleaning_db, register_cleaning_routes
@@ -105,7 +106,9 @@ def _read_session(token: str) -> tuple[int, int] | None:
 @app.middleware("http")
 async def require_authenticated_session(request: Request, call_next):
     path = request.url.path
-    if not path.startswith("/api/") or path in _PUBLIC_API:
+    # A página Stock 3D também exige sessão válida; os arquivos JS/CSS
+    # permanecem estáticos, mas os dados WMS só saem por APIs autenticadas.
+    if (not path.startswith("/api/") and path != "/stock-3d") or path in _PUBLIC_API:
         return await call_next(request)
     try:
         session = _read_session(request.cookies.get(_SESSION_COOKIE, ""))
@@ -1389,6 +1392,16 @@ def startup() -> None:
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
+
+
+@app.get("/stock-3d")
+def stock3d_page():
+    """Visualizador carregado somente quando solicitado pela navegação."""
+    response = FileResponse(BASE_DIR / "static" / "stock3d" / "index.html", media_type="text/html")
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["X-Frame-Options"] = "SAMEORIGIN"
+    response.headers["Content-Security-Policy"] = "frame-ancestors 'self'"
+    return response
 
 
 @app.post("/api/login")
@@ -2865,6 +2878,7 @@ register_goat_routes(app)
 register_positions_routes(app)
 register_inventory_routes(app)
 register_mission_routes(app)
+register_stock3d_routes(app)
 register_unified_routes(app)
 register_cleaning_routes(app)
 register_collab_routes(app)

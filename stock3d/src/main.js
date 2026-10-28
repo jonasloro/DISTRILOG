@@ -1,0 +1,163 @@
+import './style.css';
+import * as THREE from 'three';
+import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
+import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
+import {SECTORS,positionKey,validPosition,unitsForSector,filterPositions,parseBindings,positionStats,isSketchup,isGLB,requireOfflineConversion} from './core.js';
+
+const $ = (id) => document.getElementById(id);
+const canvas = $('threeCanvas');
+const viewport = $('viewport');
+const state = {positions:[],selected:null,sector:'TODOS',query:'',searchMatches:null,anchors:{},modelName:null,loadedModel:null,glbBytes:null,bind:false,lastRefresh:null,loaded:false};
+let inventoryAbort=null, searchAbort=null, modelWorker=null, loading=false, toastTimeout=0, lastPointer=null;
+const scene = new THREE.Scene();
+scene.background = new THREE.Color('#14241c');
+scene.fog = new THREE.FogExp2('#14241c', 0.003);
+const camera = new THREE.PerspectiveCamera(45,1,0.01,50000);
+camera.position.set(28,34,38);
+const renderer = new THREE.WebGLRenderer({canvas, antialias:true,alpha:false,powerPreference:'high-performance'});
+renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,1.5));
+renderer.outputColorSpace=THREE.SRGBColorSpace;
+renderer.toneMapping=THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure=1.6;
+const controls=new OrbitControls(camera,renderer.domElement);
+controls.enableDamping=true;controls.dampingFactor=.09;
+controls.maxPolarAngle=Math.PI*.94;
+controls.minDistance=.2;controls.maxDistance=40000;
+scene.add(new THREE.HemisphereLight('#f5fff0','#304538',3.2));
+const sun=new THREE.DirectionalLight('#ffe9c7',2.5);sun.position.set(40,80,20);scene.add(sun);
+const grid=new THREE.GridHelper(200,50,'#355743','#244334');grid.position.y=-.03;scene.add(grid);
+const markers=new THREE.Group();markers.name='WMS_MARKERS';scene.add(markers);
+let modelRoot=null;
+const raycaster=new THREE.Raycaster();
+const pointer=new THREE.Vector2();
+let rendererRunning=true;
+function resize(){const w=viewport.clientWidth,h=viewport.clientHeight;if(w&&h){camera.aspect=w/h;camera.updateProjectionMatrix();renderer.setSize(w,h,false)}}
+const ro=new ResizeObserver(resize);ro.observe(viewport);resize();
+function animate(){if(!rendererRunning)return;requestAnimationFrame(animate);controls.update();renderer.render(scene,camera)}animate();
+function toast(message,error=false){let n=document.querySelector('.toast');if(!n){n=document.createElement('div');n.className='toast';document.body.append(n)}n.className='toast'+(error?' error':'');n.textContent=message;n.classList.remove('hidden');clearTimeout(toastTimeout);toastTimeout=setTimeout(()=>n.classList.add('hidden'),5500)}
+function progress(txt){$('viewStatus').textContent=txt;$('modelSubtitle').textContent=txt}
+function apiUrl(path){return path;}
+async function getJson(path,signal){const r=await fetch(apiUrl(path),{credentials:'same-origin',headers:{'Accept':'application/json'},signal,cache:'no-store'});if(r.status===401){throw new Error('Sessão expirada. Faça login no DISTRILOG e reabra o Stock 3D.')}if(!r.ok){let message=`Falha ${r.status}`;try{const data=await r.json();if(data.detail)message=typeof data.detail==='string'?data.detail:message}catch{}throw new Error(message)}return await r.json()}
+function localKey(){return `distrilog.stock3d.anchors.${state.modelName||'unloaded'}`}
+function saveAnchors(){if(!state.modelName)return;try{localStorage.setItem(localKey(),JSON.stringify({schema:'distrilog-stock3d-anchors-v1',model:state.modelName,anchors:state.anchors}))}catch{toast('Não foi possível salvar localmente. Exporte o mapa de vínculos.',true)}}
+function loadAnchors(){try{const data=JSON.parse(localStorage.getItem(localKey())||'null');state.anchors=data&&data.model===state.modelName?parseBindings(data).anchors:{}}catch{state.anchors={}}syncMarkers();}
+function updateMetrics(){const n=positionStats(state.positions,state.anchors);$('countAll').textContent=n.total||'—';$('countBusy').textContent=n.busy||'0';$('countMapped').textContent=n.mapped;$('lastUpdate').textContent=state.lastRefresh?state.lastRefresh.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}):'—';}
+function escapeText(x){return String(x??'')}
+function el(tag,cls,text){const node=document.createElement(tag);if(cls)node.className=cls;if(text!==undefined)node.textContent=escapeText(text);return node}
+function drawList(){const matches=filterPositions(state.positions,state.sector,state.query,state.searchMatches);const host=$('positionList');host.replaceChildren();$('positionCount').textContent=`${matches.length} posições`;if(!matches.length){host.append(el('div','empty-list',state.loaded?'Nenhuma posição corresponde ao filtro.':'Sem dados. Entre no DISTRILOG e atualize.'));return}
+  const max=140;
+  for(const pos of matches.slice(0,max)){
+    const row=el('button','position'+(state.selected===pos.address?' selected':''));row.type='button';
+    const dot=el('span','p-dot '+(state.anchors[pos.address]?(Number(pos.ocupado)>0?'busy':'free'):'unmapped'));
+    const body=el('div','position-main');body.append(el('div','position-name',pos.address));body.append(el('div','position-sub',`${pos.zona_label||pos.zona||pos.setor} · ${state.anchors[pos.address]?'mapeada no modelo':'não vinculada ao modelo'}`));
+    const quantity=el('span','position-count',`${pos.ocupado} ${pos.setor==='ET'||pos.setor==='EC'?'cx':'vol.'}`);
+    row.append(dot,body,quantity);row.addEventListener('click',()=>selectPosition(pos.address));host.append(row);
+  }
+  if(matches.length>max)host.append(el('div','empty-list',`Exibindo ${max} de ${matches.length}. Refine a pesquisa para encontrar outras posições.`));
+}
+async function refreshPositions(){ $('syncStatus').textContent='Atualizando WMS...'; const results=await Promise.allSettled(SECTORS.map(async setor=>{
+  const data=await getJson(`/api/positions?setor=${encodeURIComponent(setor)}`);
+  if(!Array.isArray(data))throw new Error(`Formato inválido do setor ${setor}`);
+  return data.filter(validPosition);
+}));
+  const success=results.filter(r=>r.status==='fulfilled');
+  if(!success.length){state.loaded=false;state.positions=[];$('syncStatus').textContent='WMS indisponível';$('positionCount').textContent='Sem conexão';drawList();updateMetrics();toast(results.find(r=>r.status==='rejected')?.reason?.message||'Não foi possível consultar o WMS.',true);return}
+  state.positions=success.flatMap(r=>r.value).sort((a,b)=>a.address.localeCompare(b.address,'pt-BR',{numeric:true}));state.loaded=true;state.lastRefresh=new Date();
+  $('syncStatus').textContent=success.length===SECTORS.length?'WMS sincronizado':`WMS parcial (${success.length}/${SECTORS.length})`;
+  if(success.length!==SECTORS.length)toast('Alguns setores não responderam; os totais são parciais.',true);
+  drawList();updateMetrics();syncMarkers();
+  if(state.selected&&!state.positions.some(p=>p.address===state.selected))clearSelection();
+}
+function clearSelection(){state.selected=null;$('inspectTitle').textContent='Selecione um endereço';$('inspectCaption').textContent='Posições reais do WMS.';$('inspectBody').replaceChildren(el('div','empty-details','Selecione uma posição à esquerda.'));$('bindButton').disabled=true;$('removeBindButton').disabled=true;}
+async function selectPosition(address){const pos=state.positions.find(p=>p.address===address);if(!pos)return;state.selected=address;state.bind=false;updateBindButtons();drawList();syncMarkers();$('inspectTitle').textContent=address;$('inspectCaption').textContent=`${pos.setor} · ${pos.ocupado} ${unitsForSector(pos.setor)} nesta posição`;
+  const content=$('inspectBody');content.replaceChildren(el('div','empty-details','Consultando conteúdo físico no WMS...'));
+  if(state.anchors[address])focusPoint(new THREE.Vector3(...state.anchors[address]));
+  inventoryAbort?.abort();inventoryAbort=new AbortController();
+  try{const inventory=await getJson(`/api/positions/${encodeURIComponent(address)}/inventory`,inventoryAbort.signal);if(state.selected===address)renderInventory(inventory)}catch(e){if(e.name!=='AbortError'&&state.selected===address){content.replaceChildren(el('div','empty-details',`Falha na consulta: ${e.message}`))}}
+}
+function renderInventory(info){const c=$('inspectBody');c.replaceChildren();const pos=state.positions.find(p=>p.address===state.selected);if(!pos)return;
+  const head=el('div','detail-head');head.append(el('b','',`${info.occupied??pos.ocupado} ${unitsForSector(pos.setor)}`),el('small','',`SETOR ${pos.setor} · ${info.items?.length||0} registros WMS`));c.append(head);
+  if(info.inconsistent)c.append(el('div','inventory-warning','⚠ Divergência de vínculo identificada. Confira o WMS antes de movimentar.'));
+  c.append(el('div','row-title','REFERÊNCIAS NESTA POSIÇÃO'));
+  if(!Array.isArray(info.items)||!info.items.length){c.append(el('div','empty-details','Endereço vazio. Nenhum saldo ativo registrado.'));return}
+  for(const item of info.items.slice(0,120)){
+    const row=el('div','detail-row');row.append(el('b','',item.reference||item.sku||item.product||'Referência não identificada'));
+    const parts=[`Card #${item.card_id||'—'}`,item.color&&`Cor ${item.color}`,item.size&&`Tam. ${item.size}`,`${pos.setor==='ET'||pos.setor==='EC'?item.box_count:item.quantidade} ${unitsForSector(pos.setor)}`].filter(Boolean);
+    row.append(el('span','',parts.join(' · ')));c.append(row);
+  }
+  if(info.items.length>120)c.append(el('div','empty-details','Mais resultados disponíveis no painel WMS.'));
+}
+function updateBindButtons(){const selected=!!state.selected;$('bindButton').disabled=!selected||!modelRoot;$('removeBindButton').disabled=!selected||!state.anchors[state.selected];$('bindButton').classList.toggle('active',state.bind);$('bindButton').textContent=state.bind?'Toque em um ponto do modelo...':'⌖ Vincular ao ponto 3D'}
+const sphere=new THREE.SphereGeometry(.18,12,8);
+function markerMaterial(occupied,selected){return new THREE.MeshBasicMaterial({color:selected?'#ffdb81':occupied?'#bbec78':'#75b8a0',depthTest:false})}
+function syncMarkers(){while(markers.children.length){const m=markers.children[0];markers.remove(m);m.material.dispose()}
+  if(!modelRoot){updateBindButtons();return}
+  const scale=modelRoot.userData.boundsSize||20;
+  for(const pos of state.positions){const pt=state.anchors[pos.address];if(!pt)continue;const m=new THREE.Mesh(sphere,markerMaterial(Number(pos.ocupado)>0,pos.address===state.selected));m.scale.setScalar(Math.max(.2,scale*.005));m.position.set(...pt);m.userData.address=pos.address;m.renderOrder=5;markers.add(m)}
+  updateBindButtons();updateMetrics();}
+function pointerCoordinates(event){const rect=canvas.getBoundingClientRect();pointer.x=(event.clientX-rect.left)/rect.width*2-1;pointer.y=-(event.clientY-rect.top)/rect.height*2+1;raycaster.setFromCamera(pointer,camera)}
+canvas.addEventListener('pointerdown',e=>{lastPointer=[e.clientX,e.clientY]});
+canvas.addEventListener('pointerup',async e=>{
+  if(!lastPointer||Math.hypot(lastPointer[0]-e.clientX,lastPointer[1]-e.clientY)>6)return;
+  pointerCoordinates(e);
+  if(state.bind&&state.selected&&modelRoot){const found=raycaster.intersectObject(modelRoot,true);if(found.length){state.anchors[state.selected]=found[0].point.toArray().map(x=>Number(x.toFixed(4)));state.bind=false;saveAnchors();syncMarkers();drawList();toast(`${state.selected} vinculado ao mapa 3D.`)}else toast('Clique sobre uma superfície do modelo.',true);return}
+  const selected=raycaster.intersectObjects(markers.children,false);if(selected.length)await selectPosition(selected[0].object.userData.address);
+});
+function focusPoint(p){const delta=p.clone().sub(controls.target);camera.position.add(delta);controls.target.copy(p);controls.update();}
+function fitModel(){if(!modelRoot)return;const box=new THREE.Box3().setFromObject(modelRoot);if(box.isEmpty())return;const center=box.getCenter(new THREE.Vector3()),size=box.getSize(new THREE.Vector3());const radius=Math.max(size.x,size.y,size.z,1);
+  camera.near=Math.max(.001,radius/100000);camera.far=Math.max(1000,radius*45);camera.updateProjectionMatrix();
+  camera.position.copy(center).add(new THREE.Vector3(radius*.9,radius*.74,radius*1.15));controls.target.copy(center);controls.minDistance=Math.max(.05,radius*.001);controls.maxDistance=radius*20;controls.update();modelRoot.userData.boundsSize=radius;
+  grid.visible=false;scene.fog=null;
+}
+function disposeModel(){if(!modelRoot)return;scene.remove(modelRoot);modelRoot.traverse(o=>{if(o.isMesh){o.geometry?.dispose();if(Array.isArray(o.material))o.material.forEach(m=>m.dispose());else o.material?.dispose()}});modelRoot=null}
+async function displayGLB(buffer,filename){if(!buffer||buffer.byteLength<20)throw new Error('GLB vazio ou inválido.');
+  if(new DataView(buffer).getUint32(0,true)!==0x46546c67)throw new Error('Arquivo GLB não reconhecido.');
+  const loader=new GLTFLoader();const result=await new Promise((resolve,reject)=>loader.parse(buffer,'',resolve,reject));
+  disposeModel();modelRoot=result.scene;modelRoot.name='SKETCHUP_CENTRO_DISTRIBUICAO';scene.add(modelRoot);
+  state.modelName=filename.replace(/\.(skp|skb|glb)$/i,'').toLowerCase();state.glbBytes=buffer;state.loadedModel=filename;
+  loadAnchors();fitModel();syncMarkers();drawList();updateMetrics();$('startPanel').classList.add('hidden');$('downloadGLB').disabled=false;
+  progress(`${filename} · modelo 3D carregado`);toast('Modelo 3D carregado. Agora você pode vincular os endereços WMS.');
+}
+async function onModelFile(file){if(!file||loading)return;if(!isSketchup(file.name)&&!isGLB(file.name)){toast('Formato não aceito. Use SKP, SKB ou GLB.',true);return}
+  if(file.size>300*1024*1024){toast('Arquivo acima de 300 MB. Exporte uma versão GLB otimizada no SketchUp.',true);return}
+  if(requireOfflineConversion(file.name,file.size)){toast('Arquivo SketchUp grande demais para converter com segurança no navegador. Importe o GLB convertido do Stock 3D.',true);progress('Use o GLB convertido para proteger a memória do dispositivo.');return}
+  loading=true;progress('Lendo arquivo local...');$('openModel').disabled=true;$('chooseFileButton').disabled=true;
+  try{
+    const buffer=await file.arrayBuffer();if(isGLB(file.name)){await displayGLB(buffer,file.name);return}
+    progress('Preparando conversão SketchUp → GLB. O arquivo permanece neste dispositivo.');
+    const worker=new Worker(new URL('./skp-worker.js',import.meta.url),{type:'module'});modelWorker=worker;
+    const bytes=await new Promise((resolve,reject)=>{
+      worker.onmessage=({data})=>{
+        if(data.type==='progress')progress(data.message);
+        if(data.type==='done')resolve(data.buffer);
+        if(data.type==='error')reject(new Error(data.message));
+      };worker.onerror=(e)=>reject(new Error(e.message||'Falha do conversor SketchUp.'));
+      worker.postMessage({type:'convert',buffer},[buffer]);
+    });worker.terminate();modelWorker=null;
+    await displayGLB(bytes,file.name);
+  }catch(e){console.error('Stock 3D import',e);toast(`Não foi possível importar: ${e.message}. Tente exportar um GLB pelo SketchUp.`,true);progress('Importação não concluída.');}
+  finally{loading=false;$('openModel').disabled=false;$('chooseFileButton').disabled=false;$('fileInput').value=''}
+}
+function saveBlob(filename,bytes,type){const blob=new Blob([bytes],{type});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=filename;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),2000)}
+function selectedSearch(){const q=state.query.trim();if(q.length<3||/^\d+(RM|QA|PR|ET|EC)/i.test(q)){state.searchMatches=null;drawList();return}
+  if(searchAbort)searchAbort.abort();searchAbort=new AbortController();
+  getJson(`/api/stock3d/search?reference=${encodeURIComponent(q)}`,searchAbort.signal).then(data=>{if(state.query.trim()!==q)return;state.searchMatches=new Set(data.addresses||[]);drawList()}).catch(e=>{if(e.name==='AbortError')return;state.searchMatches=null;drawList();if(e.message.includes('404'))toast('Pesquisa por referência disponível somente com a API Stock 3D integrada.',true)});
+}
+$('sectorFilters').addEventListener('click',e=>{const btn=e.target.closest('button[data-sector]');if(!btn)return;state.sector=btn.dataset.sector;for(const b of $('sectorFilters').querySelectorAll('button'))b.classList.toggle('active',b===btn);drawList();});
+let searchTimer;
+$('searchInput').addEventListener('input',e=>{state.query=e.target.value;state.searchMatches=null;drawList();clearTimeout(searchTimer);searchTimer=setTimeout(selectedSearch,350)});
+$('refreshButton').addEventListener('click',refreshPositions);
+$('openModel').addEventListener('click',()=>$('fileInput').click());
+$('chooseFileButton').addEventListener('click',()=>$('fileInput').click());
+$('fileInput').addEventListener('change',e=>onModelFile(e.target.files[0]));
+$('bindButton').addEventListener('click',()=>{if(!state.selected||!modelRoot)return;state.bind=!state.bind;updateBindButtons();if(state.bind)toast(`Clique na estrutura física correspondente a ${state.selected}.`)});
+$('removeBindButton').addEventListener('click',()=>{if(!state.selected)return;delete state.anchors[state.selected];saveAnchors();syncMarkers();drawList();toast('Vínculo 3D removido. Nenhum dado WMS foi alterado.')});
+$('homeCamera').addEventListener('click',fitModel);
+$('topCamera').addEventListener('click',()=>{if(!modelRoot)return;const box=new THREE.Box3().setFromObject(modelRoot);const ctr=box.getCenter(new THREE.Vector3()),rad=Math.max(...box.getSize(new THREE.Vector3()).toArray());controls.target.copy(ctr);camera.position.set(ctr.x,ctr.y+rad*1.5,ctr.z+.001);controls.update()});
+$('perspectiveCamera').addEventListener('click',fitModel);
+$('downloadGLB').addEventListener('click',()=>{if(state.glbBytes)saveBlob((state.modelName||'DISTRILOG-Stock3D')+'.glb',state.glbBytes,'model/gltf-binary')});
+$('exportBindings').addEventListener('click',()=>{if(!state.modelName){toast('Importe o modelo antes de exportar os vínculos.',true);return}saveBlob('DISTRILOG-Stock3D-vinculos.json',JSON.stringify({schema:'distrilog-stock3d-anchors-v1',model:state.modelName,anchors:state.anchors},null,2),'application/json')});
+$('importBindings').addEventListener('click',()=>$('bindingsInput').click());
+$('bindingsInput').addEventListener('change',async e=>{const file=e.target.files?.[0];if(!file)return;try{if(file.size>100000)throw new Error('Mapa de vínculos excessivamente grande.');const parsed=parseBindings(JSON.parse(await file.text()));if(!state.modelName)throw new Error('Importe primeiro o modelo 3D correspondente.');if(parsed.model!==state.modelName)throw new Error(`Este mapa pertence ao modelo “${parsed.model}”, não a “${state.modelName}”.`);state.anchors=parsed.anchors;saveAnchors();syncMarkers();drawList();toast('Vínculos importados com sucesso.')}catch(err){toast(err.message,true)}finally{$('bindingsInput').value=''}});
+window.addEventListener('pagehide',()=>{rendererRunning=false;modelWorker?.terminate();ro.disconnect();renderer.dispose()});
+refreshPositions();
