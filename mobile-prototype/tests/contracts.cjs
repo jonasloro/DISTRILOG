@@ -40,5 +40,6 @@ test('no offline writes, false success or demo cards in production app',()=>{
 test('camera scan identifies without automatically changing warehouse stock',()=>{
   assert.match(main,/window\.DM_SCAN_RETURN/);
   assert.match(main,/nenhuma movimentação é executada automaticamente/);
-  assert.match(native,/com\.journeyapps\.zxing/);
+  const activity=fs.readFileSync(path.resolve(__dirname,'../app/src/main/java/com/distribox/distrilogmobile/prototype/MainActivity.java'),'utf8');
+  assert.match(activity,/com\.google\.zxing\.integration\.android/);
 });
