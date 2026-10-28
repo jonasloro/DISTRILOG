@@ -1,8 +1,7 @@
 name: DISTRILOG Mobile Android APK (homologacao)
 on:
   push:
-    branches:
-      - mobile-apk-homologacao
+    branches: [mobile-apk-homologacao]
     paths:
       - 'mobile-android/**'
       - '.github/workflows/mobile-apk-homologacao.yml'
@@ -19,7 +18,14 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      - uses: android-actions/setup-android@v3
+      - name: Conferir Android SDK preinstalado
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Android SDK: $ANDROID_HOME"
+          ls "$ANDROID_HOME/platforms"
+          ls "$ANDROID_HOME/build-tools"
+          test -d "$ANDROID_HOME/platforms/android-35"
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.10.2'
