@@ -101,6 +101,11 @@ async function publishModel(){
     if(!response.ok){const err=await response.json().catch(()=>({}));throw new Error(err.detail||'O Supabase não confirmou o modelo.')}
     const meta=await getJson('/api/stock3d/model');
     state.published=meta;
+    const existingAnchors={...state.anchors};
+    if(Object.keys(existingAnchors).length){
+      const migrated=await fetch('/api/stock3d/anchors/import',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({model_sha256:state.modelHash,anchors:existingAnchors})});
+      if(!migrated.ok){const err=await migrated.json().catch(()=>({}));toast('O modelo foi salvo, mas a calibração não: '+(err.detail||'verifique os endereços'),true);}
+    }
     await loadAnchors();
     toast('Modelo compartilhado salvo! A equipe já poderá abri-lo automaticamente.');
     progress('Modelo oficial disponível para a equipe.');
@@ -166,7 +171,7 @@ canvas.addEventListener('pointerdown',e=>{lastPointer=[e.clientX,e.clientY]});
 canvas.addEventListener('pointerup',async e=>{
   if(!lastPointer||Math.hypot(lastPointer[0]-e.clientX,lastPointer[1]-e.clientY)>6)return;
   pointerCoordinates(e);
-  if(state.bind&&state.selected&&modelRoot){const found=raycaster.intersectObject(modelRoot,true);if(found.length){const address=state.selected, point=found[0].point.toArray().map(x=>Number(x.toFixed(4)));try{await saveSharedAnchor(address,point);state.anchors[address]=point;state.bind=false;syncMarkers();drawList();toast(address+' vinculado ao mapa 3D.');}catch(err){toast(err.message,true)}}else toast('Clique sobre uma superfície do modelo.',true);return}
+  if(state.bind&&state.selected&&modelRoot){const found=raycaster.intersectObject(modelRoot,true);if(found.length){const address=state.selected, point=found[0].point.toArray().map(x=>Number(x.toFixed(4)));try{await saveSharedAnchor(address,point);state.anchors[address]=point;if(!isSharedModel())saveAnchorsLocal();state.bind=false;syncMarkers();drawList();toast(address+' vinculado ao mapa 3D.');}catch(err){toast(err.message,true)}}else toast('Clique sobre uma superfície do modelo.',true);return}
   const selected=raycaster.intersectObjects(markers.children,false);if(selected.length)await selectPosition(selected[0].object.userData.address);
 });
 function focusPoint(p){const delta=p.clone().sub(controls.target);camera.position.add(delta);controls.target.copy(p);controls.update();}
