@@ -34,7 +34,7 @@ const nullableInt=(id)=>String(val(id)).trim()===''?null:intField(id,true);
 const required=(id,label)=>{const t=String(val(id)).trim();if(!t)throw Error('Informe '+label+'.');return t;};
 const input=(id,label,value,type='text',extra='')=>'<label class="field"><span>'+esc(label)+'</span><input id="'+id+'" type="'+type+'" value="'+esc(value??'')+'" '+extra+'></label>';
 const textarea=(id,label,value)=>'<label class="field"><span>'+esc(label)+'</span><textarea id="'+id+'">'+esc(value??'')+'</textarea></label>';
-const button=(label,action,cls='button',attrs='')=>'<button class="'+cls+'" data-action="'+action+'" '+attrs+' '+(s.busy?'disabled':'')+'>'+label+'</button>';
+const button=(label,action,cls='button',attrs='')=>'<button class="'+cls+'" data-action="'+action+'" data-fixed-disabled="'+(/\bdisabled\b/.test(attrs)?'1':'0')+'" '+attrs+' '+(s.busy?'disabled':'')+'>'+label+'</button>';
 const pill=(label,cls='ghost')=>'<span class="chip '+cls+'">'+esc(label)+'</span>';
 const section=(label)=>'<div class="section-label">'+esc(label)+'</div>';
 const note=(text,kind='')=>'<div class="status-box '+esc(kind)+'">'+esc(text)+'</div>';
@@ -47,7 +47,7 @@ function flash(message,error=false){
   const n=document.createElement('div'); n.id='appToast';if(error)n.classList.add('error');n.textContent=message;
   document.body.appendChild(n);clearTimeout(s.toastTimer);s.toastTimer=setTimeout(()=>n.remove(),5500);
 }
-function setBusy(b){s.busy=b;document.querySelectorAll('button').forEach(x=>{if(x.dataset.action && x.dataset.action!=='configure')x.disabled=b;});}
+function setBusy(b){s.busy=b;document.querySelectorAll('button').forEach(x=>{if(x.dataset.action && x.dataset.action!=='configure')x.disabled=b||x.dataset.fixedDisabled==='1';});}
 function publicError(error){return error instanceof Error ? error.message : String(error||'Falha inesperada.');}
 async function run(task,successMessage){
   if(s.busy)return;setBusy(true);
@@ -213,7 +213,8 @@ function cardView(){
     infoRow('Itens',c.items?.length||0)+infoRow('Quantidade prevista',number(c.expected_total))+
     infoRow('Volumes recebidos',c.receiving?.volumes??'Não informado')+'</div>';
   let operation='';
-  if(c.current_sector==='RECEBIMENTO')operation=receivingPanel(c);
+  if(s.sector==='cadastro')operation=cadastroPanel(c);
+  else if(c.current_sector==='RECEBIMENTO')operation=receivingPanel(c);
   if(c.current_sector==='QUALIDADE')operation=qualityPanel(c);
   if(c.current_sector==='PROCESSAMENTO')operation=processingPanel(c);
   if(c.current_sector==='ETIQUETAGEM'||c.current_sector==='ESTOCAGEM')operation=downstreamPanel(c);
@@ -401,6 +402,30 @@ function processingPanel(c){
   }
   return tab('Processamento • Triagem','Cronômetro e contagem reais do WMS',body);
 }
+
+function cadastroPanel(c){
+  const tasks=Array.isArray(s.cadastro)?s.cadastro:[];
+  const canOperate=role()==='processamento';
+  const head=note('Cadastro por referência, liberado após a Triagem. Cada ação é registrada no DISTRILOG Web e no Supabase.');
+  if(!tasks.length)return tab('Cadastro de referências',null,head+
+    note('Este Card ainda não possui tarefas de Cadastro disponíveis. A Triagem precisa estar concluída.','warn'));
+  let body=head;
+  for(const t of tasks){
+    const stat=String(t.status||'PENDENTE');
+    const taskId=Number(t.id);
+    const myTask=!t.user_id||Number(t.user_id)===Number(s.user.id);
+    body+='<div class="line-row"><b>'+esc(t.reference||c.purchase_id)+'</b>'+
+      '<small>'+esc(stat)+' • '+number(t.reference_qty||0)+' peças • '+esc(t.user_name||'Não atribuído')+'</small>'+
+      '<div class="actions">'+(canOperate&&myTask?(
+        stat==='PENDENTE'?button('▶ Iniciar','cadastro-start','button small','data-task="'+taskId+'"'):'')+
+        (stat==='EM_ANDAMENTO'?button('⏸ Pausar','cadastro-pause','button light small','data-task="'+taskId+'"'):'')+
+        (stat==='PAUSADA'?button('▶ Retomar','cadastro-resume','button small','data-task="'+taskId+'"'):'')+
+        (['EM_ANDAMENTO','PAUSADA'].includes(stat)?button('✓ Concluir','cadastro-finish','button small','data-task="'+taskId+'"'):'')+
+        (stat==='CONCLUIDO'&&c.current_sector==='ETIQUETAGEM'&&!t.labels_ready?button('Liberar etiquetas','cadastro-labels','button light small','data-task="'+taskId+'"'):'')
+      ):'')+'</div></div>';
+  }
+  return tab('Cadastro de referências','Tarefas sincronizadas com o servidor',body);
+}
 function entryPanel(){
   const e=s.entry;
   if(!e)return note('Aguardando dados da Entrada do Processamento. Atualize a fila de Entrada.', 'warn');
@@ -561,12 +586,29 @@ async function resolveCode(code){
     await loadCard(Number(matched[1]));
     return;
   }
-  // Unknown QR data is not trusted as an action. It only becomes a search filter.
-  s.search=codeValue;s.sector='receiving';await loadQueue();
-  const needle=codeValue.toLowerCase();
-  const found=s.cards.filter(x=>[x.purchase_id,x.reference_list,x.material_search].some(v=>String(v||'').toLowerCase().includes(needle)));
-  if(found.length===1){await loadCard(found[0].id);return;}
-  flash(found.length?'Código localizado na fila. Selecione o Card correto.':'Código lido. Pesquise a referência nos setores do WMS.',!found.length);
+  // Real address QR: look up the precise WMS position, do not simulate a stock move.
+  const address=codeValue.toUpperCase();
+  if(/^\d+(RM|QA|PR)\d{2}[A-C]$|^\d+(ET|EC)\d{2}$/.test(address)){
+    const area=address.match(/(RM|QA|PR|ET|EC)/)[0];
+    await loadAddresses(area);
+    await loadInventory(address);
+    return;
+  }
+  // Reference / SKU: discover matching real cards across the operational sectors.
+  const scopes=['receiving','quality','processing','labeling','storage'];
+  const lists=await Promise.allSettled(scopes.map(scope=>API.get('/api/cards?scope='+q(scope)+'&search='+q(codeValue))));
+  const all=new Map();const shown=new Set();
+  lists.forEach((result,i)=>{
+    if(result.status!=='fulfilled'||!Array.isArray(result.value))return;
+    shown.add(scopes[i]);
+    result.value.forEach(card=>all.set(card.id,card));
+  });
+  if(shown.size===0)throw Error('O WMS não respondeu à pesquisa. Verifique sua internet.');
+  const matches=[...all.values()];
+  if(matches.length===1){await loadCard(matches[0].id);return;}
+  s.cards=matches;s.search='';s.sector=shown.values().next().value||'receiving';
+  s.screen='queue';render();
+  flash(matches.length?'Selecione o Card encontrado.':'Nenhuma referência encontrada no WMS.',!matches.length);
 }
 function requireSector(expected){
   if(!s.card)throw Error('Selecione um Card.');
@@ -838,6 +880,18 @@ async function runAction(action,buttonElement){
     const sector=String(c.current_sector||'').toLowerCase();requireSector(sector);
     const op=sector==='etiquetagem'?c.labeling:c.storage;
     await mutate('/api/downstream/'+op.id+'/complete',userBody());return;
+  }
+  if(action.startsWith('cadastro-')){
+    if(role()!=='processamento')throw Error('Somente o Processamento executa o Cadastro.');
+    const taskId=Number(buttonElement?.dataset.task||0);
+    const task=(s.cadastro||[]).find(x=>Number(x.id)===taskId);
+    if(!task)throw Error('Tarefa não encontrada no Cadastro deste Card.');
+    const cmd=action.slice('cadastro-'.length);
+    if(!['start','pause','resume','finish','labels'].includes(cmd))throw Error('Comando de Cadastro inválido.');
+    const path=cmd==='labels'
+      ? '/api/processing/cadastro/'+taskId+'/labels-ready'
+      : '/api/processing/cadastro/'+taskId+'/'+cmd;
+    await mutate(path,userBody());return;
   }
   if(action==='entryConfirm'){
     if(role()!=='processamento')throw Error('Confirmação de Entrada reservada ao Processamento.');
