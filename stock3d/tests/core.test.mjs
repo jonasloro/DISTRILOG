@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {filterPositions,positionStats,parseBindings,validPosition,unitsForSector,isSketchup} from '../src/core.js';
+import {filterPositions,positionStats,parseBindings,validPosition,unitsForSector,isSketchup,requireOfflineConversion} from '../src/core.js';
 const positions=[{address:'1RM06A',setor:'RM',ocupado:4},{address:'1ET04',setor:'ET',ocupado:0},{address:'2EC09',setor:'EC',ocupado:12}];
 test('validar posições registradas sem inventar níveis para ET/EC',()=>{
   positions.forEach(p=>assert.equal(validPosition(p),true));
@@ -25,4 +25,10 @@ test('vínculos JSON são estritos e validados',()=>{
 test('backup SKB é aceito como arquivo SketchUp',()=>{
   assert.equal(isSketchup('1. COMPLETO.ATUAL.skb'),true);
   assert.equal(isSketchup('modelo.exe'),false);
+});
+
+test('arquivos SketchUp grandes são direcionados à conversão offline',()=>{
+  assert.equal(requireOfflineConversion('estoque.skb',80*1024*1024),true);
+  assert.equal(requireOfflineConversion('miniatura.skp',4*1024*1024),false);
+  assert.equal(requireOfflineConversion('estoque.glb',30*1024*1024),false);
 });

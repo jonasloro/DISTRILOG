@@ -1,8 +1,8 @@
 # DISTRILOG · Stock 3D — primeira etapa integrada
 
 Projeto de **visualização de estoque somente leitura** do DISTRILOG. O modelo
-é importado diretamente no navegador a partir do `.skb`/`.skp` original ou
-um `.glb` otimizado. O arquivo original **não é enviado ao servidor**.
+é carregado no navegador preferencialmente de um `.glb` pré-convertido.
+Arquivos `.skb`/`.skp` pequenos também são aceitos. O arquivo original **não é enviado ao servidor**.
 
 ## Componentes
 
@@ -28,10 +28,11 @@ npm run dev
 Para converter o backup de 80 MB em GLB de forma local (opção mais confiável para esse arquivo grande):
 
 ```sh
-npm run convert -- "C:\\caminho\\1. COMPLETO.ATUAL(1).skb"
+python -m pip install openskp==1.3.0 mapbox_earcut==1.0.3
+python scripts/convert-skb.py "C:\\caminho\\1. COMPLETO.ATUAL(1).skb"
 ```
 
-Depois importe o `.glb` na visualização. A conversão via navegador também está disponível.
+Depois importe o `.glb` na visualização. A conversão via navegador é limitada a arquivos SketchUp de até 24 MB. O arquivo original de 80 MB foi convertido com sucesso para um GLB de 28,7 MB; importe esse GLB.
 
 Acesse a URL do terminal. A visualização funciona localmente, mas a **leitura
 real do WMS exige servir a versão construída no mesmo domínio do DISTRILOG**,
@@ -62,8 +63,8 @@ qualidade do mapeamento dos endereços, o controle de acesso e a performance.
 ## O que esta primeira versão entrega
 
 1. Navegação 3D, zoom, vista superior e perspectiva.
-2. Importação local de SketchUp (.skb/.skp) com preservação de instâncias,
-   além de carregamento direto de GLB.
+2. Carregamento direto do GLB real do CD; conversão local de SketchUp pequeno
+   com preservação de instâncias.
 3. Listagem de todas as posições WMS por RM, QA, PR, ET e EC (mesmo domínio).
 4. Consultas de conteúdo reais em `/api/positions/{address}/inventory`.
 5. Pesquisa por referência através de API somente leitura.
@@ -72,10 +73,9 @@ qualidade do mapeamento dos endereços, o controle de acesso e a performance.
 
 ## Limitações de homologação
 
-- Sem converter realmente o arquivo `.skb` para `.glb` no ambiente deste
-  pacote: não existe OpenSKP instalado localmente e o navegador ainda não
-  foi validado executando esse arquivo de 80 MB. A conversão depende de
-  recursos de memória e pode falhar; usar a opção GLB é o fallback.
+- O backup real de 80 MB foi convertido pelo OpenSKP Python. O GLB passou
+  pela validação estrutural, mas precisa de homologação visual em navegador.
+  A conversão de 80 MB via JavaScript esgotou memória e foi bloqueada.
 - Ainda não existe mapeamento certo entre os objetos do SketchUp e os
   códigos reais de casulos. Este vínculo é manual e precisa ser conferido.
 - O projeto não fornece roteamento de corredores, nem pré-calcula capacidade.

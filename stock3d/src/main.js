@@ -2,7 +2,7 @@ import './style.css';
 import * as THREE from 'three';
 import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
 import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
-import {SECTORS,positionKey,validPosition,unitsForSector,filterPositions,parseBindings,positionStats,isSketchup,isGLB} from './core.js';
+import {SECTORS,positionKey,validPosition,unitsForSector,filterPositions,parseBindings,positionStats,isSketchup,isGLB,requireOfflineConversion} from './core.js';
 
 const $ = (id) => document.getElementById(id);
 const canvas = $('threeCanvas');
@@ -120,6 +120,7 @@ async function displayGLB(buffer,filename){if(!buffer||buffer.byteLength<20)thro
 }
 async function onModelFile(file){if(!file||loading)return;if(!isSketchup(file.name)&&!isGLB(file.name)){toast('Formato não aceito. Use SKP, SKB ou GLB.',true);return}
   if(file.size>300*1024*1024){toast('Arquivo acima de 300 MB. Exporte uma versão GLB otimizada no SketchUp.',true);return}
+  if(requireOfflineConversion(file.name,file.size)){toast('Arquivo SketchUp grande demais para converter com segurança no navegador. Importe o GLB convertido do Stock 3D.',true);progress('Use o GLB convertido para proteger a memória do dispositivo.');return}
   loading=true;progress('Lendo arquivo local...');$('openModel').disabled=true;$('chooseFileButton').disabled=true;
   try{
     const buffer=await file.arrayBuffer();if(isGLB(file.name)){await displayGLB(buffer,file.name);return}

@@ -35,3 +35,8 @@ export function positionStats(positions, bindings = {}) {
 }
 export function isSketchup(filename) { return /\.(skb|skp)$/i.test(filename); }
 export function isGLB(filename) { return /\.glb$/i.test(filename); }
+
+// A conversão JavaScript de backups grandes pode esgotar a memória do navegador.
+export function requireOfflineConversion(filename, size) {
+  return isSketchup(filename) && size > 24 * 1024 * 1024;
+}
