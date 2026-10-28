@@ -1,7 +1,7 @@
 name: Stock 3D - Build experimental
 on:
   push:
-    branches: [feature/stock-3d, feature/stock3d-persistencia-e-localizacao]
+    branches: [feature/stock-3d, feature/stock3d-persistencia-e-localizacao, fix/stock3d-habilitar-salvar-modelo]
     paths:
       - 'stock3d/**'
       - '.github/workflows/stock3d-build.yml'

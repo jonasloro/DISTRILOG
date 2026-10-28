@@ -40,3 +40,8 @@ export function isGLB(filename) { return /\.glb$/i.test(filename); }
 export function requireOfflineConversion(filename, size) {
   return isSketchup(filename) && size > 24 * 1024 * 1024;
 }
+
+/** UI-only availability: the server independently enforces the admin role. */
+export function mayPublishModel({canManage,hasModel,loading,alreadyPublished}) {
+  return Boolean(canManage && hasModel && !loading && !alreadyPublished);
+}

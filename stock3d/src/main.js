@@ -2,12 +2,12 @@ import './style.css';
 import * as THREE from 'three';
 import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
 import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
-import {SECTORS,positionKey,validPosition,unitsForSector,filterPositions,parseBindings,positionStats,isSketchup,isGLB,requireOfflineConversion} from './core.js';
+import {SECTORS,positionKey,validPosition,unitsForSector,filterPositions,parseBindings,positionStats,isSketchup,isGLB,requireOfflineConversion,mayPublishModel} from './core.js';
 
 const $ = (id) => document.getElementById(id);
 const canvas = $('threeCanvas');
 const viewport = $('viewport');
-const state = {positions:[],selected:null,sector:'TODOS',query:'',searchMatches:null,anchors:{},modelName:null,modelHash:null,published:null,canManage:false,focusAddresses:null,loadedModel:null,glbBytes:null,bind:false,lastRefresh:null,loaded:false};
+const state = {positions:[],selected:null,sector:'TODOS',query:'',searchMatches:null,anchors:{},modelName:null,modelHash:null,published:null,canManage:false,modelStatusError:null,focusAddresses:null,loadedModel:null,glbBytes:null,bind:false,lastRefresh:null,loaded:false};
 let inventoryAbort=null, searchAbort=null, modelWorker=null, loading=false, toastTimeout=0, lastPointer=null;
 const scene = new THREE.Scene();
 scene.background = new THREE.Color('#14241c');
@@ -67,14 +67,28 @@ async function saveSharedAnchor(address, point, remove=false){
 function updateModelControls(){
   const button=$('publishModelButton'), label=$('publishedInfo');
   button.classList.toggle('hidden',!state.canManage);
-  button.disabled=!state.glbBytes||isSharedModel()||loading;
-  label.textContent=state.published?.available
-    ? 'Modelo compartilhado: '+state.published.filename+' · salvo no Supabase. '+(isSharedModel()?'Este é o modelo oficial.':'O modelo local ainda não é o oficial.')
-    : 'Nenhum modelo central publicado. O administrador pode importar e salvar um GLB uma única vez.';
+  button.disabled=!mayPublishModel({
+    canManage:state.canManage, hasModel:Boolean(state.glbBytes),
+    loading, alreadyPublished:isSharedModel()
+  });
+  if(state.modelStatusError){
+    label.textContent='Não foi possível confirmar o status do modelo no servidor: '+state.modelStatusError;
+  }else if(state.published?.available){
+    label.textContent='Modelo compartilhado: '+state.published.filename+' · salvo no Supabase. '+(isSharedModel()?'Este é o modelo oficial.':'O modelo local ainda não é o oficial.');
+  }else if(!state.canManage){
+    label.textContent='Somente administradores podem publicar o modelo do CD. Entre com um perfil administrador.';
+  }else if(loading){
+    label.textContent='Carregando o arquivo 3D. A publicação será habilitada ao concluir a importação.';
+  }else if(state.glbBytes){
+    label.textContent='Modelo importado. Clique em "Salvar modelo no Supabase" para disponibilizá-lo a toda a equipe.';
+  }else{
+    label.textContent='Nenhum modelo oficial publicado. Importe um arquivo GLB para habilitar o salvamento.';
+  }
 }
 async function loadPublishedModel(){
   try{
     const meta=await getJson('/api/stock3d/model');
+    state.modelStatusError=null;
     state.published=meta;
     state.canManage=Boolean(meta.can_manage);
     updateModelControls();
@@ -85,7 +99,7 @@ async function loadPublishedModel(){
     const buffer=await response.arrayBuffer();
     await displayGLB(buffer,meta.filename,meta.sha256);
     toast('Modelo oficial carregado automaticamente.');
-  }catch(e){progress('Não foi possível carregar o modelo oficial.');toast(e.message,true)}
+  }catch(e){state.modelStatusError=e.message;progress('Não foi possível carregar o modelo oficial.');toast(e.message,true)}
   finally{updateModelControls()}
 }
 async function publishModel(){
@@ -207,7 +221,15 @@ async function onModelFile(file){if(!file||loading)return;if(!isSketchup(file.na
     });worker.terminate();modelWorker=null;
     await displayGLB(bytes,file.name);
   }catch(e){console.error('Stock 3D import',e);toast(`Não foi possível importar: ${e.message}. Tente exportar um GLB pelo SketchUp.`,true);progress('Importação não concluída.');}
-  finally{loading=false;$('openModel').disabled=false;$('chooseFileButton').disabled=false;$('fileInput').value=''}
+  finally{
+    loading=false;
+    $('openModel').disabled=false;
+    $('chooseFileButton').disabled=false;
+    $('fileInput').value='';
+    // Reevaluate after loading=false; the successful GLB preview ran while
+    // the import flag was still true, and left the publish button disabled.
+    updateModelControls();
+  }
 }
 function saveBlob(filename,bytes,type){const blob=new Blob([bytes],{type});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=filename;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),2000)}
 function selectedSearch(){const q=state.query.trim();if(q.length<3||/^\d+(RM|QA|PR|ET|EC)/i.test(q)){state.searchMatches=null;drawList();return}
