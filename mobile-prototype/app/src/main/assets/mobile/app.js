@@ -627,7 +627,8 @@ async function mutate(path,payload,method='POST'){
   return out;
 }
 async function runAction(action,buttonElement){
-  if(s.busy)return;
+  // run() is the sole lock holder: it sets busy=true BEFORE calling this
+  // function. A second busy guard here silently discarded EVERY tap.
   if(action==='configure'){
     const endpoint=required('server','o endereço HTTPS do Render');
     if(!API.configure(endpoint))throw Error('Informe um endereço HTTPS público válido, sem caminho e sem parâmetros.');
