@@ -14,7 +14,6 @@ import math
 import re
 import struct
 import zlib
-from pathlib import PurePath
 
 from fastapi import APIRouter, FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import Response
@@ -55,8 +54,8 @@ def init_stock3d_db() -> None:
             """)
             cur.execute("ALTER TABLE distrilog.stock3d_model ENABLE ROW LEVEL SECURITY")
             cur.execute("ALTER TABLE distrilog.stock3d_anchors ENABLE ROW LEVEL SECURITY")
-            cur.execute("REVOKE ALL ON distrilog.stock3d_model FROM PUBLIC, anon, authenticated")
-            cur.execute("REVOKE ALL ON distrilog.stock3d_anchors FROM PUBLIC, anon, authenticated")
+            cur.execute("REVOKE ALL ON distrilog.stock3d_model FROM PUBLIC")
+            cur.execute("REVOKE ALL ON distrilog.stock3d_anchors FROM PUBLIC")
         conn.commit()
 
 
