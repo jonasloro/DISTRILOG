@@ -8,8 +8,8 @@ android {
         applicationId 'com.distribox.distrilogmobile'
         minSdk 24
         targetSdk 34
-        versionCode 7
-        versionName '0.7.0-homologacao'
+        versionCode 8
+        versionName '0.8.0-homologacao'
     }
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
@@ -18,4 +18,5 @@ android {
 }
 dependencies {
     implementation 'com.journeyapps:zxing-android-embedded:4.3.0'
+    implementation 'androidx.core:core:1.13.1'
 }
