@@ -120,7 +120,7 @@ def download_model(request: Request):
     tag = '"' + row["sha256"].strip() + '"'
     headers = {
         "ETag": tag,
-        "Cache-Control": "private, max-age=3600",
+        "Cache-Control": "private, no-cache, must-revalidate",
         "Content-Encoding": "gzip",
         "X-Content-Type-Options": "nosniff",
     }
