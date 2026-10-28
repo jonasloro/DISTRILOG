@@ -195,7 +195,7 @@ function showLoading(label) {
   $("mainContent").innerHTML = `<div class="loading-panel"><div class="loading-head"><span class="loading-spinner"></span><b>Carregando ${esc(label || "")}…</b></div>${rows}</div>`;
 }
 
-async function goTo(view) {
+async function goTo(view, stock3dFocus = null) {
   clearInterval(cleaningTick);
   clearInterval(processingFlowTick);
   const previousView = currentView;
@@ -215,7 +215,7 @@ async function goTo(view) {
     if (view === "storage") await renderCards("storage");
     if (view === "storage-hub") await renderStorageHub();
     if (view === "address-map") await renderAddressMap();
-    if (view === "stock-3d") renderStock3D();
+    if (view === "stock-3d") renderStock3D(stock3dFocus);
     if (view === "sgo") await renderSgo();
     if (view === "sgo-indicators") await renderSgoIndicators();
     if (view === "production") await renderProduction();
@@ -303,16 +303,33 @@ function metricCardsHtml(scope, totals) {
 }
 
 
-function renderStock3D() {
+function renderStock3D(focus = null) {
   setPage("Stock 3D", "Visualização interativa do centro de distribuição · consulta WMS somente leitura.");
+  const params = new URLSearchParams();
+  if (focus?.cardId && Number.isSafeInteger(Number(focus.cardId))) params.set("card", String(focus.cardId));
+  if (focus?.address) params.set("address", String(focus.address).trim().toUpperCase());
+  if (focus?.reference) params.set("reference", String(focus.reference).trim().slice(0,64));
+  const target = "/stock-3d" + (params.size ? "?" + params.toString() : "");
   $("mainContent").innerHTML = `
     <section class="stock3d-shell" aria-label="Stock 3D — visualização do CD">
       <div class="stock3d-toolbar">
-        <span><strong>Stock 3D</strong> · Importação local do modelo · Saldos consultados no WMS</span>
-        <a href="/stock-3d" target="_blank" rel="noopener noreferrer">Abrir em tela cheia ↗</a>
+        <span><strong>Stock 3D</strong> · Modelo compartilhado · Endereçamento em tempo real</span>
+        <a href="${esc(target)}" target="_blank" rel="noopener noreferrer">Abrir em tela cheia ↗</a>
       </div>
-      <iframe title="Stock 3D — centro de distribuição" src="/stock-3d" loading="lazy"></iframe>
+      <iframe title="Stock 3D — centro de distribuição" src="${esc(target)}" loading="lazy"></iframe>
     </section>`;
+}
+
+function openStock3DForCard(cardId, reference = "") {
+  if (!Number.isSafeInteger(Number(cardId)) || Number(cardId) <= 0) return;
+  closeModal();
+  goTo("stock-3d", {cardId: Number(cardId), reference});
+}
+
+function openStock3DForAddress(address) {
+  if (!address || !/^\d+(RM|QA|PR)\d{2}[A-C]$|^\d+(ET|EC)\d{2}$/.test(String(address).trim().toUpperCase())) return;
+  closeAddressInventory();
+  goTo("stock-3d", {address});
 }
 
 let addressMapLoadId = 0;
@@ -519,6 +536,7 @@ async function openAddressInventory(address) {
       return '<tr><td><b>'+esc(r.purchase_id||("Card #"+r.card_id))+'</b><small>'+esc(r.brand||r.supplier||"")+'</small></td>'+
         '<td>'+details+(broken?'<small class="wms-alert">Registro sem Card ou item correspondente</small>':'')+'</td>'+
         '<td><b>'+esc(rowUnit)+'</b></td><td>'+
+        '<button class="secondary small-btn" type="button" data-address="'+esc(address)+'" onclick="openStock3DForAddress(this.dataset.address)">Ver no 3D</button> '+
         (broken?'<span class="badge orange">Reconciliar</span>':'<button class="secondary small-btn" type="button" onclick="chooseAddressTransfer('+i+')">Transferir</button>')+
         '</td></tr>';
     }).join("");
@@ -1007,7 +1025,7 @@ async function openCard(cardId, tab = "receiving") {
   const canSetPurchaseMode = (cardData.current_sector === "RECEBIMENTO" && ["recebimento", "supervisor", "admin"].includes(currentUser.role)) ||
     canOperateQuality();
   $("modalBody").innerHTML = `
-    <div class="card-title"><div><h2>Card ${esc(cardDisplayName)}</h2><div class="card-subtitle">${esc(cardData.supplier||"—")} • ${esc(cardData.brand||"—")} • ${cardData.expected_total} peças</div></div><div class="card-title-actions"><span class="badge ${statusClass(cardData.status)}">${esc(cardData.status_label)}</span>${currentUser?.role==="admin"?`<button class="danger small-btn" onclick="deleteCard(${cardData.id})">Excluir Card</button>`:""}</div></div>
+    <div class="card-title"><div><h2>Card ${esc(cardDisplayName)}</h2><div class="card-subtitle">${esc(cardData.supplier||"—")} • ${esc(cardData.brand||"—")} • ${cardData.expected_total} peças</div></div><div class="card-title-actions"><button type="button" class="secondary small-btn" onclick="openStock3DForCard(${Number(cardData.id)})">⌖ Ver no Stock 3D</button><span class="badge ${statusClass(cardData.status)}">${esc(cardData.status_label)}</span>${currentUser?.role==="admin"?`<button class="danger small-btn" onclick="deleteCard(${cardData.id})">Excluir Card</button>`:""}</div></div>
     <div id="cardLocationSlot">${cardLocationBannerHtml(null,false,true)}</div>
     <div class="summary-grid">
       <div class="summary-box"><span>Setor atual</span><strong>${esc(cardData.current_sector)}</strong></div>
@@ -1482,8 +1500,8 @@ function renderProductsTab() {
   if (guardSampleAllocationNavigation()) return;
   activateTab("tabProductsBtn");
   $("cardTab").innerHTML = `<div class="table-wrap"><table>
-    <thead><tr><th>Produto</th><th>Referência</th><th>SKU</th><th>Marca</th><th>Cor</th><th>Tamanho</th><th>Lote</th><th>NF</th><th>Qtd. esperada</th></tr></thead>
-    <tbody>${cardData.items.map((i)=>`<tr><td>${esc(i.product||"—")}</td><td>${esc(i.reference||"—")}</td><td>${esc(i.sku||"—")}</td><td>${esc(i.brand||"—")}</td><td>${esc(i.color||"—")}</td><td>${esc(i.size||"—")}</td><td>${esc(i.lot||"—")}</td><td>${esc(i.nf||"—")}</td><td>${i.expected_qty}</td></tr>`).join("")}</tbody>
+    <thead><tr><th>Produto</th><th>Referência</th><th>SKU</th><th>Marca</th><th>Cor</th><th>Tamanho</th><th>Lote</th><th>NF</th><th>Qtd. esperada</th><th>Stock 3D</th></tr></thead>
+    <tbody>${cardData.items.map((i)=>`<tr><td>${esc(i.product||"—")}</td><td>${esc(i.reference||"—")}</td><td>${esc(i.sku||"—")}</td><td>${esc(i.brand||"—")}</td><td>${esc(i.color||"—")}</td><td>${esc(i.size||"—")}</td><td>${esc(i.lot||"—")}</td><td>${esc(i.nf||"—")}</td><td>${i.expected_qty}</td><td><button class="secondary small-btn" type="button" data-reference="${esc(i.reference||i.sku||"")}" onclick="openStock3DForCard(${Number(cardData.id)},this.dataset.reference)">Localizar</button></td></tr>`).join("")}</tbody>
   </table></div>`;
 }
 
