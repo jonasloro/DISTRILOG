@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#101a16" />
+<meta name="description" content="DISTRILOG Stock 3D: visualização do estoque por endereços WMS." />
+<title>Stock 3D · DISTRILOG</title>
+  <script type="module" crossorigin src="/static/stock3d/assets/index-gNVRvX5O.js"></script>
+  <link rel="stylesheet" crossorigin href="/static/stock3d/assets/index-DVdzKR9t.css">
+</head>
+<body>
+<div id="app">
+  <header class="topbar">
+    <div class="identity"><div class="logomark">D<span>³</span></div><div><div class="eyebrow">DISTRILOG / CENTRO DE DISTRIBUIÇÃO</div><h1>Stock <b>3D</b></h1></div></div>
+    <div class="head-actions"><span class="read-only">● SOMENTE LEITURA</span><span class="sync-status" id="syncStatus">Aguardando conexão WMS</span><a class="back-link" href="/" title="Voltar ao DISTRILOG">← Sistema</a></div>
+  </header>
+  <main class="layout">
+    <aside class="sidebar">
+      <div class="side-head"><div class="label">NAVEGAÇÃO DE ESTOQUE</div><h2>Endereços físicos</h2><p>Selecione o setor, procure um casulo ou uma referência e consulte a posição no mapa.</p></div>
+      <div class="searchbox"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></svg><input id="searchInput" placeholder="Ex.: 1RM06A ou referência" aria-label="Pesquisar endereço ou referência" maxlength="80" /></div>
+      <div class="filters" id="sectorFilters"><button data-sector="TODOS" class="active">Todos</button><button data-sector="RM">RM</button><button data-sector="QA">QA</button><button data-sector="PR">PR</button><button data-sector="ET">ET</button><button data-sector="EC">EC</button></div>
+      <div class="side-list-header"><span id="positionCount">0 posições</span><button id="refreshButton" title="Atualizar ocupação" aria-label="Atualizar">↻ Atualizar</button></div>
+      <div id="positionList" class="position-list"><div class="empty-list">Conecte-se ao DISTRILOG para consultar as posições.</div></div>
+      <div class="sidebar-bottom"><div class="status-key"><span class="kdot busy"></span> Com estoque <span class="kdot free"></span> Livre <span class="kdot unmapped"></span> Sem posição 3D</div><small>RM / QA / PR = volumes · ET / EC = caixas pretas. ET e EC não possuem níveis.</small></div>
+    </aside>
+    <section class="center">
+      <section class="metrics" aria-label="Indicadores WMS"><article><span>Endereços WMS</span><strong id="countAll">—</strong></article><article><span>Ocupados</span><strong id="countBusy">—</strong></article><article><span>Mapeados no 3D</span><strong id="countMapped">0</strong></article><article><span>Última atualização</span><strong class="compact" id="lastUpdate">—</strong></article></section>
+      <section class="viewport" id="viewport">
+        <canvas id="threeCanvas" aria-label="Mapa 3D interativo do estoque"></canvas>
+        <div class="viewport-header"><div><span class="view-title">VISUALIZAÇÃO DO CD</span><div class="view-subtitle" id="modelSubtitle">Modelo do SketchUp ainda não importado</div></div><div class="view-tools"><button id="homeCamera" title="Enquadrar modelo" aria-label="Enquadrar">⌖</button><button id="topCamera" title="Vista superior">Topo</button><button id="perspectiveCamera" title="Vista em perspectiva">3D</button></div></div>
+        <div class="start-panel" id="startPanel"><img src="/static/stock3d/preview.svg" alt="Ilustração genérica de racks, não representa o CD real" /><div class="start-panel-copy"><span class="badge">MODELO IDENTIFICADO</span><h2>Seu CD, em três dimensões.</h2><p>Importe o arquivo SketchUp (.skb/.skp) ou um modelo .glb. A conversão do SketchUp ocorre no próprio navegador: o arquivo original não é enviado ao servidor.</p><button class="primary" id="openModel">Importar modelo 3D ↗</button><span>Arquivos grandes podem demorar. O mapa será carregado sob demanda.</span></div></div>
+        <div class="viewport-foot"><span>Arraste: girar · Scroll: aproximar · Clique: selecionar</span><span id="viewStatus">Pronto para importar</span></div>
+      </section>
+      <div class="bottom-strip"><div class="step"><span class="n">01</span><div><b>Importar SketchUp</b><small>Modelo original do centro de distribuição</small></div></div><div class="step"><span class="n">02</span><div><b>Vincular endereços</b><small>Associe cada posição real a um ponto 3D</small></div></div><div class="step"><span class="n">03</span><div><b>Consultar o WMS</b><small>Saldo atualizado sem duplicar registros</small></div></div></div>
+    </section>
+    <aside class="inspector">
+      <div class="inspection-head"><div class="label">INSPEÇÃO DE POSIÇÃO</div><h2 id="inspectTitle">Selecione um endereço</h2><p id="inspectCaption">Os dados da posição serão consultados no WMS.</p></div>
+      <div class="inspector-actions"><button id="bindButton" disabled>⌖ Vincular ao ponto 3D</button><button id="removeBindButton" disabled title="Remover vínculo 3D">Desvincular</button></div>
+      <div id="inspectBody" class="inspect-content"><div class="empty-details"><div class="empty-icon">◇</div>Selecione uma posição na lista para conhecer o conteúdo real de mercadoria.</div></div>
+      <div class="inspector-footer"><div class="label">ARQUIVO & VÍNCULOS</div><button id="chooseFileButton">↥ Importar SKP/SKB/GLB</button><button id="downloadGLB" disabled>↓ Exportar GLB otimizado</button><button id="exportBindings">↓ Exportar mapa de vínculos</button><button id="importBindings">↥ Importar mapa de vínculos</button><p>Vínculos são salvos neste navegador. Para compartilhar com a equipe, exporte o JSON e valide a calibração antes de publicar no sistema.</p></div>
+    </aside>
+  </main>
+</div>
+<input id="fileInput" type="file" accept=".skb,.skp,.glb" hidden />
+<input id="bindingsInput" type="file" accept=".json" hidden />
+</body>
+</html>
