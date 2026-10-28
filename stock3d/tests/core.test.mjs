@@ -1,6 +1,8 @@
 import test from 'node:test';
+import {readFileSync} from 'node:fs';
+import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
-import {filterPositions,positionStats,parseBindings,validPosition,unitsForSector,isSketchup,requireOfflineConversion} from '../src/core.js';
+import {filterPositions,positionStats,parseBindings,validPosition,unitsForSector,isSketchup,requireOfflineConversion,mayPublishModel} from '../src/core.js';
 const positions=[{address:'1RM06A',setor:'RM',ocupado:4},{address:'1ET04',setor:'ET',ocupado:0},{address:'2EC09',setor:'EC',ocupado:12}];
 test('validar posições registradas sem inventar níveis para ET/EC',()=>{
   positions.forEach(p=>assert.equal(validPosition(p),true));
@@ -31,4 +33,17 @@ test('arquivos SketchUp grandes são direcionados à conversão offline',()=>{
   assert.equal(requireOfflineConversion('estoque.skb',80*1024*1024),true);
   assert.equal(requireOfflineConversion('miniatura.skp',4*1024*1024),false);
   assert.equal(requireOfflineConversion('estoque.glb',30*1024*1024),false);
+});
+
+test('botão de publicar só habilita para administrador após concluir a importação',()=>{
+  assert.equal(mayPublishModel({canManage:true,hasModel:true,loading:true,alreadyPublished:false}),false);
+  assert.equal(mayPublishModel({canManage:true,hasModel:true,loading:false,alreadyPublished:false}),true);
+  assert.equal(mayPublishModel({canManage:false,hasModel:true,loading:false,alreadyPublished:false}),false);
+  assert.equal(mayPublishModel({canManage:true,hasModel:false,loading:false,alreadyPublished:false}),false);
+  assert.equal(mayPublishModel({canManage:true,hasModel:true,loading:false,alreadyPublished:true}),false);
+});
+test('estado de importação reavalia o botão depois de liberar loading',()=>{
+  const source=readFileSync(fileURLToPath(new URL('../src/main.js',import.meta.url)),'utf8');
+  const importFunction=source.split('async function onModelFile(file)')[1].split('function saveBlob(')[0];
+  assert.match(importFunction,/finally\s*\{[\s\S]*?loading\s*=\s*false;[\s\S]*?updateModelControls\(\);/);
 });
