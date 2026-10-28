@@ -7,7 +7,7 @@ import {SECTORS,positionKey,validPosition,unitsForSector,filterPositions,parseBi
 const $ = (id) => document.getElementById(id);
 const canvas = $('threeCanvas');
 const viewport = $('viewport');
-const state = {positions:[],selected:null,sector:'TODOS',query:'',searchMatches:null,anchors:{},modelName:null,loadedModel:null,glbBytes:null,bind:false,lastRefresh:null,loaded:false};
+const state = {positions:[],selected:null,sector:'TODOS',query:'',searchMatches:null,anchors:{},modelName:null,modelHash:null,published:null,canManage:false,focusAddresses:null,loadedModel:null,glbBytes:null,bind:false,lastRefresh:null,loaded:false};
 let inventoryAbort=null, searchAbort=null, modelWorker=null, loading=false, toastTimeout=0, lastPointer=null;
 const scene = new THREE.Scene();
 scene.background = new THREE.Color('#14241c');
@@ -38,13 +38,84 @@ function toast(message,error=false){let n=document.querySelector('.toast');if(!n
 function progress(txt){$('viewStatus').textContent=txt;$('modelSubtitle').textContent=txt}
 function apiUrl(path){return path;}
 async function getJson(path,signal){const r=await fetch(apiUrl(path),{credentials:'same-origin',headers:{'Accept':'application/json'},signal,cache:'no-store'});if(r.status===401){throw new Error('Sessão expirada. Faça login no DISTRILOG e reabra o Stock 3D.')}if(!r.ok){let message=`Falha ${r.status}`;try{const data=await r.json();if(data.detail)message=typeof data.detail==='string'?data.detail:message}catch{}throw new Error(message)}return await r.json()}
-function localKey(){return `distrilog.stock3d.anchors.${state.modelName||'unloaded'}`}
-function saveAnchors(){if(!state.modelName)return;try{localStorage.setItem(localKey(),JSON.stringify({schema:'distrilog-stock3d-anchors-v1',model:state.modelName,anchors:state.anchors}))}catch{toast('Não foi possível salvar localmente. Exporte o mapa de vínculos.',true)}}
-function loadAnchors(){try{const data=JSON.parse(localStorage.getItem(localKey())||'null');state.anchors=data&&data.model===state.modelName?parseBindings(data).anchors:{}}catch{state.anchors={}}syncMarkers();}
+function localKey(){return 'distrilog.stock3d.anchors.'+(state.modelName||'unloaded')}
+function saveAnchorsLocal(){if(!state.modelName)return;try{localStorage.setItem(localKey(),JSON.stringify({schema:'distrilog-stock3d-anchors-v1',model:state.modelName,anchors:state.anchors}))}catch{toast('Não foi possível salvar localmente. Exporte o mapa de vínculos.',true)}}
+function isSharedModel(){return Boolean(state.published?.available&&state.modelHash===state.published.sha256)}
+async function loadAnchors(){
+  if(isSharedModel()){
+    try{
+      const result=await getJson('/api/stock3d/anchors');
+      if(result.model_sha256!==state.modelHash)throw new Error('O modelo foi atualizado. Atualize a página.');
+      state.anchors=parseBindings({schema:'distrilog-stock3d-anchors-v1',model:state.modelName,anchors:result.anchors||{}}).anchors;
+    }catch(e){state.anchors={};toast('Falha ao consultar os vínculos do CD: '+e.message,true)}
+  }else{
+    try{const data=JSON.parse(localStorage.getItem(localKey())||'null');state.anchors=data&&data.model===state.modelName?parseBindings(data).anchors:{}}catch{state.anchors={}}
+  }
+  syncMarkers();
+}
+async function saveSharedAnchor(address, point, remove=false){
+  if(!isSharedModel()){saveAnchorsLocal();return}
+  if(!state.canManage)throw new Error('Apenas administradores podem calibrar endereços do Stock 3D.');
+  const path='/api/stock3d/anchors/'+encodeURIComponent(address);
+  const opts=remove
+    ? {method:'DELETE',credentials:'same-origin'}
+    : {method:'PUT',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({model_sha256:state.modelHash,point})};
+  const url=remove?path+'?model_sha256='+encodeURIComponent(state.modelHash):path;
+  const response=await fetch(url,opts);
+  if(!response.ok){const data=await response.json().catch(()=>({}));throw new Error(data.detail||'Não foi possível salvar o vínculo 3D.')}
+}
+function updateModelControls(){
+  const button=$('publishModelButton'), label=$('publishedInfo');
+  button.classList.toggle('hidden',!state.canManage);
+  button.disabled=!state.glbBytes||isSharedModel()||loading;
+  label.textContent=state.published?.available
+    ? 'Modelo compartilhado: '+state.published.filename+' · salvo no Supabase. '+(isSharedModel()?'Este é o modelo oficial.':'O modelo local ainda não é o oficial.')
+    : 'Nenhum modelo central publicado. O administrador pode importar e salvar um GLB uma única vez.';
+}
+async function loadPublishedModel(){
+  try{
+    const meta=await getJson('/api/stock3d/model');
+    state.published=meta;
+    state.canManage=Boolean(meta.can_manage);
+    updateModelControls();
+    if(!meta.available){progress('Modelo oficial ainda não publicado. A gestão pode enviá-lo uma única vez.');return}
+    progress('Carregando modelo oficial do Supabase...');
+    const response=await fetch('/api/stock3d/model/glb?v='+encodeURIComponent(meta.sha256),{credentials:'same-origin'});
+    if(!response.ok)throw new Error('Falha ao baixar modelo oficial (HTTP '+response.status+').');
+    const buffer=await response.arrayBuffer();
+    await displayGLB(buffer,meta.filename,meta.sha256);
+    toast('Modelo oficial carregado automaticamente.');
+  }catch(e){progress('Não foi possível carregar o modelo oficial.');toast(e.message,true)}
+  finally{updateModelControls()}
+}
+async function publishModel(){
+  if(!state.canManage||!state.glbBytes||loading)return;
+  const button=$('publishModelButton');
+  button.disabled=true;
+  try{
+    progress('Publicando modelo privado para a equipe...');
+    const data=new FormData();
+    const name=state.loadedModel.replace(/\.(?:skp|skb|glb)$/i,'')+'.glb';
+    data.append('file',new Blob([state.glbBytes],{type:'model/gltf-binary'}),name);
+    const response=await fetch('/api/stock3d/model',{method:'POST',body:data,credentials:'same-origin'});
+    if(!response.ok){const err=await response.json().catch(()=>({}));throw new Error(err.detail||'O Supabase não confirmou o modelo.')}
+    const meta=await getJson('/api/stock3d/model');
+    state.published=meta;
+    const existingAnchors={...state.anchors};
+    if(Object.keys(existingAnchors).length){
+      const migrated=await fetch('/api/stock3d/anchors/import',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({model_sha256:state.modelHash,anchors:existingAnchors})});
+      if(!migrated.ok){const err=await migrated.json().catch(()=>({}));toast('O modelo foi salvo, mas a calibração não: '+(err.detail||'verifique os endereços'),true);}
+    }
+    await loadAnchors();
+    toast('Modelo compartilhado salvo! A equipe já poderá abri-lo automaticamente.');
+    progress('Modelo oficial disponível para a equipe.');
+  }catch(e){toast('Não foi possível publicar: '+e.message,true);progress('Publicação não concluída.')}
+  finally{updateModelControls()}
+}
 function updateMetrics(){const n=positionStats(state.positions,state.anchors);$('countAll').textContent=n.total||'—';$('countBusy').textContent=n.busy||'0';$('countMapped').textContent=n.mapped;$('lastUpdate').textContent=state.lastRefresh?state.lastRefresh.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}):'—';}
 function escapeText(x){return String(x??'')}
 function el(tag,cls,text){const node=document.createElement(tag);if(cls)node.className=cls;if(text!==undefined)node.textContent=escapeText(text);return node}
-function drawList(){const matches=filterPositions(state.positions,state.sector,state.query,state.searchMatches);const host=$('positionList');host.replaceChildren();$('positionCount').textContent=`${matches.length} posições`;if(!matches.length){host.append(el('div','empty-list',state.loaded?'Nenhuma posição corresponde ao filtro.':'Sem dados. Entre no DISTRILOG e atualize.'));return}
+function drawList(){const matches=filterPositions(state.positions,state.sector,state.query,state.searchMatches).filter(p=>!state.focusAddresses||state.focusAddresses.has(p.address));const host=$('positionList');host.replaceChildren();$('positionCount').textContent=`${matches.length} posições`;if(!matches.length){host.append(el('div','empty-list',state.loaded?'Nenhuma posição corresponde ao filtro.':'Sem dados. Entre no DISTRILOG e atualize.'));return}
   const max=140;
   for(const pos of matches.slice(0,max)){
     const row=el('button','position'+(state.selected===pos.address?' selected':''));row.type='button';
@@ -87,7 +158,7 @@ function renderInventory(info){const c=$('inspectBody');c.replaceChildren();cons
   }
   if(info.items.length>120)c.append(el('div','empty-details','Mais resultados disponíveis no painel WMS.'));
 }
-function updateBindButtons(){const selected=!!state.selected;$('bindButton').disabled=!selected||!modelRoot;$('removeBindButton').disabled=!selected||!state.anchors[state.selected];$('bindButton').classList.toggle('active',state.bind);$('bindButton').textContent=state.bind?'Toque em um ponto do modelo...':'⌖ Vincular ao ponto 3D'}
+function updateBindButtons(){const selected=!!state.selected;const editable=!isSharedModel()||state.canManage;$('bindButton').disabled=!selected||!modelRoot||!editable;$('removeBindButton').disabled=!selected||!state.anchors[state.selected]||!editable;$('bindButton').classList.toggle('active',state.bind);$('bindButton').textContent=state.bind?'Toque em um ponto do modelo...':'⌖ Vincular ao ponto 3D'}
 const sphere=new THREE.SphereGeometry(.18,12,8);
 function markerMaterial(occupied,selected){return new THREE.MeshBasicMaterial({color:selected?'#ffdb81':occupied?'#bbec78':'#75b8a0',depthTest:false})}
 function syncMarkers(){while(markers.children.length){const m=markers.children[0];markers.remove(m);m.material.dispose()}
@@ -100,7 +171,7 @@ canvas.addEventListener('pointerdown',e=>{lastPointer=[e.clientX,e.clientY]});
 canvas.addEventListener('pointerup',async e=>{
   if(!lastPointer||Math.hypot(lastPointer[0]-e.clientX,lastPointer[1]-e.clientY)>6)return;
   pointerCoordinates(e);
-  if(state.bind&&state.selected&&modelRoot){const found=raycaster.intersectObject(modelRoot,true);if(found.length){state.anchors[state.selected]=found[0].point.toArray().map(x=>Number(x.toFixed(4)));state.bind=false;saveAnchors();syncMarkers();drawList();toast(`${state.selected} vinculado ao mapa 3D.`)}else toast('Clique sobre uma superfície do modelo.',true);return}
+  if(state.bind&&state.selected&&modelRoot){const found=raycaster.intersectObject(modelRoot,true);if(found.length){const address=state.selected, point=found[0].point.toArray().map(x=>Number(x.toFixed(4)));try{await saveSharedAnchor(address,point);state.anchors[address]=point;if(!isSharedModel())saveAnchorsLocal();state.bind=false;syncMarkers();drawList();toast(address+' vinculado ao mapa 3D.');}catch(err){toast(err.message,true)}}else toast('Clique sobre uma superfície do modelo.',true);return}
   const selected=raycaster.intersectObjects(markers.children,false);if(selected.length)await selectPosition(selected[0].object.userData.address);
 });
 function focusPoint(p){const delta=p.clone().sub(controls.target);camera.position.add(delta);controls.target.copy(p);controls.update();}
@@ -110,12 +181,12 @@ function fitModel(){if(!modelRoot)return;const box=new THREE.Box3().setFromObjec
   grid.visible=false;scene.fog=null;
 }
 function disposeModel(){if(!modelRoot)return;scene.remove(modelRoot);modelRoot.traverse(o=>{if(o.isMesh){o.geometry?.dispose();if(Array.isArray(o.material))o.material.forEach(m=>m.dispose());else o.material?.dispose()}});modelRoot=null}
-async function displayGLB(buffer,filename){if(!buffer||buffer.byteLength<20)throw new Error('GLB vazio ou inválido.');
+async function displayGLB(buffer,filename,knownHash=null){if(!buffer||buffer.byteLength<20)throw new Error('GLB vazio ou inválido.');
   if(new DataView(buffer).getUint32(0,true)!==0x46546c67)throw new Error('Arquivo GLB não reconhecido.');
   const loader=new GLTFLoader();const result=await new Promise((resolve,reject)=>loader.parse(buffer,'',resolve,reject));
   disposeModel();modelRoot=result.scene;modelRoot.name='SKETCHUP_CENTRO_DISTRIBUICAO';scene.add(modelRoot);
-  state.modelName=filename.replace(/\.(skp|skb|glb)$/i,'').toLowerCase();state.glbBytes=buffer;state.loadedModel=filename;
-  loadAnchors();fitModel();syncMarkers();drawList();updateMetrics();$('startPanel').classList.add('hidden');$('downloadGLB').disabled=false;
+  state.modelName=filename.replace(/\.(skp|skb|glb)$/i,'').toLowerCase();state.glbBytes=buffer;state.loadedModel=filename;state.modelHash=knownHash||Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',buffer))).map(x=>x.toString(16).padStart(2,'0')).join('');
+  await loadAnchors();fitModel();syncMarkers();drawList();updateMetrics();$('startPanel').classList.add('hidden');$('downloadGLB').disabled=false;updateModelControls();
   progress(`${filename} · modelo 3D carregado`);toast('Modelo 3D carregado. Agora você pode vincular os endereços WMS.');
 }
 async function onModelFile(file){if(!file||loading)return;if(!isSketchup(file.name)&&!isGLB(file.name)){toast('Formato não aceito. Use SKP, SKB ou GLB.',true);return}
@@ -145,19 +216,62 @@ function selectedSearch(){const q=state.query.trim();if(q.length<3||/^\d+(RM|QA|
 }
 $('sectorFilters').addEventListener('click',e=>{const btn=e.target.closest('button[data-sector]');if(!btn)return;state.sector=btn.dataset.sector;for(const b of $('sectorFilters').querySelectorAll('button'))b.classList.toggle('active',b===btn);drawList();});
 let searchTimer;
-$('searchInput').addEventListener('input',e=>{state.query=e.target.value;state.searchMatches=null;drawList();clearTimeout(searchTimer);searchTimer=setTimeout(selectedSearch,350)});
+$('searchInput').addEventListener('input',e=>{state.focusAddresses=null;$('clearFocusButton').classList.add('hidden');state.query=e.target.value;state.searchMatches=null;drawList();clearTimeout(searchTimer);searchTimer=setTimeout(selectedSearch,350)});
 $('refreshButton').addEventListener('click',refreshPositions);
 $('openModel').addEventListener('click',()=>$('fileInput').click());
 $('chooseFileButton').addEventListener('click',()=>$('fileInput').click());
 $('fileInput').addEventListener('change',e=>onModelFile(e.target.files[0]));
 $('bindButton').addEventListener('click',()=>{if(!state.selected||!modelRoot)return;state.bind=!state.bind;updateBindButtons();if(state.bind)toast(`Clique na estrutura física correspondente a ${state.selected}.`)});
-$('removeBindButton').addEventListener('click',()=>{if(!state.selected)return;delete state.anchors[state.selected];saveAnchors();syncMarkers();drawList();toast('Vínculo 3D removido. Nenhum dado WMS foi alterado.')});
+$('removeBindButton').addEventListener('click',async()=>{if(!state.selected)return;const address=state.selected;try{await saveSharedAnchor(address,null,true);delete state.anchors[address];if(!isSharedModel())saveAnchorsLocal();syncMarkers();drawList();toast('Vínculo 3D removido. Nenhum saldo WMS foi alterado.')}catch(err){toast(err.message,true)}});
 $('homeCamera').addEventListener('click',fitModel);
 $('topCamera').addEventListener('click',()=>{if(!modelRoot)return;const box=new THREE.Box3().setFromObject(modelRoot);const ctr=box.getCenter(new THREE.Vector3()),rad=Math.max(...box.getSize(new THREE.Vector3()).toArray());controls.target.copy(ctr);camera.position.set(ctr.x,ctr.y+rad*1.5,ctr.z+.001);controls.update()});
 $('perspectiveCamera').addEventListener('click',fitModel);
 $('downloadGLB').addEventListener('click',()=>{if(state.glbBytes)saveBlob((state.modelName||'DISTRILOG-Stock3D')+'.glb',state.glbBytes,'model/gltf-binary')});
 $('exportBindings').addEventListener('click',()=>{if(!state.modelName){toast('Importe o modelo antes de exportar os vínculos.',true);return}saveBlob('DISTRILOG-Stock3D-vinculos.json',JSON.stringify({schema:'distrilog-stock3d-anchors-v1',model:state.modelName,anchors:state.anchors},null,2),'application/json')});
 $('importBindings').addEventListener('click',()=>$('bindingsInput').click());
-$('bindingsInput').addEventListener('change',async e=>{const file=e.target.files?.[0];if(!file)return;try{if(file.size>100000)throw new Error('Mapa de vínculos excessivamente grande.');const parsed=parseBindings(JSON.parse(await file.text()));if(!state.modelName)throw new Error('Importe primeiro o modelo 3D correspondente.');if(parsed.model!==state.modelName)throw new Error(`Este mapa pertence ao modelo “${parsed.model}”, não a “${state.modelName}”.`);state.anchors=parsed.anchors;saveAnchors();syncMarkers();drawList();toast('Vínculos importados com sucesso.')}catch(err){toast(err.message,true)}finally{$('bindingsInput').value=''}});
+$('bindingsInput').addEventListener('change',async e=>{const file=e.target.files?.[0];if(!file)return;try{
+  if(file.size>100000)throw new Error('Mapa de vínculos excessivamente grande.');
+  const parsed=parseBindings(JSON.parse(await file.text()));
+  if(!state.modelName)throw new Error('Importe primeiro o modelo 3D correspondente.');
+  if(parsed.model!==state.modelName)throw new Error('Este mapa pertence ao modelo '+parsed.model+', não a '+state.modelName+'.');
+  if(isSharedModel()){
+    if(!state.canManage)throw new Error('Somente administradores podem publicar os vínculos compartilhados.');
+    if(Object.keys(parsed.anchors).length){
+      const response=await fetch('/api/stock3d/anchors/import',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({model_sha256:state.modelHash,anchors:parsed.anchors})});
+      if(!response.ok){const data=await response.json().catch(()=>({}));throw new Error(data.detail||'Importação não confirmada.')}
+    }
+    await loadAnchors();
+  }else{state.anchors=parsed.anchors;saveAnchorsLocal();}
+  syncMarkers();drawList();toast('Vínculos importados e salvos com sucesso.');
+}catch(err){toast(err.message,true)}finally{$('bindingsInput').value=''}});
+$('publishModelButton').addEventListener('click',publishModel);
+$('clearFocusButton').addEventListener('click',()=>{state.focusAddresses=null;state.query='';state.searchMatches=null;$('searchInput').value='';$('clearFocusButton').classList.add('hidden');drawList()});
+async function applyDeepLink(){
+  const params=new URLSearchParams(window.location.search);
+  const cardValue=params.get('card');
+  const address=positionKey(params.get('address'));
+  const reference=(params.get('reference')||'').trim().slice(0,64);
+  if(cardValue&&/^\d+$/.test(cardValue)){
+    try{
+      const id=Number(cardValue);
+      const qs=reference?'?reference='+encodeURIComponent(reference):'';
+      const result=await getJson('/api/stock3d/cards/'+id+'/locations'+qs);
+      const locations=result.locations||[];
+      if(!locations.length){toast('Este card ainda não possui mercadoria alocada no WMS'+(reference?' para essa referência':'')+'.',true);return}
+      state.focusAddresses=new Set(locations.map(x=>x.address));
+      $('clearFocusButton').classList.remove('hidden');
+      drawList();
+      progress('Card #'+id+' · '+locations.length+' endereço(s) ativo(s) no WMS');
+      await selectPosition(locations[0].address);
+      if(!state.anchors[locations[0].address])toast('Endereço localizado no WMS; posição 3D ainda não calibrada.');
+    }catch(e){toast('Não foi possível localizar o card: '+e.message,true)}
+  }else if(address){
+    const pos=state.positions.find(x=>x.address===address);
+    if(pos){state.focusAddresses=new Set([address]);$('clearFocusButton').classList.remove('hidden');drawList();await selectPosition(address)}
+    else toast('Endereço não encontrado no WMS.',true);
+  }else if(reference){
+    state.query=reference;$('searchInput').value=reference;drawList();selectedSearch();
+  }
+}
 window.addEventListener('pagehide',()=>{rendererRunning=false;modelWorker?.terminate();ro.disconnect();renderer.dispose()});
-refreshPositions();
+(async()=>{await Promise.allSettled([refreshPositions(),loadPublishedModel()]);await applyDeepLink()})();

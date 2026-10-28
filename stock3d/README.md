@@ -82,3 +82,51 @@ qualidade do mapeamento dos endereços, o controle de acesso e a performance.
 - Nunca grava saldos, transfere mercadorias ou movimenta cards.
 - **ET/EC não têm andares** e seu saldo é mostrado em caixas pretas.
 - A posição mostra lotes e referências somente conforme API do WMS.
+
+
+## Modelo compartilhado no Supabase (publicação operacional)
+
+A geometria privada **não deve ser enviada ao repositório público**. O modelo GLB é
+armazenado uma única vez, compactado com gzip, na tabela privada
+`distrilog.stock3d_model` do mesmo PostgreSQL utilizado pelo DISTRILOG no Render.
+O servidor cria as tabelas idempotentes no startup; nenhuma credencial adicional
+é exposta ao navegador e nenhum arquivo depende do disco efêmero do Render.
+
+1. Administrador: abra **Stock 3D** na barra lateral.
+2. Clique em **Importar GLB local** e selecione o modelo convertido do CD.
+3. Clique em **Salvar modelo no Supabase para toda a equipe**.
+4. A confirmação só é mostrada após gravação bem-sucedida no banco.
+5. Colaboradores: abra Stock 3D normalmente. O arquivo é baixado
+   automaticamente sob autenticação, somente quando a tela é aberta.
+
+O primeiro envio (por administrador) é indispensável: não transferimos a planta
+privada através do GitHub público. O modelo original convertido tem ~28,7 MB,
+mas ocupa ~9,6 MB em gzip no banco. Conferir espaço disponível e custos
+de armazenamento do projeto Supabase antes da publicação.
+
+**Atenção ao ambiente:** confirme antes do upload que o
+`SUPABASE_DATABASE_URL` do Render aponta para o projeto de dados operacional,
+sobretudo se existirem vários projetos de Supabase.
+
+### Vínculos e localização
+
+- Os vínculos físicos WMS ↔ coordenadas 3D são gravados em
+  `distrilog.stock3d_anchors` e associados ao hash da versão do modelo.
+  Só administradores podem calibrar, importar ou remover vínculos.
+- Novos modelos não herdam automaticamente coordenadas antigas. Isso evita
+  apontar casulos para lugares errados quando a planta muda.
+- Links de cards, referências, SKUs e endereços abrem o Stock 3D com o filtro
+  correspondente. A lista e a inspeção mostram localizações ativas do WMS
+  mesmo antes da calibração; a câmera só consegue focar um casulo depois
+  que um administrador vincular o ponto físico real no modelo.
+- Nenhuma ação neste módulo transfere, cria, exclui ou reserva estoque.
+- Quando ainda não existe modelo publicado, o uso opcional de arquivo local
+  guarda os vínculos apenas no navegador. Exporte o JSON antes de mudar
+  de modelo para preservar o trabalho.
+
+Rotas HTTP (todas exigem sessão válida):
+`GET /api/stock3d/model`, `GET /api/stock3d/model/glb`,
+`POST /api/stock3d/model` (admin),
+`GET /api/stock3d/anchors`, `PUT|DELETE /api/stock3d/anchors/{address}` (admin),
+`POST /api/stock3d/anchors/import` (admin),
+`GET /api/stock3d/cards/{id}/locations`.

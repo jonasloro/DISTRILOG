@@ -32,7 +32,7 @@ from goat_module import init_goat_db, register_goat_routes
 from positions_module import init_positions_db, register_positions_routes, total_allocated, item_allocation_totals
 from wms_inventory_module import init_inventory_db, register_inventory_routes
 from mission_module import register_mission_routes
-from stock3d_module import register_stock3d_routes
+from stock3d_module import init_stock3d_db, register_stock3d_routes
 from collab_module import init_collab_db, register_collab_routes
 from unified_module import init_unified_db, register_unified_routes
 from cleaning_module import init_cleaning_db, register_cleaning_routes
@@ -1347,6 +1347,7 @@ def startup() -> None:
     init_positions_db()
     init_inventory_db()
     init_generic_uploads_db()
+    init_stock3d_db()
     init_collab_db()
     init_unified_db()
     init_cleaning_db()
