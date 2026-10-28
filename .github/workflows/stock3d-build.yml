@@ -7,7 +7,7 @@ on:
       - '.github/workflows/stock3d-build.yml'
   workflow_dispatch:
 permissions:
-  contents: read
+  contents: write
 jobs:
   build:
     runs-on: ubuntu-24.04
@@ -17,9 +17,15 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Install exact frontend dependencies
+      - name: Install pinned dependencies
         working-directory: stock3d
-        run: npm install --no-audit --no-fund
+        shell: bash
+        run: |
+          if test -f package-lock.json; then
+            npm ci --no-audit --no-fund
+          else
+            npm install --no-audit --no-fund
+          fi
       - name: Unit tests
         working-directory: stock3d
         run: npm test
@@ -32,3 +38,16 @@ jobs:
           path: stock3d/dist
           if-no-files-found: error
           retention-days: 7
+      - name: Commit built frontend to experimental branch only
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p static/stock3d
+          rsync -a --delete stock3d/dist/ static/stock3d/
+          git add -A static/stock3d stock3d/package-lock.json
+          if ! git diff --cached --quiet; then
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git commit -m 'build(stock3d): publish verified frontend assets [skip ci]'
+            git push origin HEAD:feature/stock-3d
+          fi
