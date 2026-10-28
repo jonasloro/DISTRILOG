@@ -1475,3 +1475,12 @@ input:disabled,select:disabled,textarea:disabled{
   .mission-month-heading .actions{width:100%;flex-wrap:wrap}
   .mission-month-heading .actions button{font-size:11px;padding:8px 10px}
 }
+
+
+/* Stock 3D é isolado numa iframe: WebGL e o modelo não carregam em outras telas. */
+.stock3d-shell{background:#171d21;border:1px solid #354039;border-radius:12px;overflow:hidden;min-height:640px}
+.stock3d-toolbar{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:11px 15px;color:#dbe9dc;font-size:12px;border-bottom:1px solid #354039}
+.stock3d-toolbar a{color:#b8e493;text-decoration:none;font-weight:750;white-space:nowrap}
+.stock3d-toolbar a:hover{text-decoration:underline}
+.stock3d-shell iframe{display:block;width:100%;height:max(640px,calc(100vh - 195px));border:0;background:#101a16}
+@media(max-width:760px){.stock3d-toolbar{flex-wrap:wrap}.stock3d-shell iframe{height:calc(100dvh - 175px);min-height:520px}}

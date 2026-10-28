@@ -106,7 +106,9 @@ def _read_session(token: str) -> tuple[int, int] | None:
 @app.middleware("http")
 async def require_authenticated_session(request: Request, call_next):
     path = request.url.path
-    if not path.startswith("/api/") or path in _PUBLIC_API:
+    # A página Stock 3D também exige sessão válida; os arquivos JS/CSS
+    # permanecem estáticos, mas os dados WMS só saem por APIs autenticadas.
+    if (not path.startswith("/api/") and path != "/stock-3d") or path in _PUBLIC_API:
         return await call_next(request)
     try:
         session = _read_session(request.cookies.get(_SESSION_COOKIE, ""))
@@ -1390,6 +1392,16 @@ def startup() -> None:
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
+
+
+@app.get("/stock-3d")
+def stock3d_page():
+    """Visualizador carregado somente quando solicitado pela navegação."""
+    response = FileResponse(BASE_DIR / "static" / "stock3d" / "index.html", media_type="text/html")
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["X-Frame-Options"] = "SAMEORIGIN"
+    response.headers["Content-Security-Policy"] = "frame-ancestors 'self'"
+    return response
 
 
 @app.post("/api/login")
@@ -2866,6 +2878,7 @@ register_goat_routes(app)
 register_positions_routes(app)
 register_inventory_routes(app)
 register_mission_routes(app)
+register_stock3d_routes(app)
 register_unified_routes(app)
 register_cleaning_routes(app)
 register_collab_routes(app)
