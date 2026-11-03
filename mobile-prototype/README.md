@@ -83,3 +83,56 @@ backend, a branch principal nem o Render de produção.
 No Android, a aba **Atividades** permite Abertura de espaço e Devolução ao porta-paletes, com fluxo guiado em 4 etapas: atividade → rua/marca → cronômetro persistente → quantidade e unidade obrigatórias. O registro é compartilhado com o DISTRILOG Web via `/api/space-activities` e armazenado no Supabase; não altera o saldo nem transfere fisicamente posições no WMS. O Card passa a separar Operar/Endereços/Grade/Histórico e as operações de Recebimento, Qualidade, Triagem e ET/EC exibem etapas em sequência, com navegação fixa na parte inferior. Os fluxos completos exigem homologação física. Não foram incluídos novos processos de Separação ou Expedição antes da definição das regras operacionais.
 
 O pipeline desta versão gera um APK de homologação e publica uma **GitHub Release prerelease** com link direto de instalação (sem precisar baixar o ZIP de Artifacts). A assinatura debug do runner pode mudar entre builds: se o Android disser "app não instalado", desinstale apenas a versão anterior do APK protótipo e instale novamente (dados WMS permanecem no servidor).
+
+
+## Atualizador de APK integrado (piloto 1.2.0)
+
+Em Ajustes > Atualizações do aplicativo, o operador pode verificar, baixar
+e instalar futuras versões diretamente no DISTRILOG Mobile. A verificação
+também ocorre ao abrir o aplicativo. Nenhuma instalação é silenciosa: o
+instalador do Android exige confirmação do usuário.
+
+O aplicativo baixa exclusivamente do repositório público oficial
+jonasloro/DISTRILOG, de releases com prefixo mobile-prototipo-X.Y.Z.
+Exige o APK e checksum SHA-256 publicados na mesma release. Guarda o arquivo
+temporariamente no cache privado e verifica SHA-256, identidade do pacote,
+versionCode maior e assinatura digital igual à versão instalada.
+A permissão para instalar fontes desconhecidas deve ser concedida no Android
+8 ou superior, quando solicitada.
+
+### Assinatura permanente: configuração única obrigatória
+
+As versões piloto antigas usavam certificados DEBUG gerados por cada runner
+do GitHub Actions. Por isso, versões debug distintas não necessariamente
+atualizam uma à outra. O workflow agora prevê uma assinatura permanente para
+a qual são necessários quatro GitHub Actions Secrets:
+
+- MOBILE_SIGNING_KEYSTORE_B64 = Base64 dos bytes de sua keystore .jks
+- MOBILE_SIGNING_STORE_PASSWORD = senha da keystore
+- MOBILE_SIGNING_KEY_ALIAS = alias da chave
+- MOBILE_SIGNING_KEY_PASSWORD = senha da chave
+
+A keystore deve ser gerada por responsável técnico e guardada fora do
+GitHub, do chat e do APK, com backup protegido. Nunca comite a chave privada.
+Exemplo no Windows (JDK 17+):
+
+    keytool -genkeypair -keystore distrilog-release.jks -alias distrilog-mobile -keyalg RSA -keysize 3072 -validity 11000
+
+Exemplo PowerShell para gerar Base64 localmente:
+
+    [Convert]::ToBase64String([IO.File]::ReadAllBytes("distrilog-release.jks"))
+
+Configure os quatro secrets em GitHub > Settings > Secrets and variables >
+Actions. O workflow gera então um APK RELEASE assinado com a mesma keystore e
+o publica sob a tag mobile-prototipo-1.2.0 com APK e checksum. Depois, basta
+aumentar versionCode, versionName e a tag do workflow em cada versão,
+preservando os mesmos secrets.
+
+Se faltar algum secret, o workflow compila um APK DEBUG assinado apenas
+para homologação e publica na release mobile-piloto-1.2.0. Ela NAO entra
+no canal de atualizações verificadas, justamente para evitar uma falsa
+promessa de atualização. Uma única desinstalação do antigo APK debug
+será necessária ao migrar para o APK com assinatura permanente.
+A desinstalação não remove dados gravados no Supabase.
+
+O atualizador não altera operações WMS, o backend Render, nem o banco.

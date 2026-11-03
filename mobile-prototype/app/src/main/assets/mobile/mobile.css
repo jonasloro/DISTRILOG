@@ -115,3 +115,13 @@ table.mobile-table{width:100%;border-collapse:collapse;font-size:12px}
   .mobile-flow-actions,.mobile-task-footer{padding:9px 9px;gap:6px}
   .mobile-flow-actions .button,.mobile-task-footer .button{font-size:11px}
 }
+
+
+/* APK updater: clear offline-independent mobile installation flow */
+.updates-screen{padding-bottom:115px}
+.updates-screen .surface{border:1px solid #4a6954;background:#1b2b21}
+.updates-screen .inline-stat{padding:11px 0}
+.updates-screen .status-box{margin:15px 0;line-height:1.6}
+.updates-screen .button.full{margin-top:10px}
+.apk-progress{margin:15px 0;height:12px;background:#273c2f;border-radius:20px;overflow:hidden;border:1px solid #49674a}
+.apk-progress>div{height:100%;background:linear-gradient(90deg,#8bd060,#cdf992);transition:width .2s ease}
