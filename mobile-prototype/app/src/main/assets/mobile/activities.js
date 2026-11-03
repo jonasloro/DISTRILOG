@@ -111,7 +111,8 @@ function view(user){
 async function act(command,user){
   if(command==="adjust"||command==="return"){
     if(flow.active)return;
-    flow.kind=command==="adjust"?"AJUSTE_ESTOQUE":"DEVOLUCAO_PORTA_PALETES";return;
+    flow.kind=command==="adjust"?"AJUSTE_ESTOQUE":"DEVOLUCAO_PORTA_PALETES";
+    flow.last=null;flow.finish=false;return;
   }
   if(command==="new"){
     if(flow.active)throw Error("Conclua a atividade em andamento.");
