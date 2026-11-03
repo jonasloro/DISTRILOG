@@ -101,8 +101,9 @@ function view(user){
   }
   const history=flow.history.length?flow.history.slice(0,12).map(summary).join(""):
     '<div class="empty">Nenhum registro anterior.</div>';
-  return '<div class="mobile-flow"><div class="eyebrow">CONTROLE DE ATIVIDADES · SUPABASE</div>'+
-    '<h1 class="shell-title">Organização de espaço</h1>'+
+  const sectorTitle=LABEL[flow.active?.kind||flow.kind]||'Atividades de Estocagem';
+  return '<div class="mobile-flow"><div class="eyebrow">ESTOCAGEM · OPERAÇÃO FÍSICA</div>'+
+    '<h1 class="shell-title">'+esc(sectorTitle)+'</h1>'+
     '<p class="shell-desc">Uma etapa por vez. Todas as informações e tempos são compartilhados com o DISTRILOG Web.</p>'+
     steps+content+(buttons?'<div class="mobile-flow-actions">'+buttons+'</div>':'')+
     '<details class="mobile-flow-history"><summary>Histórico de atividades ('+flow.history.length+')</summary>'+history+'</details></div>';
@@ -110,7 +111,8 @@ function view(user){
 async function act(command,user){
   if(command==="adjust"||command==="return"){
     if(flow.active)return;
-    flow.kind=command==="adjust"?"AJUSTE_ESTOQUE":"DEVOLUCAO_PORTA_PALETES";return;
+    flow.kind=command==="adjust"?"AJUSTE_ESTOQUE":"DEVOLUCAO_PORTA_PALETES";
+    flow.last=null;flow.finish=false;return;
   }
   if(command==="new"){
     if(flow.active)throw Error("Conclua a atividade em andamento.");

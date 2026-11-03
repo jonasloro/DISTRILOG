@@ -124,15 +124,23 @@ Exemplo PowerShell para gerar Base64 localmente:
 
 Configure os quatro secrets em GitHub > Settings > Secrets and variables >
 Actions. O workflow gera então um APK RELEASE assinado com a mesma keystore e
-o publica sob a tag mobile-prototipo-1.2.0 com APK e checksum. Depois, basta
+o publica sob a tag mobile-prototipo-1.3.0 com APK e checksum. Depois, basta
 aumentar versionCode, versionName e a tag do workflow em cada versão,
 preservando os mesmos secrets.
 
 Se faltar algum secret, o workflow compila um APK DEBUG assinado apenas
-para homologação e publica na release mobile-piloto-1.2.0. Ela NAO entra
+para homologação e publica na release mobile-piloto-1.3.0. Ela NAO entra
 no canal de atualizações verificadas, justamente para evitar uma falsa
 promessa de atualização. Uma única desinstalação do antigo APK debug
 será necessária ao migrar para o APK com assinatura permanente.
 A desinstalação não remove dados gravados no Supabase.
 
 O atualizador não altera operações WMS, o backend Render, nem o banco.
+
+## Versão 1.3.0 — Atividades dentro da Estocagem
+
+As atividades **Abertura de espaço** e **Devolução ao porta-paletes** passam a ser acessadas **exclusivamente pela fila do setor Estocagem**, por dois botões distintos. A antiga aba global Atividades foi removida da barra inferior. Dentro do setor Estocagem, o operador toca na atividade desejada e vai diretamente à etapa Rua/Marca; depois, cronômetro e quantidade obrigatória. A atividade já iniciada permanece visível ao reabrir, com dados persistidos no servidor.
+
+As cores **verde-lima e grafite do APK** permanecem inalteradas. Somente a navegação e os cartões locais de acesso às atividades foram ajustados. No Web, as atividades são subabas internas de Estocagem e usam a paleta dark azul/laranja original (alteração separada em main).
+
+O aplicativo continua em homologação. Na falta de assinatura permanente configurada, o APK 1.3.0 é publicado como piloto e **não pode ser anunciado como uma atualização in-place** da versão 1.2.0; a atualização interna exige assinatura consistente, preservada entre versões. Os dados operacionais continuam no Supabase.

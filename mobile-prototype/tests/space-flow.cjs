@@ -14,10 +14,15 @@ const index=fs.readFileSync(path.join(root,"index.html"),"utf8");
 
 test("APK includes the new self-contained activity module",()=>{
   assert.match(index,/activities\.js/);
-  assert.match(mobile,/s\.screen==='activities'/);
+  assert.match(mobile,/s\.screen==='storage-activities'/);
+  assert.doesNotMatch(mobile,/\['activities','⇄'/);
   assert.match(mobile,/window\.DM_SPACE\.view\(s\.user\)/);
   assert.match(mobile,/window\.DM_SPACE\.act\(action\.slice\(6\),s\.user\)/);
-  assert.match(mobile,/Atividades/);
+  assert.match(mobile,/Atividades de Estocagem/);
+  assert.match(mobile,/data-action="storageOpenSpace"/);
+  assert.match(mobile,/data-action="storageOpenReturn"/);
+  assert.match(mobile,/if\(s\.sector!=='storage'\)/);
+  assert.match(mobile,/backStorage/);
 });
 test("Card no longer stacks every operation, product, location, history panel",()=>{
   assert.match(mobile,/function taskStages\(c\)/);
@@ -100,4 +105,19 @@ test("activity wizard requires street/brand before timer and count at finish",as
   assert.match(flow.view({role:"estocagem"}),/Atividade registrada/);
   assert.equal(calls.filter(x=>x.method==="POST"&&x.url.endsWith("/finish")).length,1);
   assert.equal(calls.find(x=>x.method==="POST"&&x.url.endsWith("/finish")).data.moved_quantity,16);
+});
+
+test("opening either Estocagem activity goes to its own operation and preserves the mobile theme",async()=>{
+  const {flow}=env();
+  await flow.load();
+  await flow.act("adjust",{role:"estocagem"});
+  assert.match(flow.view({role:"estocagem"}),/ESTOCAGEM · OPERAÇÃO FÍSICA/);
+  assert.match(flow.view({role:"estocagem"}),/spaceStreet/);
+  await flow.act("return",{role:"estocagem"});
+  assert.match(flow.view({role:"estocagem"}),/Devolução ao porta-paletes/);
+  assert.match(flow.view({role:"estocagem"}),/spaceBrand/);
+  const css=fs.readFileSync(path.join(root,"mobile.css"),"utf8");
+  assert.match(css,/\.storage-sector-action/);
+  assert.match(css,/#cbf467/);
+  assert.doesNotMatch(css,/--yellow:#ff8a3d/);
 });
