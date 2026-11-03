@@ -10,10 +10,14 @@ const ui = fs.readFileSync(path.join(base,"static/space_activities.js"),"utf8");
 const web = fs.readFileSync(path.join(base,"static/app.js"),"utf8");
 const html = fs.readFileSync(path.join(base,"templates/index.html"),"utf8");
 
-test("stock space view is in nav and can be reached from web",()=>{
-  assert.match(html,/data-view="space-activities"/);
+test("stock-opening and pallet-return are sub-tabs of Estocagem, not global sidebar",()=>{
+  assert.doesNotMatch(html,/data-view="space-activities"/);
+  assert.match(html,/data-view="storage-hub"/);
   assert.match(html,/\/static\/space_activities\.js/);
-  assert.match(web,/renderSpaceActivities\(\)/);
+  assert.match(web,/\["Abertura de espaço","storage-space"\]/);
+  assert.match(web,/\["Devolução ao porta-paletes","storage-pallets"\]/);
+  assert.match(web,/"storage-space":"storage-hub"/);
+  assert.match(ui,/storageTabs\(currentView\)/);
 });
 
 test("Card embeds Stock 3D only after explicit request (no WMS mutation)",()=>{
@@ -32,7 +36,7 @@ function fakePage(){
   let current = null;
   const calls = [];
   const context = {
-    currentView:"space-activities",
+    currentView:"storage-space",
     currentUser:{id:900,name:"Operador QA",role:"qualidade"},
     Date,Math,Map,Set,Number,Array,String,Object,
     setInterval:()=>1,
@@ -42,6 +46,7 @@ function fakePage(){
     fmtSeconds:(s)=>String(Math.floor(s)).padStart(6,"0"),
     fmtDateTime:()=>"-",
     setPage:()=>{},
+    storageTabs:()=>'<div class="module-tabs">Estocagem</div>',
     esc:(x)=>String(x).replaceAll("&","&amp;").replaceAll("<","&lt;"),
     $:(id)=>fields.get(id)||null,
     document:{
@@ -81,10 +86,9 @@ function fakePage(){
 test("workflow shows exactly the current step and persists through real endpoints",async()=>{
   const {ctx,fields,calls,rendered}=fakePage();
   await ctx.renderSpaceActivities();
-  assert.match(rendered(),/Qual atividade/);
-  assert.doesNotMatch(rendered(),/spaceQuantity/);
-  await ctx.spaceAction("chooseAdjust");
+  assert.match(rendered(),/Abertura de espaço/);
   assert.match(rendered(),/spaceStreet/);
+  assert.doesNotMatch(rendered(),/Qual atividade/);
   assert.doesNotMatch(rendered(),/spaceQuantity/);
   fields.set("spaceStreet",{value:"RUA 03"});
   fields.set("spaceBrand",{value:"MARCA"});
@@ -104,6 +108,25 @@ test("workflow shows exactly the current step and persists through real endpoint
   await ctx.spaceAction("finish");
   assert.match(rendered(),/Atividade concluída e salva/);
   assert.equal(calls.some(x=>x.url==="/api/space-activities/7/finish"&&x.options.method==="POST"),true);
+});
+
+test("pallet return is directly selectable within its own Estocagem tab",async()=>{
+  const {ctx,rendered}=fakePage();
+  ctx.currentView="storage-pallets";
+  await ctx.renderSpaceActivities();
+  assert.match(rendered(),/Devolução ao porta-paletes/);
+  assert.match(rendered(),/spaceStreet/);
+  assert.equal(ctx.spaceRouteKind(),"DEVOLUCAO_PORTA_PALETES");
+});
+
+test("web feature palette follows original dark theme without changing global colors",()=>{
+  const css=fs.readFileSync(path.join(base,"static/style.css"),"utf8");
+  assert.match(css,/:root\{--nav:#1c1e22;.*--yellow:#ff8a3d;.*--blue:#62a9ff/);
+  const section=css.slice(css.indexOf("/* Organização física da Estocagem:"));
+  assert.match(section,/space-stage\{background:linear-gradient\(145deg,#262a31,#1e2126\)/);
+  assert.match(section,/space-button\.primary\{background:var\(--blue\)/);
+  assert.match(section,/card-stock3d-location\{border:1px solid var\(--border\)/);
+  assert.doesNotMatch(section,/space-stage\{background:#fff/);
 });
 
 test("web highlights only addresses with active allocations",()=>{
