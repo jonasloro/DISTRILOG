@@ -199,6 +199,7 @@ function showLoading(label) {
 
 async function goTo(view, stock3dFocus = null) {
   if (typeof stopSpaceActivityTick === "function") stopSpaceActivityTick();
+  if (typeof separationStopClock === "function") separationStopClock();
   clearInterval(cleaningTick);
   clearInterval(processingFlowTick);
   const previousView = currentView;
@@ -226,6 +227,7 @@ async function goTo(view, stock3dFocus = null) {
     if (view === "goat-indicators") await renderGoatIndicators();
     if (view === "tasks") await renderTasks();
     if (view === "shipping") await renderShipping();
+    if (view === "separation") await renderSeparation();
     if (view === "returns") await renderReturnsV3();
     if (view === "returns-hub") await renderReturnsHub();
     if (view === "return-indicators") await renderReturnIndicators();
@@ -3126,7 +3128,7 @@ async function renderRegistrations(){
   const usersTable = `<table class="dash-table"><thead><tr><th>Nome</th><th>Usuário</th><th>Perfil</th><th>Idioma preferido</th></tr></thead><tbody>${users.map(u => `<tr><td>${esc(u.name)}</td><td>${esc(u.username)}</td><td>${statusBadge(u.role)}</td><td>${currentUser.role==="admin"
     ? `<select aria-label="Idioma do operador" onchange="setOperatorLanguage('${esc(u.username)}',this.value)" data-i18n-ignore><option value="pt-BR" ${u.language!=="es"?"selected":""}>Português</option><option value="es" ${u.language==="es"?"selected":""}>Español</option></select>`
     : (u.language==="es"?"Español":"Português")}</td></tr>`).join("")}</tbody></table>`;
-  const adminPanel=currentUser.role==="admin"?`<section class="panel" style="margin-top:16px"><div class="panel-body"><h3 class="section-heading">Criar login de operador</h3><p>O colaborador deverá trocar a senha temporária no primeiro acesso.</p><div class="shipping-form-grid"><div class="field"><label>Nome</label><input id="newOperatorName" maxlength="100"></div><div class="field"><label>Usuário</label><input id="newOperatorUsername" maxlength="40" autocomplete="off"></div><div class="field"><label>Função / setor</label><select id="newOperatorRole">${["recebimento","qualidade","processamento","etiquetagem","estocagem","expedicao","devolucoes","planejamento","supervisor","consulta","admin"].map(r=>'<option value="'+r+'">'+r+'</option>').join("")}</select></div><div class="field"><label>Idioma preferido</label><select id="newOperatorLanguage" data-i18n-ignore><option value="pt-BR">Português</option><option value="es">Español</option></select></div><div class="field"><label>Senha temporária (12+ caracteres, letras e números)</label><input id="newOperatorPassword" type="password" autocomplete="new-password"></div><div class="field"><label>Confirme sua senha de administrador</label><input id="adminConfirmPassword" type="password" autocomplete="current-password"></div></div><div class="actions"><button class="primary" onclick="createOperatorLogin()">Criar login</button></div></div></section>`:"";
+  const adminPanel=currentUser.role==="admin"?`<section class="panel" style="margin-top:16px"><div class="panel-body"><h3 class="section-heading">Criar login de operador</h3><p>O colaborador deverá trocar a senha temporária no primeiro acesso.</p><div class="shipping-form-grid"><div class="field"><label>Nome</label><input id="newOperatorName" maxlength="100"></div><div class="field"><label>Usuário</label><input id="newOperatorUsername" maxlength="40" autocomplete="off"></div><div class="field"><label>Função / setor</label><select id="newOperatorRole">${["recebimento","qualidade","processamento","etiquetagem","estocagem","separacao","expedicao","devolucoes","planejamento","supervisor","consulta","admin"].map(r=>'<option value="'+r+'">'+r+'</option>').join("")}</select></div><div class="field"><label>Idioma preferido</label><select id="newOperatorLanguage" data-i18n-ignore><option value="pt-BR">Português</option><option value="es">Español</option></select></div><div class="field"><label>Senha temporária (12+ caracteres, letras e números)</label><input id="newOperatorPassword" type="password" autocomplete="new-password"></div><div class="field"><label>Confirme sua senha de administrador</label><input id="adminConfirmPassword" type="password" autocomplete="current-password"></div></div><div class="actions"><button class="primary" onclick="createOperatorLogin()">Criar login</button></div></div></section>`:"";
   const resetPanel=currentUser.role==="admin"?
     '<section class="panel" style="margin-top:16px"><div class="panel-body"><h3 class="section-heading">Redefinir senha de operador</h3>'+
     '<p>Use para ativar novamente contas legadas. A senha antiga deixa de funcionar e o operador será obrigado a escolher uma nova senha no primeiro acesso.</p>'+
