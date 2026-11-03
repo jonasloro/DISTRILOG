@@ -23,6 +23,9 @@ import db
 router = APIRouter(prefix="/api/separation", tags=["Separação de pedidos"])
 OPERATORS = {"admin", "supervisor", "separacao"}
 IMPORTERS = {"admin", "supervisor", "separacao", "expedicao"}
+VIEWERS = {"admin", "supervisor", "separacao", "expedicao", "consulta",
+           "estocagem", "recebimento", "qualidade", "processamento",
+           "etiquetagem", "planejamento", "devolucoes"}
 REQUIRED_COLUMNS = {
     "identificacao", "emissao", "numero_documento", "referencia",
     "descricao", "codigo_barras", "composicoes_visualizacao",
@@ -270,7 +273,7 @@ async def import_csv(request: Request, file: UploadFile = File(...)):
 
 @router.get("/orders")
 def list_orders(request: Request):
-    authorize(request, OPERATORS | {"expedicao", "consulta", "estocagem"})
+    authorize(request, VIEWERS)
     with db.connect() as con:
         rows = con.execute("""
             SELECT o.*, u.name operator_name,
@@ -291,7 +294,7 @@ def list_orders(request: Request):
 
 @router.get("/orders/{order_id}/items")
 def order_items(order_id: int, request: Request):
-    authorize(request, OPERATORS | {"expedicao", "consulta", "estocagem"})
+    authorize(request, VIEWERS)
     with db.connect() as con:
         _order(con, order_id)
         return [dict(row) for row in con.execute(
@@ -428,7 +431,7 @@ async def complete_order(order_id: int, request: Request):
 
 @router.get("/entry-alerts")
 def entry_alerts(request: Request):
-    authorize(request, OPERATORS | {"expedicao", "consulta", "recebimento", "estocagem"})
+    authorize(request, VIEWERS)
     with db.connect() as con:
         rows = con.execute("""
             SELECT upper(btrim(i.reference)) AS reference,
