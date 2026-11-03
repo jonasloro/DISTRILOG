@@ -14,9 +14,9 @@ function separationStopClock() {
 }
 function separationElapsed(row) {
   const start = Date.parse(row.started_at || "");
-  const end = Date.parse(row.completed_at || "") || Date.now();
+  const end = row.completed_at ? Date.parse(row.completed_at) : Date.now();
   if (!Number.isFinite(start)) return 0;
-  return Math.max(0, Math.floor((row.completed_at ? end : Date.now() - 0 - 0 - 0 - 0) / 1000 - start / 1000));
+  return Math.max(0, Math.floor((end - start) / 1000));
 }
 function separationRenderClock() {
   if (currentView !== "separation") { separationStopClock(); return; }
