@@ -144,3 +144,53 @@ As atividades **Abertura de espaço** e **Devolução ao porta-paletes** passam 
 As cores **verde-lima e grafite do APK** permanecem inalteradas. Somente a navegação e os cartões locais de acesso às atividades foram ajustados. No Web, as atividades são subabas internas de Estocagem e usam a paleta dark azul/laranja original (alteração separada em main).
 
 O aplicativo continua em homologação. Na falta de assinatura permanente configurada, o APK 1.3.0 é publicado como piloto e **não pode ser anunciado como uma atualização in-place** da versão 1.2.0; a atualização interna exige assinatura consistente, preservada entre versões. Os dados operacionais continuam no Supabase.
+
+
+## Versão 1.4.0 — Separação e Expedição no APK
+
+O menu de **Fila operacional** agora permite selecionar também:
+- **Separação** — consome `GET /api/separation/orders`; mostra pedidos
+  importados e suas quantidades elegíveis, timer líquido persistido no
+  servidor, início, pausa com motivo, retomada e conclusão.
+  No fechamento, exige **bags, caixas, peças, peso em kg, 0 à esquerda
+  Sim/Não e pausa Sim/Não**; se houve pausa, motivo e tempo `hh:mm:ss`.
+  A conclusão confirma o repasse à Expedição pelo backend; não inventa
+  baixa de estoque, nem itens conferidos.
+- **Expedição** — consome a fila `/api/unified/shipments` (mesma do Web),
+  abre romaneio, permite conferir a quantidade declarada, preencher
+  dados de transporte, salvar e confirmar a saída quando `PRONTO`.
+  O backend permanece responsável pelas autorizações e validações.
+- **Avisos de entradas** — referências com recebimento físico concluído
+  ainda não encontradas em relatórios de pedidos importados, incluindo
+  contagem de dias desde a entrada.
+
+Os colaboradores do setor `separacao` veem a fila própria após login;
+administradores e supervisores podem operá-la. A Expedição mantém os
+papéis `expedicao`/`estocagem` e gestão. A consulta sem operação não
+confere permissões adicionais.
+
+**Atualização do APK:** o Android mostra um aviso visível no topo quando
+existe release oficial assinada com versionCode superior. Em Ajustes →
+Atualizações, o operador pode baixar o APK no cache privado e abrir o
+instalador Android. Hash SHA-256, nome do pacote, versionCode e assinatura
+digital são verificados antes da instalação. O Android exige consentimento
+do operador e, a partir do Android 8, pode exigir a permissão de instalação
+de fontes desconhecidas.
+
+**Atenção ao piloto 1.4.0:** na ausência dos quatro Secrets
+`MOBILE_SIGNING_*`, o workflow gera o arquivo
+`mobile-piloto-1.4.0` com assinatura DEBUG TEMPORÁRIA. Este arquivo pode
+ser testado em uma instalação nova, mas **não consegue garantir atualização
+por cima do 1.3.0**. A partir da configuração da chave de assinatura
+permanente, a release oficial será `mobile-prototipo-1.4.0` (mesmo pacote);
+instale essa versão de transição e preserve a mesma chave nas futuras
+releases. O app avisa sobre pilotos, mas não simula uma atualização
+in-place impossível.
+
+O sistema Android não lê a caixa de e-mail: o **CSV** chega ao backend pelo
+importador do DISTRILOG Web. A ingestão automática de e-mail é uma etapa
+independente que depende de configuração da conta de serviço e dos anexos.
+Se o repositório passar a **privado**, o canal de updates por GitHub Releases
+também deverá ser migrado para armazenamento HTTPS acessível a todos os
+aparelhos, sem embutir token privado no APK.
+
