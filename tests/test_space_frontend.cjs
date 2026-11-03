@@ -43,6 +43,7 @@ function fakePage(){
     fmtDateTime:()=>"-",
     setPage:()=>{},
     esc:(x)=>String(x).replaceAll("&","&amp;").replaceAll("<","&lt;"),
+    $:(id)=>fields.get(id)||null,
     document:{
       addEventListener:(name,fn)=>handlers.push({name,fn}),
       querySelectorAll:()=>[],
