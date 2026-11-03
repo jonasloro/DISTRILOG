@@ -20,6 +20,18 @@ const ALLOC_SECTORS=['RM','QA','PR','ET','EC'];
 const s={screen:'setup',user:null,sector:'receiving',cards:[],selected:null,card:null,trail:[],triage:null,entry:null,cadastro:null,positions:[],
   selectedArea:'RM',address:null,inventory:null,history:[],dashboard:null,search:'',scanValue:'',busy:false,toast:null,toastTimer:null,restore:false,firstPassword:null,cardPanel:'task',cardStep:1};
 const app=document.getElementById('app');
+const updateState={type:'idle',message:'Verifique se existe uma versão mais recente.',percent:0,version:'',previous:'settings'};
+window.DM_UPDATE_EVENT=function(event){
+  const ev=event&&typeof event==='object'?event:{};
+  const allowed=['checking','current','available','downloading','ready','permission','installing','error'];
+  if(!allowed.includes(ev.type))return;
+  updateState.type=ev.type;
+  updateState.message=String(ev.message||'');
+  updateState.percent=Number(ev.percent)||0;
+  updateState.version=String(ev.version||updateState.version||'');
+  if(s.screen==='updates')render();
+  else if(ev.type==='available')flash('Nova versão '+updateState.version+' disponível. Vá em Ajustes → Atualizações.');
+};
 const tr=(pt,es)=>s.user&&s.user.language==='es'?(es||pt):pt;
 const esc=(v)=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const number=(v)=>Number(v||0).toLocaleString(s.user?.language==='es'?'es-ES':'pt-BR');
@@ -73,6 +85,7 @@ function roleBar(){
   button('↻ '+tr('Atualizar','Actualizar'),'refresh','button light small')+'</div>';
 }
 function render(){
+  if(s.screen==='updates'){app.innerHTML=updatesView();return}
   if(s.screen==='setup'){app.innerHTML=setupView();return}
   if(s.screen==='login'||s.screen==='change-password'){app.innerHTML=loginView();return}
   if(!s.user){s.screen='login';app.innerHTML=loginView();return}
@@ -93,7 +106,8 @@ function setupView(){
    '<section class="surface"><span class="eyebrow">CONEXÃO SEGURA</span>'+
    input('server','Endereço HTTPS do DISTRILOG no Render',API.endpoint()||'','url','inputmode="url" autocapitalize="none"')+
    note('Informe a URL principal do sistema, por exemplo: https://seu-servico.onrender.com. O acesso usa HTTPS e seu login habitual.')+
-   button('Conectar ao sistema →','configure','button full')+'</section></div></section>';
+   button('Conectar ao sistema →','configure','button full')+
+   button('Verificar atualização do aplicativo','openUpdates','button light full')+'</section></div></section>';
 }
 function loginView(){
   const change=s.screen==='change-password';
@@ -104,7 +118,8 @@ function loginView(){
    (change?'':input('password','Senha','','password','autocomplete="current-password"'))+
    (change?input('newPassword','Nova senha (mínimo 12 caracteres)','','password','autocomplete="new-password"')+input('confirmPassword','Confirmar nova senha','','password','autocomplete="new-password"'):'')+
    (change?button('Atualizar senha','changePassword','button full'):button('Entrar','login','button full'))+
-   '<div class="actions">'+button(change?'Cancelar':'Trocar servidor','resetConnection','button outline small')+'</div></section>'+
+   '<div class="actions">'+button('Atualizar aplicativo','openUpdates','button light small')+
+   button(change?'Cancelar':'Trocar servidor','resetConnection','button outline small')+'</div></section>'+
    note('Todas as movimentações são confirmadas pelo backend. O aplicativo não inventa nem armazena cards fictícios.')+
    '</div></section>';
 }
@@ -147,12 +162,38 @@ function settingsView(){
   '<div class="surface"><div class="inline-stat"><span>Servidor</span><b class="break">'+esc(API.endpoint())+'</b></div>'+
   '<div class="inline-stat"><span>Usuário</span><b>'+esc(s.user?.username)+'</b></div>'+
   '<div class="inline-stat"><span>Perfil</span><b>'+esc(role())+'</b></div>'+
-  '<div class="inline-stat"><span>Tipo de aplicativo</span><b>Interface própria · API real</b></div>'+
+  '<div class="inline-stat"><span>Tipo de aplicativo</span><b>Interface própria · API real</b></div>'+ 
+  '<div class="inline-stat"><span>Versão instalada</span><b>'+esc(API.appVersion())+'</b></div>'+ 
+  button('⬆ Atualizações do aplicativo','openUpdates','button full')+
   '<label class="field"><span>Idioma da conta</span><select id="language"><option value="pt-BR" '+(s.user?.language!=='es'?'selected':'')+'>Português</option><option value="es" '+(s.user?.language==='es'?'selected':'')+'>Español</option></select></label>'+
   button('Salvar idioma','language','button full')+
   '<div class="actions">'+button('Consultar histórico','openHistory','button light')+button('Alterar servidor','resetConnection','button light')+button('Sair','logout','button danger')+'</div></div>'+
   note('Operações reais: sempre exigem confirmação no servidor e respeitam permissões por setor. Não há sincronização offline de movimentações.')+
   section('Sobre')+'<p class="muted t-sm">Visual criado a partir do protótipo HTML enviado. Este APK contém uma interface móvel independente; ele não incorpora o site do DISTRILOG em uma WebView.</p>';
+}
+function updatesView(){
+  const status=updateState;
+  const isBusy=status.type==='checking'||status.type==='downloading';
+  const progress=status.type==='downloading'?
+    '<div class="apk-progress"><div style="width:'+Math.min(100,Math.max(0,status.percent))+'%"></div></div>'+
+    '<p class="muted t-sm">'+Math.max(0,Math.min(100,status.percent))+'% recebido</p>':'';
+  let actions='';
+  if(status.type==='available')actions=button('⬇ Baixar atualização','downloadUpdate','button full');
+  else if(status.type==='ready'||status.type==='permission')
+    actions=button('✓ Instalar atualização','installUpdate','button full');
+  else if(!isBusy)
+    actions=button('↻ Verificar atualizações','checkUpdates','button full');
+  return header()+'<section class="viewport updates-screen">'+
+    '<div class="eyebrow">ATUALIZADOR ANDROID · DISTRILOG</div>'+
+    '<h1 class="shell-title">Atualizações</h1>'+
+    '<p class="shell-desc">Baixe e instale a próxima versão dentro do aplicativo, sem abrir o navegador.</p>'+
+    '<div class="surface"><div class="inline-stat"><span>Versão atual</span><b>'+esc(API.appVersion())+'</b></div>'+
+    '<div class="inline-stat"><span>Próxima versão</span><b>'+esc(status.version||'Verificar')+'</b></div>'+
+    '<div class="status-box '+(status.type==='error'?'warn':'')+'" role="status">'+esc(status.message)+'</div>'+
+    progress+actions+'</div>'+
+    '<div class="status-box">O Android pedirá autorização para instalar. Para atualizar por cima da versão atual, ambas precisam ter a mesma assinatura digital. O aplicativo verifica isso antes de instalar.</div>'+
+    button('← Voltar','backUpdates','button light full')+'</section>'+
+    (s.user?navbar():'');
 }
 function historyView(){
   const events=s.history||[];
@@ -699,6 +740,17 @@ async function mutate(path,payload,method='POST'){
   return out;
 }
 async function runAction(action,buttonElement){
+  if(action==='openUpdates'){
+    updateState.previous=s.screen;
+    s.screen='updates';render();
+    API.checkUpdates();return;
+  }
+  if(action==='backUpdates'){
+    s.screen=updateState.previous||'settings';render();return;
+  }
+  if(action==='checkUpdates'){API.checkUpdates();return;}
+  if(action==='downloadUpdate'){API.downloadUpdate();return;}
+  if(action==='installUpdate'){API.installUpdate();return;}
   // run() is the sole lock holder: it sets busy=true BEFORE calling this
   // function. A second busy guard here silently discarded EVERY tap.
   if(action==='configure'){
@@ -1058,4 +1110,6 @@ async function boot(){
   }else{s.screen='login';render();}
 }
 boot().catch(err=>{s.screen='login';render();flash(publicError(err),true);});
+// Advisory check on app open; no automatic installation or third-party pages.
+setTimeout(()=>{if(window.DISTRILOG&&s.screen!=='updates')API.checkUpdates();},6500);
 })();

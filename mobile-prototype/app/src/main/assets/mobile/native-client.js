@@ -43,6 +43,10 @@
     patch: function (path, data) { return request('PATCH', path, data); },
     endpoint: function () { return window.DISTRILOG ? DISTRILOG.endpoint() : ''; },
     configure: function (value) { return window.DISTRILOG && DISTRILOG.configure(value); },
-    scan: function () { if (window.DISTRILOG) DISTRILOG.scan(); }
+    scan: function () { if (window.DISTRILOG) DISTRILOG.scan(); },
+    appVersion: function () { return window.DISTRILOG ? DISTRILOG.appVersion() : "—"; },
+    checkUpdates: function () { if (window.DISTRILOG) DISTRILOG.checkUpdates(); },
+    downloadUpdate: function () { if (window.DISTRILOG) DISTRILOG.downloadUpdate(); },
+    installUpdate: function () { if (window.DISTRILOG) DISTRILOG.installUpdate(); }
   };
 })();

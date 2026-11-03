@@ -39,10 +39,12 @@ public final class BackendBridge {
         .followSslRedirects(false).connectTimeout(11, TimeUnit.SECONDS)
         .readTimeout(27, TimeUnit.SECONDS).build();
     private volatile String endpoint;
+    private final NativeUpdater updater;
 
     public BackendBridge(MainActivity activity, WebView webView) {
         this.activity = activity;
         this.webView = webView;
+        this.updater = new NativeUpdater(activity, webView);
         this.prefs = activity.getSharedPreferences("distrilog_native_backend_v1", Context.MODE_PRIVATE);
         String saved = prefs.getString("endpoint", "");
         this.endpoint = validEndpoint(saved) ? saved : "";
@@ -187,5 +189,12 @@ public final class BackendBridge {
 
     @JavascriptInterface public void scan() { activity.launchScanner(); }
 
-    public void close() { queue.shutdownNow(); }
+    // The updater only accesses DISTRILOG's pinned GitHub release channel.
+    // No remote URL or filesystem path is accepted from JavaScript.
+    @JavascriptInterface public String appVersion() { return updater.installedVersion(); }
+    @JavascriptInterface public void checkUpdates() { updater.check(); }
+    @JavascriptInterface public void downloadUpdate() { updater.download(); }
+    @JavascriptInterface public void installUpdate() { updater.install(); }
+
+    public void close() { updater.close(); queue.shutdownNow(); }
 }
