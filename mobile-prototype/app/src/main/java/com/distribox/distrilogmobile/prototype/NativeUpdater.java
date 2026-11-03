@@ -48,7 +48,7 @@ public final class NativeUpdater {
     private static final Pattern RELEASE_TAG =
         Pattern.compile("^mobile-prototipo-(\\d+)\\.(\\d+)\\.(\\d+)$");
     private static final Pattern PILOT_TAG =
-        Pattern.compile("^mobile-piloto-(\\\\d+)\\\\.(\\\\d+)\\\\.(\\\\d+)$");
+        Pattern.compile("^mobile-piloto-(\\d+)\\.(\\d+)\\.(\\d+)$");
     private static final Pattern VERSION =
         Pattern.compile("(\\d+)\\.(\\d+)\\.(\\d+)");
     private static final Pattern CHECKSUM = Pattern.compile("^([0-9a-fA-F]{64})\\s+\\*?DISTRILOG-Mobile-PROTOTIPO-INTEGRADO\\.apk\\s*$");
