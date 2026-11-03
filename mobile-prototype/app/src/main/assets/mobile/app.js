@@ -32,7 +32,15 @@ window.DM_UPDATE_EVENT=function(event){
   updateState.percent=Number(ev.percent)||0;
   updateState.version=String(ev.version||updateState.version||'');
   if(s.screen==='updates')render();
-  else if(ev.type==='available')flash('Nova versão '+updateState.version+' disponível. Vá em Ajustes → Atualizações.');
+  else if(ev.type==='available'){
+    flash('Nova versão '+updateState.version+' disponível. Vá em Ajustes → Atualizações.');
+    const top=document.querySelector('.top-band');
+    if(top&&!document.querySelector('.mobile-update-badge')){
+      const badge=document.createElement('button');
+      badge.type='button';badge.className='mobile-update-badge';badge.dataset.action='openUpdates';
+      badge.textContent='⬆ Atualização disponível';top.appendChild(badge);
+    }
+  }
 };
 const tr=(pt,es)=>s.user&&s.user.language==='es'?(es||pt):pt;
 const esc=(v)=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -1147,5 +1155,5 @@ async function boot(){
 boot().catch(err=>{s.screen='login';render();flash(publicError(err),true);});
 // Advisory check on app open; no automatic installation or third-party pages.
 setTimeout(()=>{if(window.DISTRILOG&&s.screen!=='updates')API.checkUpdates();},6500);
-setInterval(()=>{if(s.screen==='queue'&&s.sector==='separation')window.DM_OUTBOUND.tick();},1000);
+if(typeof setInterval==='function')setInterval(()=>{if(s.screen==='queue'&&s.sector==='separation')window.DM_OUTBOUND.tick();},1000);
 })();
