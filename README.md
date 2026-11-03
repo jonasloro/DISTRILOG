@@ -4,6 +4,45 @@ Aplicativo FastAPI + JavaScript, hospedado no Render. O banco operacional
 e os arquivos de evidência são persistidos no PostgreSQL do Supabase.
 
 
+## Separação de pedidos (cronômetros)
+
+A nova aba **Separação** é isolada da tiragem de 10% do Recebimento.
+A importação aceita o CSV `Pedidos_Separacao` com cabeçalhos
+`identificacao;emissao;numero_documento;referencia;descricao;codigo_barras;composicoes_visualizacao;quantidade;casulo`.
+
+- Agrupa por **número de documento + loja/destino**, sem fundir pedidos de lojas diferentes.
+- Exclui do total previsto linhas **sem casulo** e qualquer casulo iniciado por `001-`.
+  Mesmo essas referências são memorizadas como **presentes no pedido**, para os
+  alertas de entradas que ainda não apareceram em pedidos.
+- A importação é idempotente por pedido/destino: relatórios repetidos não
+  criam cronômetros duplicados nem substituem separações já em andamento.
+  Um pedido corrigido com a mesma chave deve ser tratado conscientemente, sem
+  sobrescrever seus dados de execução.
+- O operador de **separacao** inicia, pausa (motivo obrigatório), retoma e
+  conclui. Os campos de fechamento obrigatórios são bags, caixas, peças
+  separadas, peso em kg, resposta Sim/Não para 0 à esquerda e pausa;
+  caso tenha havido pausa, exige motivo e duração `hh:mm:ss`.
+- Concluir abre um romaneio de **Expedição** na mesma transação do fechamento.
+  Como a separação é somente um cronômetro, o repasse cria **uma linha-resumo
+  de peças**, sem inventar conferência por SKU. A conferência física e o
+  preenchimento de transporte continuam sendo responsabilidades da Expedição.
+  Os dados de bags, caixas, peso, pausa e 0 à esquerda ficam preservados na
+  separação e no campo de observações do romaneio.
+- Os alertas usam `distrilog.receivings.physical_completed_at` e as referências
+  de `distrilog.items`. Uma referência deixa de aparecer como "ainda não
+  saiu em pedido" quando é reconhecida em qualquer linha de um relatório
+  importado, mesmo que essa linha tenha sido excluída da separação.
+- Tabelas `distrilog.separation_*` são criadas na inicialização, com RLS
+  habilitado e sem políticas de leitura/escrita pelo navegador. Autorização de
+  setor é verificada no backend. Os demais perfis podem visualizar a fila
+  sem operar seus timers.
+
+**Escopo da primeira entrega:** a importação **manual do CSV está disponível**.
+A leitura automática da caixa de e-mail e a extração do **PDF original** ainda
+precisam do acesso autorizado à origem e de um exemplar real do PDF para
+validar o layout. O CSV fornecido não é um PDF. Não configurar extração por
+expressões regulares inventadas ou um robô de e-mail sem credenciais próprias.
+
 ## Idioma da interface (português / español)
 
 O DISTRILOG oferece apresentação em português (`pt-BR`) ou espanhol (`es`)
