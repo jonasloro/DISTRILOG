@@ -125,3 +125,24 @@ table.mobile-table{width:100%;border-collapse:collapse;font-size:12px}
 .updates-screen .button.full{margin-top:10px}
 .apk-progress{margin:15px 0;height:12px;background:#273c2f;border-radius:20px;overflow:hidden;border:1px solid #49674a}
 .apk-progress>div{height:100%;background:linear-gradient(90deg,#8bd060,#cdf992);transition:width .2s ease}
+
+
+/* Atividades de abertura de espaço e devolução visíveis exclusivamente na Estocagem.
+   Mantém a identidade visual do APK (verde-lima sobre fundo escuro). */
+.storage-sector-operations{margin:18px 0 20px}
+.storage-sector-operations .section-head{margin:0 0 5px}
+.storage-sector-actions{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}
+.storage-sector-action{display:flex;flex-direction:column;align-items:flex-start;gap:7px;min-height:167px;padding:17px 14px;
+  text-align:left;color:#e5f5e4;background:linear-gradient(145deg,#1d3125,#162420);
+  border:1px solid #4b684c;border-radius:15px}
+.storage-sector-action>span{font-size:32px;color:#c9f48a;line-height:1}
+.storage-sector-action>strong{font-size:14px;line-height:1.35}
+.storage-sector-action>small{color:#9db8a4;line-height:1.45;font-size:11px}
+.storage-sector-action>b{font-size:11px;color:#cbf467;margin-top:auto}
+.storage-sector-action:active{border-color:#bde783;background:#2b422c}
+.storage-activity-back{display:flex;margin:0 0 12px}
+.storage-activity-back .button{max-width:220px}
+@media(max-width:385px){
+ .storage-sector-actions{grid-template-columns:1fr}
+ .storage-sector-action{min-height:130px;padding:13px 16px}
+}
