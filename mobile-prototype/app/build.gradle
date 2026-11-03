@@ -6,8 +6,8 @@ android {
     applicationId 'com.distribox.distrilogmobile.prototype'
     minSdk 24
     targetSdk 34
-    versionCode 4
-    versionName '1.3.0-piloto'
+    versionCode 5
+    versionName '1.4.0-piloto'
   }
   signingConfigs {
     if (System.getenv('MOBILE_SIGNING_KEYSTORE_PATH')) {
