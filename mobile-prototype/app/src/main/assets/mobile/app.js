@@ -14,6 +14,8 @@ const SECTORS=[
   {id:'storage',pt:'Estocagem',es:'Almacenamiento',icon:'⌂',role:'estocagem'},
   {id:'costura',pt:'Costura / Despacho',es:'Costura / Despacho',icon:'✂',role:'recebimento'},
   {id:'entry',pt:'Entrada',es:'Entrada',icon:'⇥',role:'processamento'},
+  {id:'separation',pt:'Separação',es:'Separación',icon:'◷',role:'separacao'},
+  {id:'shipping',pt:'Expedição',es:'Expedición',icon:'▧',role:'expedicao'},
   {id:'cadastro',pt:'Cadastro',es:'Registro',icon:'▤',role:'processamento'}
 ];
 const ALLOC_SECTORS=['RM','QA','PR','ET','EC'];
@@ -74,7 +76,8 @@ async function run(task,successMessage){
 function setScreen(screen){s.screen=screen;render();window.scrollTo(0,0)}
 function header(){
   return '<header class="top-band"><div class="brand-mark">D</div><div class="brand-word">DISTRI<span>LOG</span><small>MOBILE · OPERAÇÃO REAL</small></div>'+
-   '<span style="margin-left:auto;font-size:10px;color:#abc3af;font-weight:850">'+esc(s.busy?'SINCRONIZANDO':'● WMS ONLINE')+'</span></header>';
+   '<span style="margin-left:auto;font-size:10px;color:#abc3af;font-weight:850">'+esc(s.busy?'SINCRONIZANDO':'● WMS ONLINE')+'</span>'+ 
+   (updateState.type==='available'?'<button type="button" class="mobile-update-badge" data-action="openUpdates">⬆ Atualização disponível</button>':'')+'</header>';
 }
 function navbar(){
   const tabs=[['queue','▤',tr('Fila','Cola')],['scan','▣','Rack'],['address','▦',tr('Estoque','Inventario')],['settings','⚙',tr('Ajustes','Ajustes')]];
@@ -132,6 +135,7 @@ function queueView(){
     '<p class="shell-desc">Dados reais sincronizados com o DISTRILOG Web. Selecione o setor e consulte seus cards.</p>'+
     '<div class="metric-row"><div class="stat"><span>Cards</span><strong>'+number(cards.length)+'</strong></div><div class="stat"><span>Aguardando</span><strong>'+number(ready)+'</strong></div><div class="stat"><span>Peças previstas</span><strong>'+number(total)+'</strong></div></div>';
   const selector='<div class="selector" id="sectorTabs">'+SECTORS.map(x=>'<button class="'+(s.sector===x.id?'on':'')+'" data-action="sector" data-to="'+x.id+'">'+x.icon+' '+esc(currentName(x.id))+'</button>').join('')+'</div>';
+  if(s.sector==='separation'||s.sector==='shipping')return selector+window.DM_OUTBOUND.view(s.sector,s.user);
   const search='<label class="search-bar"><span>⌕</span><input id="queueSearch" type="search" placeholder="'+esc(tr('Buscar referência, card ou compra','Buscar referencia, tarjeta o compra'))+'" value="'+esc(s.search)+'"></label>';
   const list=cards.length?cards.map(c=>{
     const ref=c.reference_list||c.reference||c.purchase_id||('Card #'+c.id);
@@ -602,6 +606,10 @@ function downstreamPanel(c){
 async function loadQueue(){
   s.cards=[];s.selected=null;s.entry=null;s.cadastro=null;
   const sector=s.sector;
+  if(sector==='separation'||sector==='shipping'){
+    await window.DM_OUTBOUND.load(sector,s.user);
+    s.screen='queue';render();window.scrollTo(0,0);return;
+  }
   if(sector==='entry'){
     const response=await API.get('/api/processing/entry/queue?user_id='+q(s.user.id));
     s.cards=(response.pending||[]).map(entry=>({
@@ -758,6 +766,10 @@ async function runAction(action,buttonElement){
     s.screen=updateState.previous||'settings';render();return;
   }
   if(action==='checkUpdates'){API.checkUpdates();return;}
+  if(action.startsWith('outbound-')){
+    await window.DM_OUTBOUND.action(action.slice('outbound-'.length),buttonElement,s.user);
+    render();window.scrollTo(0,0);return;
+  }
   if(action==='downloadUpdate'){API.downloadUpdate();return;}
   if(action==='installUpdate'){API.installUpdate();return;}
   // run() is the sole lock holder: it sets busy=true BEFORE calling this
@@ -1084,6 +1096,10 @@ document.addEventListener('click',function(e){
   run(()=>runAction(action,btn)).catch(err=>flash(publicError(err),true));
 });
 document.addEventListener('change',function(e){
+  if(e.target?.id==='outPaused'){
+    const details=document.getElementById('outPauseDetails');
+    if(details)details.hidden=e.target.value!=='yes';
+  }
   if(e.target?.id==='allocZone'){
     const zone=e.target.value;
     if(ALLOC_SECTORS.includes(zone))run(()=>loadAlloc(zone));
@@ -1131,4 +1147,5 @@ async function boot(){
 boot().catch(err=>{s.screen='login';render();flash(publicError(err),true);});
 // Advisory check on app open; no automatic installation or third-party pages.
 setTimeout(()=>{if(window.DISTRILOG&&s.screen!=='updates')API.checkUpdates();},6500);
+setInterval(()=>{if(s.screen==='queue'&&s.sector==='separation')window.DM_OUTBOUND.tick();},1000);
 })();
