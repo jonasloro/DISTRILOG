@@ -18,7 +18,7 @@ const SECTORS=[
 ];
 const ALLOC_SECTORS=['RM','QA','PR','ET','EC'];
 const s={screen:'setup',user:null,sector:'receiving',cards:[],selected:null,card:null,trail:[],triage:null,entry:null,cadastro:null,positions:[],
-  selectedArea:'RM',address:null,inventory:null,history:[],dashboard:null,search:'',scanValue:'',busy:false,toast:null,toastTimer:null,restore:false,firstPassword:null};
+  selectedArea:'RM',address:null,inventory:null,history:[],dashboard:null,search:'',scanValue:'',busy:false,toast:null,toastTimer:null,restore:false,firstPassword:null,cardPanel:'task',cardStep:1};
 const app=document.getElementById('app');
 const tr=(pt,es)=>s.user&&s.user.language==='es'?(es||pt):pt;
 const esc=(v)=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -65,7 +65,7 @@ function header(){
    '<span style="margin-left:auto;font-size:10px;color:#abc3af;font-weight:850">'+esc(s.busy?'SINCRONIZANDO':'● WMS ONLINE')+'</span></header>';
 }
 function navbar(){
-  const tabs=[['queue','▤',tr('Fila','Cola')],['scan','▣','Rack'],['address','▦',tr('Estoque','Inventario')],['history','◷',tr('Histórico','Historial')],['settings','⚙',tr('Ajustes','Ajustes')]];
+  const tabs=[['queue','▤',tr('Fila','Cola')],['activities','⇄',tr('Atividades','Actividades')],['scan','▣','Rack'],['address','▦',tr('Estoque','Inventario')],['settings','⚙',tr('Ajustes','Ajustes')]];
   return '<nav class="bottom-nav" aria-label="Navegação">'+tabs.map(x=>'<button data-action="nav" data-to="'+x[0]+'" class="'+(s.screen===x[0]||s.screen==='card'&&x[0]==='queue'?'on':'')+'"><span>'+x[1]+'</span>'+esc(x[2])+'</button>').join('')+'</nav>';
 }
 function roleBar(){
@@ -80,6 +80,7 @@ function render(){
   if(s.screen==='queue')view=queueView();
   else if(s.screen==='card')view=cardView();
   else if(s.screen==='scan')view=scanView();
+  else if(s.screen==='activities')view=window.DM_SPACE.view(s.user);
   else if(s.screen==='address')view=addressView();
   else if(s.screen==='history')view=historyView();
   else if(s.screen==='settings')view=settingsView();
@@ -149,7 +150,7 @@ function settingsView(){
   '<div class="inline-stat"><span>Tipo de aplicativo</span><b>Interface própria · API real</b></div>'+
   '<label class="field"><span>Idioma da conta</span><select id="language"><option value="pt-BR" '+(s.user?.language!=='es'?'selected':'')+'>Português</option><option value="es" '+(s.user?.language==='es'?'selected':'')+'>Español</option></select></label>'+
   button('Salvar idioma','language','button full')+
-  '<div class="actions">'+button('Alterar servidor','resetConnection','button light')+button('Sair','logout','button danger')+'</div></div>'+
+  '<div class="actions">'+button('Consultar histórico','openHistory','button light')+button('Alterar servidor','resetConnection','button light')+button('Sair','logout','button danger')+'</div></div>'+
   note('Operações reais: sempre exigem confirmação no servidor e respeitam permissões por setor. Não há sincronização offline de movimentações.')+
   section('Sobre')+'<p class="muted t-sm">Visual criado a partir do protótipo HTML enviado. Este APK contém uma interface móvel independente; ele não incorpora o site do DISTRILOG em uma WebView.</p>';
 }
@@ -202,27 +203,60 @@ function locations(){
       button('Ver','openAddress','button light small','data-address="'+esc(a)+'"')+'</div></div>').join(''):
       note('Ainda não há endereçamento ativo registrado para este Card.','warn'));
 }
+function taskStages(c){
+  if(s.sector==='cadastro')return ['Cadastro'];
+  if(c.status==='AGUARDANDO_DESPACHO_COSTURA')return ['Despacho'];
+  const sector=String(c.current_sector||'');
+  if(sector==='RECEBIMENTO')return ['Conferência','Tiragem','Endereçamento','Concluir'];
+  if(sector==='QUALIDADE')return ['Inspeção','Atribuir','Executar','Concluir'];
+  if(sector==='PROCESSAMENTO')return c.status==='AGUARDANDO_ENTRADA'?['Conferir','Concluir']:['Iniciar','Endereçar','Conferir'];
+  if(sector==='ETIQUETAGEM'||sector==='ESTOCAGEM')return ['Iniciar','Executar','Conferir','Concluir'];
+  return ['Consulta'];
+}
 function cardView(){
   const c=s.card;if(!c)return '<div class="empty">Selecione um card na fila.</div>';
   const name=c.manual_reference||c.items?.find(x=>x.reference)?.reference||c.purchase_id||('Card #'+c.id);
-  const authorized=roleCan(String(c.current_sector||'').toLowerCase());
-  const basics='<div class="page-header">'+button('‹','backQueue','button light small')+'<h1>Card '+esc(name)+'</h1></div>'+
-    '<div class="flexline"><span class="card-id">#'+esc(c.id)+'</span>'+pill(c.status_label||c.status,'tone-ready')+'</div>'+
-    '<div class="chips">'+pill(c.current_sector||'—')+pill(c.purchase_mode||'—')+'</div>'+
-    '<div class="surface">'+infoRow('Compra',c.purchase_id)+infoRow('Marca / fornecedor',c.brand||c.supplier)+
-    infoRow('Itens',c.items?.length||0)+infoRow('Quantidade prevista',number(c.expected_total))+
-    infoRow('Volumes recebidos',c.receiving?.volumes??'Não informado')+'</div>';
-  let operation='';
-  if(s.sector==='cadastro')operation=cadastroPanel(c);
-  else if(c.current_sector==='RECEBIMENTO')operation=receivingPanel(c);
-  if(c.current_sector==='QUALIDADE')operation=qualityPanel(c);
-  if(c.current_sector==='PROCESSAMENTO')operation=processingPanel(c);
-  if(c.current_sector==='ETIQUETAGEM'||c.current_sector==='ESTOCAGEM')operation=downstreamPanel(c);
-  if(c.current_sector==='FINALIZADO')operation=note('Card finalizado. Histórico disponível para consulta.');
-  if(c.current_sector==='FORA_FLUXO')operation=note('Mercadoria fora do fluxo interno. Confira o histórico.');
-  const list=tab('Produtos e grade',c.current_sector==='ESTOCAGEM'||c.current_sector==='PROCESSAMENTO'?'Conferência cega: quantidades previstas omitidas nesta etapa.':null,grade(c.items, c.current_sector==='ESTOCAGEM'||c.current_sector==='PROCESSAMENTO'));
-  const timeline=tab('Últimos acontecimentos',null,(c.history||[]).slice().reverse().slice(0,15).map(h=>'<div class="line-row"><b>'+esc(h.description||h.event_type||'Movimentação')+'</b><small>'+esc(h.created_at||'')+' · '+esc(h.user_name||'')+'</small></div>').join('')||'<p class="muted">Sem histórico.</p>');
-  return basics+locations()+operation+list+timeline;
+  const panels=[['task','Operar'],['locations','Endereços'],['products','Grade'],['history','Histórico']];
+  const panel=s.cardPanel||'task';
+  const stages=taskStages(c);
+  const step=Math.max(1,Math.min(stages.length,Number(s.cardStep)||1));
+  s.cardStep=step;
+  const basics='<div class="page-header">'+button('‹','backQueue','button light small')+
+    '<h1>Card '+esc(name)+'</h1></div>'+
+    '<div class="flexline"><span class="card-id">#'+esc(c.id)+'</span>'+
+    pill(c.status_label||c.status,'tone-ready')+'</div>'+
+    '<div class="mobile-card-summary"><div><small>'+esc(c.current_sector||'—')+' • '+esc(c.brand||c.supplier||'—')+'</small>'+
+    '<strong>'+esc(c.purchase_id||'')+'</strong></div>'+
+    '<small>'+number(c.expected_total||0)+' peças · '+esc(c.receiving?.volumes??'—')+' volumes</small></div>';
+  const tabs='<div class="mobile-task-picker">'+panels.map(([id,label])=>
+    '<button data-action="cardPanel" data-to="'+id+'" class="'+(id===panel?'on':'')+'">'+label+'</button>').join('')+'</div>';
+  let content='';
+  if(panel==='task'){
+    let operation='';
+    if(s.sector==='cadastro')operation=cadastroPanel(c);
+    else if(c.current_sector==='RECEBIMENTO')operation=receivingPanel(c);
+    else if(c.current_sector==='QUALIDADE')operation=qualityPanel(c);
+    else if(c.current_sector==='PROCESSAMENTO')operation=processingPanel(c);
+    else if(c.current_sector==='ETIQUETAGEM'||c.current_sector==='ESTOCAGEM')operation=downstreamPanel(c);
+    else operation=note('Card sem ação pendente neste setor. Consulte a localização ou o histórico.');
+    content='<div class="mobile-task-step">'+stages.map((stage,i)=>'<span class="'+(i+1===step?'on':'')+
+      '">'+(i+1)+' · '+esc(stage)+'</span>').join('')+'</div>'+
+      '<div class="mobile-task-panel">'+operation+'</div>';
+    if(stages.length>1){
+      content+='<div class="mobile-task-footer">'+
+        button('← Anterior','taskPrev','button light',step===1?'disabled':'')+
+        button(step===stages.length?'✓ Última etapa':'Próxima etapa →','taskNext','button',
+          step===stages.length?'disabled':'')+'</div>';
+    }
+  }else if(panel==='locations')content=locations();
+  else if(panel==='products')content=tab('Produtos e grade',c.current_sector==='ESTOCAGEM'||c.current_sector==='PROCESSAMENTO'?
+    'Quantidades previstas omitidas durante conferência cega.':null,grade(c.items,c.current_sector==='ESTOCAGEM'||c.current_sector==='PROCESSAMENTO'));
+  else if(panel==='history')content=tab('Histórico do Card',null,
+    (c.history||[]).slice().reverse().slice(0,25).map(h=>'<div class="line-row"><b>'+
+      esc(h.description||h.event_type||'Movimentação')+'</b><small>'+
+      esc(h.created_at||'')+' · '+esc(h.user_name||'')+'</small></div>').join('')||
+    '<p class="muted">Nenhum evento registrado.</p>');
+  return '<div class="mobile-task">'+basics+tabs+content+'</div>';
 }
 
 function allowOperation(sector){
@@ -235,53 +269,70 @@ function operationUnavailable(expectedSector){
 function receivingPanel(c){
   const rec=c.receiving;
   if(role()!=='recebimento')return operationUnavailable('recebimento');
-  if(c.in_transit)return tab('Chegada da mercadoria','Card ainda em trânsito',
-    note('Confirme a chegada física ao CD. A partir dessa confirmação, o Recebimento é liberado.','warn')+
-    (role()==='recebimento'?button('Confirmar chegada física','markArrived','button full'):''));
+  if(c.in_transit)return tab('Chegada física','Card em trânsito',
+    note('Confirme a chegada física para liberar o Recebimento.','warn')+
+    button('✓ Confirmar chegada','markArrived','button full'));
   if(c.status==='AGUARDANDO_DESPACHO_COSTURA'){
-    return tab('Despacho à Costura','Procedimento real no Recebimento',
+    return tab('Despacho à Costura','Operação real do Recebimento',
       input('carrier','Transportadora','')+input('seamstress','Costureiro(a)','')+
       '<div class="grid-two">'+input('dispatchQty','Peças despachadas','','number','min="1"')+
-      input('dispatchVolumes','Volumes','','number','min="1"')+'</div>'+textarea('dispatchNotes','Observações','')+
-      (role()==='recebimento'?button('Confirmar despacho','dispatch','button full'):''));
+      input('dispatchVolumes','Volumes','','number','min="1"')+'</div>'+
+      textarea('dispatchNotes','Observações','')+button('Confirmar despacho','dispatch','button full'));
   }
-  if(!rec)return tab('Recebimento',null,note('O backend ainda não disponibilizou o registro de Recebimento deste Card. Atualize ou confirme a chegada da mercadoria.','warn'));
+  if(!rec)return tab('Recebimento',null,note('Registro de Recebimento ainda indisponível. Atualize o Card.','warn'));
+  const step=s.cardStep||1;
   const isReturn=String(rec.receiving_type||c.receiving_type||'').toUpperCase()==='RETORNO';
-  const done=rec.physical_status==='CONCLUIDO',editable=role()==='recebimento'&&!done;
+  const done=rec.physical_status==='CONCLUIDO';
+  const editable=!done;
   const timerState=String(rec.ten_percent_status||'NAO_INICIADA');
-  const timerButtons=(timerState==='NAO_INICIADA'?button('▶ Iniciar tiragem','sample-start','button small'):'')+
-    (timerState==='EM_ANDAMENTO'?button('⏸ Pausar','sample-pause','button light small')+button('✓ Concluir tiragem','sample-finish','button small'):'')+
-    (timerState==='PAUSADA'?button('▶ Retomar','sample-resume','button small')+button('✓ Concluir tiragem','sample-finish','button small'):'');
-  const readOnly=!editable?note('Recebimento físico concluído ou perfil sem permissão. Os dados abaixo são somente leitura.','warn'):'';
-  let content=readOnly+
-    '<div class="grid-two">'+input('volumes','Volumes (caixas ou bags)',rec.volumes,'number','min="1" '+(editable?'':'readonly'))+
-    input('receivedQty','Peças recebidas',rec.received_qty,'number','min="0" '+(editable?'':'readonly'))+'</div>'+
-    '<label class="field"><span>Há danos ou avarias?</span><select id="hasDamage" '+(editable?'':'disabled')+'>'+
-    '<option value="" '+(rec.has_damage===null?'selected':'')+'>Selecione</option>'+
-    '<option value="no" '+(rec.has_damage===0||rec.has_damage===false?'selected':'')+'>Não</option>'+
-    '<option value="yes" '+(rec.has_damage===1||rec.has_damage===true?'selected':'')+'>Sim</option></select></label>'+
-    textarea('damageDescription','Descrição das avarias',rec.damage_description||'')+
-    textarea('receivingNotes','Observações',rec.notes||'');
-  if(!isReturn){
-    content+=section('Tiragem dos 10%')+note('O sistema exige exatamente a quantidade prevista para a amostra. A retirada não reduz automaticamente o número de volumes recebidos.')+
-      input('sampleActual','Peças efetivamente separadas',rec.ten_percent_actual,'number','min="0" '+(editable?'':'readonly'))+
-      infoRow('Amostra prevista pelo WMS',number(rec.ten_percent_min||0)+' peças')+
-      infoRow('Status da amostra',timerState);
-  }else{
-    content+=note('Retorno da Costura: não existe nova tiragem de 10% no Recebimento. O Card segue para a Inspeção 2.', 'warn');
+  if(step===1){
+    const fields='<div class="grid-two">'+input('volumes','Volumes (caixas ou bags)',rec.volumes,'number','min="1" '+(editable?'':'readonly'))+
+       input('receivedQty','Peças recebidas',rec.received_qty,'number','min="0" '+(editable?'':'readonly'))+'</div>'+
+      '<label class="field"><span>Existem danos ou avarias?</span><select id="hasDamage" '+(editable?'':'disabled')+'>'+
+      '<option value="">Selecione</option>'+
+      '<option value="no" '+(rec.has_damage===0||rec.has_damage===false?'selected':'')+'>Não</option>'+
+      '<option value="yes" '+(rec.has_damage===1||rec.has_damage===true?'selected':'')+'>Sim</option></select></label>'+
+      textarea('damageDescription','Descrição das avarias',rec.damage_description||'')+
+      textarea('receivingNotes','Observações',rec.notes||'')+
+      (editable?button('✓ Salvar conferência física','saveReceiving','button full'):note('Conferência física já concluída.'));
+    return tab('Etapa 1 · Conferência física','Preencha os dados recebidos e salve antes de avançar.',fields);
   }
-  if(editable)content+=button('Salvar conferência física','saveReceiving','button full');
-  if(editable&&!isReturn&&timerState!=='CONCLUIDA')content+='<div class="actions">'+timerButtons+'</div>';
-  if(editable&&!isReturn&&timerState==='CONCLUIDA'){
-    content+=input('afterVolumes','Volumes após tiragem',rec.volumes_after_sample??rec.volumes,'number','min="1"')+
-      button('Salvar volumes após tiragem','saveAfterVolumes','button light full');
+  if(step===2){
+    if(isReturn)return tab('Etapa 2 · Retorno da Costura','Não existe nova tiragem de 10%.',
+      note('O Recebimento de retorno seguirá para a Qualidade — Inspeção 2. Avance para o endereçamento.','warn'));
+    const qty=input('sampleActual','Peças efetivamente separadas (10%)',
+      rec.ten_percent_actual??'','number','min="0" '+(editable?'':'readonly'));
+    const timerButtons=timerState==='NAO_INICIADA'?button('▶ Iniciar tiragem','sample-start','button full'):
+      timerState==='EM_ANDAMENTO'?'<div class="actions">'+button('⏸ Pausar','sample-pause','button light')+
+        button('✓ Concluir tiragem','sample-finish','button')+'</div>':
+      timerState==='PAUSADA'?'<div class="actions">'+button('▶ Retomar','sample-resume','button')+
+        button('✓ Concluir tiragem','sample-finish','button light')+'</div>':'';
+    return tab('Etapa 2 · Tiragem obrigatória de 10%',
+      'A amostra não subtrai um volume físico do saldo recebido.',
+      infoRow('Amostra exigida',number(rec.ten_percent_min||0)+' peças')+
+      infoRow('Cronômetro',timerState)+qty+
+      (editable?button('Salvar quantidade separada','saveSampleQty','button light full')+timerButtons:
+      note('Tiragem e recebimento concluídos.')));
   }
-  content+=allocationPanel(c);
-  if(editable)content+=section('Avançar Recebimento')+
-     note('Antes de concluir, é necessário salvar volumes, registrar 10%, endereçar a bag na QA e endereçar todo o saldo físico. O WMS conferirá cada regra.')+
-     button('Concluir recebimento físico','completePhysical','button full');
-  return tab('Recebimento físico','Dados sincronizados com o servidor',content);
+  if(step===3){
+    return tab('Etapa 3 · Endereçamento físico',
+      'Selecione posições WMS reais. RM/QA/PR são volumes, nunca peças.',
+      (!isReturn&&timerState==='CONCLUIDA'&&editable?input('afterVolumes','Volumes após tiragem',
+        rec.volumes_after_sample??rec.volumes,'number','min="1"')+
+        button('Salvar volumes após tiragem','saveAfterVolumes','button light full'):'')+
+      allocationPanel(c));
+  }
+  return tab('Etapa 4 · Concluir Recebimento',
+    'O servidor verifica amostra, volumes e endereços antes de avançar.',
+    infoRow('Volumes recebidos',rec.volumes??'—')+
+    infoRow('Peças recebidas',rec.received_qty??'—')+
+    infoRow('Tiragem',isReturn?'Dispensada no retorno':timerState)+
+    infoRow('Status físico',rec.physical_status||'—')+
+    note('Ao concluir, o DISTRILOG valida as posições reais da mercadoria e registra a movimentação na mesma base do Web.','warn')+
+    (editable?button('✓ Concluir Recebimento físico','completePhysical','button full'):
+    note('Recebimento já finalizado.')));
 }
+
 function allocationPanel(c){
   const sector=String(c.current_sector||'');
   let allowed=sector==='RECEBIMENTO'?['RM','QA','PR']:sector==='PROCESSAMENTO'?['ET']:sector==='ETIQUETAGEM'?['EC']:[];
@@ -316,6 +367,7 @@ function allocationPanel(c){
 }
 function qualityPanel(c){
   const quality=c.quality;
+  const step=s.cardStep||1;
   const can=role()==='qualidade';
   if(!can)return operationUnavailable('qualidade');
   if(!quality||!quality.id){
@@ -334,16 +386,19 @@ function qualityPanel(c){
     infoRow('Amostra',number(quality.totals?.sample_target||0))+
     infoRow('Atribuída',number(quality.totals?.assigned||0))+
     infoRow('Inspecionada',number(quality.totals?.inspected||0));
+  if(step===1)return tab('Etapa 1 · Inspeção '+quality.inspection_type,
+    'A inspeção já foi criada. Avance para atribuir as amostras ou executar o trabalho.',body);
   const samples=quality.sample_items||[];
-  if(quality.status==='ABERTA'&&samples.some(x=>Number(x.available_qty||0)>0)){
+  if(step===2&&quality.status==='ABERTA'&&samples.some(x=>Number(x.available_qty||0)>0)){
     body+=section('Assumir amostra')+note('Preencha a quantidade desejada de cada linha. O servidor impede atribuir acima do saldo disponível.')+
       samples.filter(x=>Number(x.available_qty||0)>0).map(row=>
         '<div class="line-row"><div class="inline"><div><b>'+esc(row.reference||row.product||'Amostra')+'</b><small>'+esc(row.color||'')+' '+esc(row.size||'')+' · Disponível '+number(row.available_qty)+'</small></div>'+
         '<input id="qaAssign'+row.id+'" type="number" min="0" max="'+Number(row.available_qty)+'" value="0"></div></div>').join('')+
       button('Assumir seleção','qualityAssign','button full');
   }
+  if(step===2)return tab('Etapa 2 · Atribuição da amostra','Assuma apenas quantidades reais disponíveis.',body);
   const workers=(quality.workers||[]).filter(w=>Number(w.inspector_id)===Number(s.user.id));
-  for(const worker of workers){
+  if(step===3)for(const worker of workers){
     body+=section('Minhas atribuições · '+(worker.inspector_name||'Qualidade'))+
       infoRow('Cronômetro',worker.timer?.state||worker.status);
     const ts=worker.timer?.state;
@@ -364,43 +419,50 @@ function qualityPanel(c){
         (quality.status==='ABERTA'?button('Salvar resultados de inspeção','qualityResults','button full'):'');
     }
   }
+  if(step===3)return tab('Etapa 3 · Execução da inspeção',
+    'Inicie o cronômetro, registre as quantidades inspecionadas e salve.',body);
   if(quality.status==='ABERTA'){
     const validation=(quality.validation_errors||[]).slice(0,6);
     if(validation.length)body+=note('Aguardando requisitos: '+validation.join(' · '),'warn');
     body+=button('Concluir inspeção','qualityComplete','button full',quality.completion_ready?'':'disabled');
   }
-  return tab('Qualidade · Inspeção '+quality.inspection_type,'Operações somente do setor responsável',body);
+  return tab('Etapa 4 · Conclusão da Qualidade',
+    'Somente após o servidor confirmar que todos os requisitos foram cumpridos.',body);
 }
 function processingPanel(c){
   if(role()!=='processamento')return operationUnavailable('processamento');
+  if(c.status==='AGUARDANDO_ENTRADA')return tab('Entrada do Processamento',null,entryPanel());
   const tri=s.triage;
-  let body='';
-  if(c.status==='AGUARDANDO_ENTRADA'){
-    return tab('Entrada do Processamento',null,entryPanel());
-  }
   if(!tri){
-    body+=note('Este Card está no Processamento. A triagem é o primeiro procedimento e define a necessidade de etiquetagem.')+
-      button('Iniciar Triagem','triageStart','button full');
-    return tab('Triagem',null,body);
+    return tab('Etapa 1 · Iniciar Triagem','Conferência cega com cronômetro real.',
+      note('A Triagem é o primeiro procedimento do Processamento. O backend valida se o Card está disponível.')+
+      button('▶ Iniciar Triagem','triageStart','button full'));
   }
+  const step=s.cardStep||1;
   const detail=tri.details||tri;
+  if(step===1)return tab('Etapa 1 · Triagem iniciada',null,
+    infoRow('Status',tri.status||detail.status)+infoRow('Operador',tri.user_name||'—')+
+    note('Cronômetro ativo no servidor. Avance para endereçar as posições físicas reais.'));
+  if(step===2)return tab('Etapa 2 · Endereçamento da Triagem',
+    'O backend exige que a mercadoria esteja endereçada antes de concluir a etapa.',
+    allocationPanel(c));
   const items=detail.items?.length?detail.items:(c.items||[]).map(i=>({item_id:i.id,reference:i.reference,color:i.color,size:i.size}));
-  body+=infoRow('Status',tri.status||detail.status)+infoRow('Operador',tri.user_name||'—')+
-     note('Conferência cega: as quantidades previstas não aparecem na triagem. O resultado é enviado ao WMS para comparar.')+
-     section('Contar por cor e tamanho')+
-     items.map(i=>'<div class="line-row"><div class="inline"><div><b>'+esc(i.reference||'Item')+'</b><small>'+esc(i.color||'')+' · '+esc(i.size||'')+'</small></div>'+
-       '<input type="number" id="triCount'+i.item_id+'" min="0" placeholder="Contado" inputmode="numeric"></div></div>').join('');
+  let body=infoRow('Status',tri.status||detail.status)+
+    note('Conferência cega: não são mostradas as quantidades esperadas. Conte cada cor/tamanho.')+
+    section('Contagem por referência')+
+    items.map(i=>'<div class="line-row"><div class="inline"><div><b>'+esc(i.reference||'Item')+'</b>'+
+      '<small>'+esc(i.color||'')+' · '+esc(i.size||'')+'</small></div>'+
+      '<input type="number" id="triCount'+i.item_id+'" min="0" placeholder="Contado" inputmode="numeric"></div></div>').join('');
   if(tri.status!=='CONCLUIDA'){
-    body+='<label class="field"><span>Precisa etiquetar?</span><select id="needsLabeling"><option value="">Selecione</option><option value="yes">Sim, enviar para Etiquetagem</option><option value="no">Não, enviar para Estocagem</option></select></label>';
+    body+='<label class="field"><span>Precisa etiquetar?</span><select id="needsLabeling">'+
+      '<option value="">Selecione</option><option value="yes">Sim, Etiquetagem</option>'+
+      '<option value="no">Não, Estocagem</option></select></label>';
     body+='<div class="actions">'+
-      (tri.status==='EM_ANDAMENTO'?button('Pausar','triage-pause','button light small'):'')+
-      (tri.status==='PAUSADA'?button('Retomar','triage-resume','button small'):'')+
-      button('Concluir triagem','triage-finish','button')+'</div>';
-    body+=allocationPanel(c);
-  }else{
-    body+=note('Triagem concluída. O Card foi encaminhado automaticamente pelo servidor.');
-  }
-  return tab('Processamento • Triagem','Cronômetro e contagem reais do WMS',body);
+      (tri.status==='EM_ANDAMENTO'?button('⏸ Pausar','triage-pause','button light small'):'')+
+      (tri.status==='PAUSADA'?button('▶ Retomar','triage-resume','button small'):'')+
+      button('✓ Concluir Triagem','triage-finish','button')+'</div>';
+  }else body+=note('Triagem concluída; destino registrado pelo servidor.');
+  return tab('Etapa 3 · Contar e concluir','Última etapa da Triagem, sem quantidades previstas.',body);
 }
 
 function cadastroPanel(c){
@@ -437,6 +499,7 @@ function entryPanel(){
     (role()==='processamento'&&e.status==='PENDENTE'?button('Confirmar Entrada','entryConfirm','button full'):'');
 }
 function downstreamPanel(c){
+  const step=s.cardStep||1;
   const isLabel=c.current_sector==='ETIQUETAGEM';
   const op=isLabel?c.labeling:c.storage;
   const permission=role()===(isLabel?'etiquetagem':'estocagem');
@@ -451,9 +514,11 @@ function downstreamPanel(c){
   }
   let body=infoRow('Status',op.status)+infoRow('Operador',s.user.name);
   const mine=(op.assignments||[]).filter(x=>Number(x.worker_user_id)===Number(s.user.id)&&!['LIBERADA','CONCLUIDA'].includes(x.status));
-  if(op.status==='ABERTO'&&op.has_unassigned_pending)
+  if(step===1&&op.status==='ABERTO'&&op.has_unassigned_pending)
     body+=button('Assumir Card completo','downstreamClaim','button full');
-  if(mine.length){
+  if(step===1)return tab('Etapa 1 · Assumir controle',
+    'Assuma o Card antes de executar a Etiquetagem ou Estocagem.',body);
+  if(step===2&&mine.length){
     body+=section('Minha execução')+
       mine.map(a=>'<div class="line-row"><b>'+esc(a.reference||a.product||'Grade do Card')+'</b>'+
         '<small>'+esc(a.color||'')+' '+esc(a.size||'')+' • '+esc(a.timer_state||'')+'</small>'+
@@ -465,17 +530,24 @@ function downstreamPanel(c){
          (states.has('PAUSADA')?button('Retomar','downstream-resume','button small'):'')+'</div>';
     }
   }
-  if(op.status==='ABERTO'){
+  if(step===2)return tab('Etapa 2 · Execução cronometrada',
+    'Registre a execução e controle o tempo nesta etapa.',body);
+  if(step===3&&op.status==='ABERTO'){
     body+=section(isLabel?'Conferência de Etiquetagem':'Conferência cega da Estocagem')+
       note('Informe a contagem física de todas as linhas. O backend verifica divergências e pode exigir recontagem.')+
       (c.items||[]).map(i=>'<div class="line-row"><div class="inline"><div><b>'+esc(i.reference||i.product||'Item')+'</b>'+
       '<small>'+esc(i.color||'')+' '+esc(i.size||'')+'</small></div>'+
       '<input type="number" id="checkQty'+i.id+'" placeholder="Contado" min="0"></div></div>').join('')+
       button(isLabel?'Conferir Etiquetagem':'Conferir Estocagem','downstreamCheck','button full');
+  }
+  if(step===3)return tab('Etapa 3 · Conferência cega',
+    'Informe a quantidade física encontrada; o backend validará divergências.',body);
+  if(op.status==='ABERTO'){
     if(isLabel)body+=allocationPanel(c);
     body+=section('Finalização')+button('Concluir setor','downstreamComplete','button full');
   }
-  return tab(isLabel?'Etiquetagem':'Estocagem','Execução sincronizada com o WMS',body);
+  return tab('Etapa 4 · Finalização',
+    'A conferência e o endereçamento devem estar concluídos para avançar.',body);
 }
 
 async function loadQueue(){
@@ -670,9 +742,15 @@ async function runAction(action,buttonElement){
     s.user.language=response.language;localStorage.setItem(KEY,JSON.stringify(s.user));render();
     flash('Idioma salvo no seu perfil do DISTRILOG.');return;
   }
+  if(action.startsWith('space-')){
+    await window.DM_SPACE.act(action.slice(6),s.user);
+    render();return;
+  }
+  if(action==='openHistory'){await loadHistory();return;}
   if(action==='nav'){
     const dest=buttonElement.dataset.to;
     if(dest==='queue')await loadQueue();
+    else if(dest==='activities'){await window.DM_SPACE.load(s.user);s.screen='activities';render();}
     else if(dest==='address')await loadAddresses(s.selectedArea);
     else if(dest==='history')await loadHistory();
     else if(dest==='scan'){s.screen='scan';render();}
@@ -683,7 +761,10 @@ async function runAction(action,buttonElement){
     s.sector=buttonElement.dataset.to;s.search='';await loadQueue();return;
   }
   if(action==='refresh'){await refresh();flash('Dados atualizados no WMS.');return;}
-  if(action==='card'){await loadCard(Number(buttonElement.dataset.id));return;}
+  if(action==='card'){s.cardPanel='task';s.cardStep=1;await loadCard(Number(buttonElement.dataset.id));return;}
+  if(action==='cardPanel'){s.cardPanel=buttonElement.dataset.to;render();window.scrollTo(0,0);return;}
+  if(action==='taskPrev'){s.cardStep=Math.max(1,s.cardStep-1);render();window.scrollTo(0,0);return;}
+  if(action==='taskNext'){s.cardStep=Math.min(taskStages(s.card).length,s.cardStep+1);render();window.scrollTo(0,0);return;}
   if(action==='backQueue'){await loadQueue();return;}
   if(action==='scanNative'){API.scan();return;}
   if(action==='resolveScan'){await resolveCode(val('scanManual'));return;}
@@ -710,10 +791,15 @@ async function runAction(action,buttonElement){
       notes:val('receivingNotes').trim()
     });
     if(damage==='yes'&&!payload.damage_description)throw Error('Descreva as avarias.');
-    if(String(c.receiving?.receiving_type).toUpperCase()!=='RETORNO'){
-      payload.ten_percent_actual=nullableInt('sampleActual');
-    }
+    // Conferência física e amostra são etapas independentes do fluxo guiado.
+    // Não zere uma amostra salva quando o campo não aparece nesta etapa.
+    if(document.getElementById('sampleActual'))payload.ten_percent_actual=nullableInt('sampleActual');
     await mutate('/api/receivings/'+c.receiving.id,payload,'PATCH');return;
+  }
+  if(action==='saveSampleQty'){
+    requireSector('recebimento');
+    const qty=intField('sampleActual',true);
+    await mutate('/api/receivings/'+c.receiving.id,userBody({ten_percent_actual:qty}),'PATCH');return;
   }
   if(action.startsWith('sample-')){
     requireSector('recebimento');

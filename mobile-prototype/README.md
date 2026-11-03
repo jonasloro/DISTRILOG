@@ -77,3 +77,9 @@ publicado nos artifacts da execução como
 
 O código Android fica isolado em `mobile-prototype/` e não altera o
 backend, a branch principal nem o Render de produção.
+
+## Versão piloto 1.1.0 — organização de espaço
+
+No Android, a aba **Atividades** permite Abertura de espaço e Devolução ao porta-paletes, com fluxo guiado em 4 etapas: atividade → rua/marca → cronômetro persistente → quantidade e unidade obrigatórias. O registro é compartilhado com o DISTRILOG Web via `/api/space-activities` e armazenado no Supabase; não altera o saldo nem transfere fisicamente posições no WMS. O Card passa a separar Operar/Endereços/Grade/Histórico e as operações de Recebimento, Qualidade, Triagem e ET/EC exibem etapas em sequência, com navegação fixa na parte inferior. Os fluxos completos exigem homologação física. Não foram incluídos novos processos de Separação ou Expedição antes da definição das regras operacionais.
+
+O pipeline desta versão gera um APK de homologação e publica uma **GitHub Release prerelease** com link direto de instalação (sem precisar baixar o ZIP de Artifacts). A assinatura debug do runner pode mudar entre builds: se o Android disser "app não instalado", desinstale apenas a versão anterior do APK protótipo e instale novamente (dados WMS permanecem no servidor).

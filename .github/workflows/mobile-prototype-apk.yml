@@ -7,7 +7,7 @@ on:
       - '.github/workflows/mobile-prototype-apk.yml'
   workflow_dispatch:
 permissions:
-  contents: read
+  contents: write
 jobs:
   build:
     runs-on: ubuntu-24.04
@@ -27,6 +27,7 @@ jobs:
       - name: Check prototype JavaScript syntax
         run: |
           node --check mobile-prototype/app/src/main/assets/mobile/native-client.js
+          node --check mobile-prototype/app/src/main/assets/mobile/activities.js
           node --check mobile-prototype/app/src/main/assets/mobile/app.js
           node --test mobile-prototype/tests/*.cjs
       - name: Build signed Android test APK
@@ -42,6 +43,7 @@ jobs:
           "$tool" verify --verbose "$apk"
           unzip -l "$apk" | grep -F 'assets/mobile/index.html'
           unzip -l "$apk" | grep -F 'assets/mobile/app.js'
+          unzip -l "$apk" | grep -F 'assets/mobile/activities.js'
           unzip -l "$apk" | grep -F 'assets/mobile/prototype.css'
           cp "$apk" DISTRILOG-Mobile-PROTOTIPO-INTEGRADO.apk
           sha256sum DISTRILOG-Mobile-PROTOTIPO-INTEGRADO.apk > DISTRILOG-Mobile-PROTOTIPO-INTEGRADO.apk.sha256
@@ -53,3 +55,20 @@ jobs:
             DISTRILOG-Mobile-PROTOTIPO-INTEGRADO.apk.sha256
           retention-days: 14
           if-no-files-found: error
+      - name: Publish direct APK prerelease (no Artifacts ZIP required)
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag=mobile-prototipo-1.1.0
+          apk=DISTRILOG-Mobile-PROTOTIPO-INTEGRADO.apk
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "$apk" --clobber
+          else
+            gh release create "$tag" "$apk" \
+              --title 'DISTRILOG Mobile 1.1.0 - Piloto' \
+              --notes 'Instalador de homologacao: atividades de abertura de espaco, devolucao porta-paletes e fluxo guiado de Card. Exige HTTPS e login no DISTRILOG. Operacoes confirmadas afetam dados reais e requerem testes antes de producao.' \
+              --prerelease --target "$GITHUB_SHA"
+          fi

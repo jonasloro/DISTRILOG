@@ -58,3 +58,60 @@ table.mobile-table{width:100%;border-collapse:collapse;font-size:12px}
 .break{overflow-wrap:anywhere}.app-blocked{opacity:.75}
 [hidden]{display:none!important}
 @media(max-width:370px){.metric-row{grid-template-columns:repeat(2,1fr)}.grid-two{grid-template-columns:1fr}.top-band{gap:8px}.bottom-nav button{min-width:45px;font-size:9px}}
+
+
+/* Fluxo mobile enxuto: somente etapa ativa; botões permanecem no alcance do polegar. */
+.mobile-flow{padding-bottom:122px}
+.mobile-step-track{display:flex;gap:5px;overflow:auto;scrollbar-width:none;margin:12px 0 20px}
+.mobile-step-track span{flex:1;min-width:max-content;background:#1b2825;border:1px solid #33493e;color:#889b94;
+  padding:8px 7px;text-align:center;border-radius:8px;font-size:10px;font-weight:800}
+.mobile-step-track span.on{background:#30472a;border-color:#bbeb79;color:#cef89a}
+.mobile-flow-actions,.mobile-task-footer{
+  position:fixed;bottom:76px;left:50%;transform:translateX(-50%);z-index:14;
+  display:flex;gap:9px;padding:11px 14px;max-width:640px;width:100%;
+  background:linear-gradient(180deg,#18221e,#131d1b);border-top:1px solid #3e5441;
+  box-shadow:0 -12px 37px #080b0a80
+}
+.mobile-flow-actions .button,.mobile-task-footer .button{flex:1;min-height:48px;font-size:13px}
+.mobile-choice{display:grid;gap:12px;margin:16px 0}
+.mobile-choice button{background:#18231f;border:1px solid #415443;border-radius:15px;
+  text-align:left;display:grid;gap:7px;padding:18px 17px;color:#e8f4e6}
+.mobile-choice button>span{font-size:34px;color:#c4ef76}
+.mobile-choice button>b{font-size:17px}
+.mobile-choice button>small{font-size:12px;line-height:1.55;color:#9eafa2}
+.mobile-choice button>strong{font-size:12px;color:#c7fa88;margin-top:6px}
+.mobile-choice button:disabled{opacity:.35}
+.mobile-work-clock{background:linear-gradient(155deg,#1b3426,#17231d);
+  text-align:center;border:1px solid #507453;border-radius:18px;padding:26px 13px 22px;margin-top:14px}
+.mobile-work-clock h2{font-size:23px;line-height:1.2;margin:15px 0}
+.mobile-work-clock .chips{justify-content:center;margin:14px 0}
+.mobile-work-clock #dmSpaceClock{font-size:clamp(46px,13vw,72px);font-weight:900;
+  letter-spacing:-.045em;color:#cbf467;font-variant-numeric:tabular-nums;margin:22px 0}
+.mobile-work-success{text-align:center;padding:25px 13px;background:#1b2c21;border:1px solid #587e4f;border-radius:18px}
+.mobile-work-success>span{display:grid;place-items:center;margin:0 auto 16px;
+  border-radius:50%;width:60px;height:60px;background:#c2eb88;color:#1e371b;font-size:33px}
+.mobile-work-success>strong{display:block;font-size:27px;color:#d5ff94;margin:16px 0 8px}
+.mobile-work-success>small{display:block;color:#b2c4b4;font-size:11px}
+.mobile-flow-history{background:#16211e;border:1px solid #384c41;border-radius:12px;margin-top:22px}
+.mobile-flow-history summary{cursor:pointer;font-size:12px;font-weight:800;color:#d1e3cd;padding:14px}
+.mobile-flow-history .line-row{margin:8px}
+.mobile-task{padding-bottom:124px}
+.mobile-task-picker{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none;margin:15px 0 18px}
+.mobile-task-picker button{border:1px solid #43564c;background:#1c2927;border-radius:8px;color:#c5d8c8;
+  padding:10px 12px;font-size:12px;font-weight:850;white-space:nowrap}
+.mobile-task-picker button.on{background:#c5ed87;color:#183017;border-color:#c5ed87}
+.mobile-task-step{display:flex;gap:5px;overflow:auto;scrollbar-width:none;margin-bottom:12px}
+.mobile-task-step span{font-size:10px;background:#1f2b28;color:#9ab19f;
+  border:1px solid #374c40;border-radius:7px;padding:8px 6px;min-width:max-content}
+.mobile-task-step span.on{background:#335633;color:#d5f99e;border-color:#91be70}
+.mobile-task-panel .surface{margin-bottom:12px}
+.mobile-task-footer .button{min-width:0}
+.mobile-task-footer .button:disabled{opacity:.3}
+.mobile-card-summary{display:flex;align-items:center;justify-content:space-between;gap:9px;
+  padding:10px 12px;background:#1c2c23;border:1px solid #3e5443;border-radius:11px;margin:10px 0}
+.mobile-card-summary strong{font-size:13px}
+.mobile-card-summary small{display:block;font-size:10px;color:#99b0a2}
+@media(max-width:380px){
+  .mobile-flow-actions,.mobile-task-footer{padding:9px 9px;gap:6px}
+  .mobile-flow-actions .button,.mobile-task-footer .button{font-size:11px}
+}

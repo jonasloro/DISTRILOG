@@ -6,8 +6,8 @@ android {
     applicationId 'com.distribox.distrilogmobile.prototype'
     minSdk 24
     targetSdk 34
-    versionCode 1
-    versionName '1.0.0-piloto'
+    versionCode 2
+    versionName '1.1.0-piloto'
   }
   compileOptions {
     sourceCompatibility JavaVersion.VERSION_17
