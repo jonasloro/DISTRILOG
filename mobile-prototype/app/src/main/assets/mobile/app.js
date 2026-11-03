@@ -1111,5 +1111,5 @@ async function boot(){
 }
 boot().catch(err=>{s.screen='login';render();flash(publicError(err),true);});
 // Advisory check on app open; no automatic installation or third-party pages.
-window.setTimeout(()=>{if(window.DISTRILOG&&s.screen!=='updates')API.checkUpdates();},6500);
+setTimeout(()=>{if(window.DISTRILOG&&s.screen!=='updates')API.checkUpdates();},6500);
 })();
