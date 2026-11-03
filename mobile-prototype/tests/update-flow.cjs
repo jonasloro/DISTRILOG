@@ -64,8 +64,8 @@ test('Future official releases are protected by long-lived GitHub Secrets signin
   assert.match(workflow,/secrets\.MOBILE_SIGNING_KEYSTORE_B64/);
   assert.match(workflow,/secrets\.MOBILE_SIGNING_STORE_PASSWORD/);
   assert.match(workflow,/SIGNED_RELEASE=true/);
-  assert.match(workflow,/mobile-prototipo-1\.2\.0/);
-  assert.match(workflow,/mobile-piloto-1\.2\.0/);
+  assert.match(workflow,/mobile-prototipo-1\.3\.0/);
+  assert.match(workflow,/mobile-piloto-1\.3\.0/);
   assert.match(workflow,/sha256sum/);
   assert.match(workflow,/gh release upload/);
   assert.doesNotMatch(workflow,/BEGIN PRIVATE KEY/);
