@@ -1484,3 +1484,57 @@ input:disabled,select:disabled,textarea:disabled{
 .stock3d-toolbar a:hover{text-decoration:underline}
 .stock3d-shell iframe{display:block;width:100%;height:max(640px,calc(100vh - 195px));border:0;background:#101a16}
 @media(max-width:760px){.stock3d-toolbar{flex-wrap:wrap}.stock3d-shell iframe{height:calc(100dvh - 175px);min-height:520px}}
+
+
+/* Organização de espaço · abertura de rua e devolução ao porta-paletes.
+   Ações finais permanecem visíveis; cada etapa tem somente os campos necessários. */
+.space-page{max-width:1010px;margin:0 auto;padding-bottom:96px}
+.space-header{display:flex;justify-content:space-between;align-items:center;gap:18px;margin-bottom:18px}
+.space-header small{font-size:10px;color:#5e7568;letter-spacing:.12em;font-weight:900}
+.space-header h1{font-size:29px;font-weight:900;letter-spacing:-.04em;margin:4px 0}
+.space-header p{font-size:13px;color:#708172;margin:0}
+.space-steps{display:flex;flex-wrap:wrap;gap:9px;margin-bottom:18px}
+.space-steps span{font-size:11px;font-weight:750;padding:8px 12px;border:1px solid #dce5da;border-radius:25px;background:#fff;color:#71827a}
+.space-steps span.current{background:#244532;border-color:#244532;color:#e0f7c4}
+.space-stage{background:#fff;border-radius:16px;border:1px solid #e0e9e0;box-shadow:0 12px 40px #13291c08;padding:22px}
+.space-stage h2{font-size:23px;margin:0 0 10px;color:#183226}
+.space-stage>p{font-size:13px;color:#627466;line-height:1.65}
+.space-choice{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:20px}
+.space-choice button{text-align:left;display:flex;flex-direction:column;align-items:flex-start;min-height:192px;gap:9px;border:1px solid #cbdcc9;background:#f6faf5;color:#203929;border-radius:15px;padding:21px;transition:border .2s,transform .2s}
+.space-choice button:hover:not(:disabled){border-color:#6a9856;transform:translateY(-2px)}
+.space-choice button>span{font-size:29px;color:#5b8b44}.space-choice b{font-size:18px}.space-choice small{font-size:12px;color:#66786a;line-height:1.5}
+.space-choice strong{margin-top:auto;color:#276a3d}.space-choice button:disabled{opacity:.4;cursor:not-allowed}
+.space-form{display:grid;gap:14px;margin:18px 0 6px;max-width:720px}
+.space-form label{display:grid;gap:7px;color:#314b39;font-size:13px;font-weight:800}
+.space-form input,.space-form select,.space-form textarea{width:100%;height:auto;min-height:46px;padding:11px 12px;border:1px solid #bdcec0;background:#f9fbf9;border-radius:9px;color:#213b29;font-size:15px}
+.space-form textarea{min-height:88px;resize:vertical}
+.space-form input:focus,.space-form select:focus{border-color:#539b57;outline:2px solid #4da75830}
+.space-flow-footer{position:sticky;bottom:12px;display:flex;gap:12px;justify-content:flex-end;margin:13px 0 25px;padding:13px;background:#f7faf6;border:1px solid #cdddcf;border-radius:12px;z-index:4;box-shadow:0 7px 30px #172f1b20}
+.space-button{min-height:46px;flex:1;max-width:330px;border-radius:10px;padding:10px 15px;font-weight:850;font-size:13px;border:1px solid #304b38}
+.space-button.primary{background:#244b32;color:#f5ffe7;border-color:#244b32}
+.space-button.ghost{background:#eef5ed;color:#2b5334}
+.space-button:disabled{opacity:.4;cursor:not-allowed}
+.space-focus{text-align:center;padding:12px}
+.space-focus h2{margin:13px auto 16px;max-width:670px}
+.space-state{display:inline-block;background:#d4efce;color:#285d35;border-radius:30px;padding:8px 13px;font-size:11px;font-weight:900;letter-spacing:.06em}
+.space-state.paused{background:#f8edcb;color:#78522f}
+.space-label-pair{display:flex;gap:10px;justify-content:center;flex-wrap:wrap}
+.space-label-pair span{border:1px solid #c7dac6;background:#f6faf6;padding:9px 16px;border-radius:20px;font-size:11px;color:#607566}
+.space-label-pair b{margin-left:5px;color:#244c2d;font-size:13px}
+.space-timer{font-size:clamp(46px,10vw,76px);color:#2b5034;letter-spacing:-.05em;font-weight:900;font-variant-numeric:tabular-nums;margin:18px 0 8px}
+.space-focus p{font-size:12px;color:#728474}
+.space-caution{color:#845e31;background:#fff7e9;border:1px solid #ead7b6;border-radius:9px;padding:12px;font-size:12px;line-height:1.6}
+.space-success{text-align:center;padding:20px}.space-success>span{display:grid;place-items:center;margin:0 auto 15px;width:60px;height:60px;border-radius:50%;background:#d8f1ce;font-size:30px;color:#33743a}
+.space-success>strong{display:block;color:#275237;font-size:31px}.space-success>small{display:block;color:#66786d;margin:14px}
+.space-history{margin-top:25px}.space-history h3{color:#344c39;font-size:15px}
+.space-history-item{display:flex;justify-content:space-between;gap:16px;padding:13px 15px;margin:8px 0;border:1px solid #dce7dd;border-radius:10px;background:#fff}
+.space-history-item>div{display:grid;gap:4px}.space-history-item small{display:block;color:#7b8a7e;font-size:11px}.space-history-item strong{font-size:14px;color:#325a39;text-align:right}
+.card-stock3d-location{border:1px solid #cddbcf;border-radius:12px;background:linear-gradient(120deg,#f4faee,#f7faf9);padding:12px 15px;margin:9px 0 13px}
+.card-stock3d-title{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.card-stock3d-title b{display:block;color:#224530;font-size:14px}
+.card-stock3d-title small{display:block;color:#778b7c;font-size:11px;margin-top:3px}
+.card-stock3d-action{background:#27563a;border:0;color:#fff;padding:10px 14px;border-radius:9px;font-weight:750;font-size:12px}
+.card-stock3d-info{margin-top:8px;color:#64746a;font-size:11px}
+.card-stock3d-location iframe{display:block;width:100%;height:430px;margin-top:13px;border:1px solid #617d63;border-radius:10px;background:#102018}
+.card-stock3d-foot{display:flex;gap:12px;align-items:center;justify-content:space-between;margin:8px 0}
+@media(max-width:700px){.space-header{flex-wrap:wrap}.space-steps span{font-size:10px}.space-choice{grid-template-columns:1fr}.space-flow-footer{bottom:8px}.space-button{font-size:12px}.space-history-item{flex-wrap:wrap}.space-stage{padding:16px}.card-stock3d-title{flex-wrap:wrap}.card-stock3d-location iframe{height:390px}}

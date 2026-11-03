@@ -8,6 +8,8 @@ let qualityUsers = [];
 let processingUsers = [];
 let downstreamUsers = {ETIQUETAGEM:[],ESTOCAGEM:[]};
 let selectedProductionCardId = null;
+let cardStock3DAddresses = [];
+let cardStock3DOpen = false;
 let unifiedCache = {sgo:[],tasks:[],shipments:[],returns:[]};
 
 const $ = (id) => document.getElementById(id);
@@ -196,6 +198,7 @@ function showLoading(label) {
 }
 
 async function goTo(view, stock3dFocus = null) {
+  if (typeof stopSpaceActivityTick === "function") stopSpaceActivityTick();
   clearInterval(cleaningTick);
   clearInterval(processingFlowTick);
   const previousView = currentView;
@@ -216,6 +219,7 @@ async function goTo(view, stock3dFocus = null) {
     if (view === "storage-hub") await renderStorageHub();
     if (view === "address-map") await renderAddressMap();
     if (view === "stock-3d") renderStock3D(stock3dFocus);
+    if (view === "space-activities") await renderSpaceActivities();
     if (view === "sgo") await renderSgo();
     if (view === "sgo-indicators") await renderSgoIndicators();
     if (view === "production") await renderProduction();
@@ -274,6 +278,8 @@ function closeModal() {
   cardData = null;
   window.processingTriageCardId = null;
   window.allocCtx = null;
+  cardStock3DOpen = false;
+  cardStock3DAddresses = [];
   window.positionMapRequestId = (window.positionMapRequestId || 0) + 1;
 }
 
@@ -330,6 +336,46 @@ function openStock3DForAddress(address) {
   if (!address || !/^\d+(RM|QA|PR)\d{2}[A-C]$|^\d+(ET|EC)\d{2}$/.test(String(address).trim().toUpperCase())) return;
   closeAddressInventory();
   goTo("stock-3d", {address});
+}
+
+
+/* Mini-preview do Stock 3D dentro do Card, carregado somente ao abrir.
+   A localização real vem do WMS e nunca de um desenho ilustrativo. */
+function cardStock3DActiveAddresses(rows) {
+  const addresses = new Set();
+  (Array.isArray(rows) ? rows : []).forEach(row => {
+    const status = row.active;
+    const active = status === true || status === 1 ||
+      (typeof status === "string" && ["t","true","1"].includes(status.toLowerCase()));
+    const address = String(row.address || "").trim().toUpperCase();
+    if (active && /^[0-9]+(RM|QA|PR)[0-9]{2}[A-C]$|^[0-9]+(ET|EC)[0-9]{2}$/.test(address)) addresses.add(address);
+  });
+  return [...addresses].sort((a,b) => a.localeCompare(b,"pt-BR",{numeric:true}));
+}
+function renderCardStock3DInline() {
+  const panel = $("cardStock3DInline");
+  if (!panel || !cardData || Number(cardData.id) !== Number(currentCardId)) return;
+  const ids = cardStock3DAddresses;
+  const count = ids.length
+    ? ids.length + " endereço(s): " + ids.slice(0,7).join(", ") + (ids.length>7?"…":"")
+    : "Ainda sem posições físicas ativas no WMS.";
+  const target = "/stock-3d?card=" + Number(cardData.id) + "&embedded=1";
+  panel.innerHTML = '<section class="card-stock3d-location" aria-label="Localização do card no Stock 3D">' +
+    '<div class="card-stock3d-title"><div><b>▧ Localização da mercadoria no CD 3D</b>' +
+    '<small>Casulos reais vinculados aos endereços WMS · somente leitura</small></div>' +
+    '<button class="card-stock3d-action" onclick="toggleCardStock3DInline(' + Number(cardData.id) + ')">' +
+    (cardStock3DOpen ? 'Ocultar mapa 3D ↑' : 'Exibir casulos no mapa 3D ↓') +
+    '</button></div><div class="card-stock3d-info">' + esc(count) + '</div>' +
+    (cardStock3DOpen ? '<iframe title="Casulos deste Card em três dimensões" loading="lazy" src="' +
+      esc(target) + '" referrerpolicy="same-origin"></iframe>' +
+      '<div class="card-stock3d-foot"><small>Casulos sem calibração 3D aparecem na lista WMS, sem localização geométrica inventada.</small>' +
+      '<button class="secondary small-btn" onclick="openStock3DForCard(' + Number(cardData.id) + ')">Abrir mapa completo ↗</button></div>' : '') +
+    '</section>';
+}
+function toggleCardStock3DInline(id) {
+  if (!currentCardId || Number(currentCardId)!==Number(id) || !cardData) return;
+  cardStock3DOpen = !cardStock3DOpen;
+  renderCardStock3DInline();
 }
 
 let addressMapLoadId = 0;
@@ -970,6 +1016,8 @@ function cardLocationBannerHtml(rows, failed=false, loading=false, currentSector
 
 async function openCard(cardId, tab = "receiving") {
   currentCardId = cardId;
+  cardStock3DAddresses = [];
+  cardStock3DOpen = false;
   const locationRequestId = Number(window.cardLocationRequestId || 0) + 1;
   window.cardLocationRequestId = locationRequestId;
   window.qaSampleAllocationRequired = false;
@@ -1027,6 +1075,7 @@ async function openCard(cardId, tab = "receiving") {
   $("modalBody").innerHTML = `
     <div class="card-title"><div><h2>Card ${esc(cardDisplayName)}</h2><div class="card-subtitle">${esc(cardData.supplier||"—")} • ${esc(cardData.brand||"—")} • ${cardData.expected_total} peças</div></div><div class="card-title-actions"><button type="button" class="secondary small-btn" onclick="openStock3DForCard(${Number(cardData.id)})">⌖ Ver no Stock 3D</button><span class="badge ${statusClass(cardData.status)}">${esc(cardData.status_label)}</span>${currentUser?.role==="admin"?`<button class="danger small-btn" onclick="deleteCard(${cardData.id})">Excluir Card</button>`:""}</div></div>
     <div id="cardLocationSlot">${cardLocationBannerHtml(null,false,true)}</div>
+    <div id="cardStock3DInline"></div>
     <div class="summary-grid">
       <div class="summary-box"><span>Setor atual</span><strong>${esc(cardData.current_sector)}</strong></div>
       <div class="summary-box"><span>Tipo de entrada</span><strong>${cardData.receiving_type === "RETORNO" ? "Retorno da Costura" : "Mercadoria nova"}</strong></div>
@@ -1048,12 +1097,15 @@ async function openCard(cardId, tab = "receiving") {
     </div>
     <div id="cardTab"></div>`;
   $("modal").classList.remove("hidden");
+  renderCardStock3DInline();
   // Fetch physical locations without blocking the Card modal or its tabs.
   apiWithTimeout(`/api/positions/cards/${cardId}/trail`, 8000)
     .then((rows) => {
       if (window.cardLocationRequestId !== locationRequestId || Number(currentCardId) !== Number(cardId)) return;
       const slot = $("cardLocationSlot");
       if (slot) slot.innerHTML = cardLocationBannerHtml(rows, false, false, cardData?.current_sector || "");
+      cardStock3DAddresses = cardStock3DActiveAddresses(rows);
+      if (!cardStock3DOpen) renderCardStock3DInline();
     })
     .catch((error) => {
       if (window.cardLocationRequestId !== locationRequestId || Number(currentCardId) !== Number(cardId)) return;
