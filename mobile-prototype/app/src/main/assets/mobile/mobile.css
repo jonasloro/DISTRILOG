@@ -45,6 +45,9 @@ body{background:#0d1215}#app{max-width:640px;min-height:100dvh;padding-bottom:0}
 .scanner-panel .hero{font-size:57px;line-height:1.2;margin:10px}
 .logo-inverse{background:var(--accent);color:#172407;border-radius:13px;font-size:24px;font-weight:950;width:45px;height:45px;display:grid;place-items:center}
 .bottom-nav button{min-width:60px;flex:1;padding:7px 6px}
+.mobile-update-badge{border:1px solid #c1ef76;background:#293a22;color:#e4ffb2;border-radius:10px;padding:6px 8px;font-size:10px;font-weight:900;margin-left:10px;max-width:116px;line-height:1.2}
+.top-band{min-height:70px;height:auto}
+.outbound-clock{font-family:ui-monospace,Consolas,monospace;font-variant-numeric:tabular-nums}
 .bottom-nav button span{font-size:22px}.bottom-nav button.on{background:#2d3a2b}
 .empty{padding:26px 14px;text-align:center;font-size:13px}
 .muted{color:var(--muted)}.t-xs{font-size:11px}.t-sm{font-size:12px}
