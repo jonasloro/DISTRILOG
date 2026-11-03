@@ -25,20 +25,22 @@ const app=document.getElementById('app');
 const updateState={type:'idle',message:'Verifique se existe uma versão mais recente.',percent:0,version:'',previous:'settings'};
 window.DM_UPDATE_EVENT=function(event){
   const ev=event&&typeof event==='object'?event:{};
-  const allowed=['checking','current','available','downloading','ready','permission','installing','error'];
+  const allowed=['checking','current','available','downloading','ready','permission','installing','pilot','error'];
   if(!allowed.includes(ev.type))return;
   updateState.type=ev.type;
   updateState.message=String(ev.message||'');
   updateState.percent=Number(ev.percent)||0;
   updateState.version=String(ev.version||updateState.version||'');
   if(s.screen==='updates')render();
-  else if(ev.type==='available'){
-    flash('Nova versão '+updateState.version+' disponível. Vá em Ajustes → Atualizações.');
+  else if(ev.type==='available'||ev.type==='pilot'){
+    flash(ev.type==='available'
+      ?'Nova versão '+updateState.version+' disponível. Vá em Ajustes → Atualizações.'
+      :'Há uma nova versão piloto, mas a atualização exige assinatura permanente. Consulte Ajustes.');
     const top=document.querySelector('.top-band');
     if(top&&!document.querySelector('.mobile-update-badge')){
       const badge=document.createElement('button');
       badge.type='button';badge.className='mobile-update-badge';badge.dataset.action='openUpdates';
-      badge.textContent='⬆ Atualização disponível';top.appendChild(badge);
+      badge.textContent=ev.type==='pilot'?'⬆ Novo piloto':'⬆ Atualização disponível';top.appendChild(badge);
     }
   }
 };
@@ -85,7 +87,7 @@ function setScreen(screen){s.screen=screen;render();window.scrollTo(0,0)}
 function header(){
   return '<header class="top-band"><div class="brand-mark">D</div><div class="brand-word">DISTRI<span>LOG</span><small>MOBILE · OPERAÇÃO REAL</small></div>'+
    '<span style="margin-left:auto;font-size:10px;color:#abc3af;font-weight:850">'+esc(s.busy?'SINCRONIZANDO':'● WMS ONLINE')+'</span>'+ 
-   (updateState.type==='available'?'<button type="button" class="mobile-update-badge" data-action="openUpdates">⬆ Atualização disponível</button>':'')+'</header>';
+   (['available','pilot'].includes(updateState.type)?'<button type="button" class="mobile-update-badge" data-action="openUpdates">'+(updateState.type==='pilot'?'⬆ Novo piloto':'⬆ Atualização disponível')+'</button>':'')+'</header>';
 }
 function navbar(){
   const tabs=[['queue','▤',tr('Fila','Cola')],['scan','▣','Rack'],['address','▦',tr('Estoque','Inventario')],['settings','⚙',tr('Ajustes','Ajustes')]];
@@ -209,7 +211,7 @@ function updatesView(){
     '<p class="shell-desc">Baixe e instale a próxima versão dentro do aplicativo, sem abrir o navegador.</p>'+
     '<div class="surface"><div class="inline-stat"><span>Versão atual</span><b>'+esc(API.appVersion())+'</b></div>'+
     '<div class="inline-stat"><span>Próxima versão</span><b>'+esc(status.version||'Verificar')+'</b></div>'+
-    '<div class="status-box '+(status.type==='error'?'warn':'')+'" role="status">'+esc(status.message)+'</div>'+
+    '<div class="status-box '+(['error','pilot'].includes(status.type)?'warn':'')+'" role="status">'+esc(status.message)+'</div>'+
     progress+actions+'</div>'+
     '<div class="status-box">O Android pedirá autorização para instalar. Para atualizar por cima da versão atual, ambas precisam ter a mesma assinatura digital. O aplicativo verifica isso antes de instalar.</div>'+
     button('← Voltar','backUpdates','button light full')+'</section>'+
