@@ -47,6 +47,8 @@ public final class NativeUpdater {
     private static final String HASH_NAME = ASSET_NAME + ".sha256";
     private static final Pattern RELEASE_TAG =
         Pattern.compile("^mobile-prototipo-(\\d+)\\.(\\d+)\\.(\\d+)$");
+    private static final Pattern PILOT_TAG =
+        Pattern.compile("^mobile-piloto-(\\\\d+)\\\\.(\\\\d+)\\\\.(\\\\d+)$");
     private static final Pattern VERSION =
         Pattern.compile("(\\d+)\\.(\\d+)\\.(\\d+)");
     private static final Pattern CHECKSUM = Pattern.compile("^([0-9a-fA-F]{64})\\s+\\*?DISTRILOG-Mobile-PROTOTIPO-INTEGRADO\\.apk\\s*$");
@@ -150,11 +152,14 @@ public final class NativeUpdater {
                     releases = new JSONArray(response.body().string());
                 }
                 Release best = null;
+                Release pilotBest = null;
                 for (int i = 0; i < releases.length(); i++) {
                     JSONObject entry = releases.optJSONObject(i);
                     if (entry == null || entry.optBoolean("draft")) continue;
                     String tag = entry.optString("tag_name", "");
-                    if (!RELEASE_TAG.matcher(tag).matches()) continue;
+                    boolean signedChannel = RELEASE_TAG.matcher(tag).matches();
+                    boolean pilotChannel = PILOT_TAG.matcher(tag).matches();
+                    if (!signedChannel && !pilotChannel) continue;
                     JSONArray assets = entry.optJSONArray("assets");
                     if (assets == null) continue;
                     boolean apk = false;
@@ -180,15 +185,25 @@ public final class NativeUpdater {
                         }
                     }
                     if (!apk || !checksum) continue; // Only verified channels.
-                    if (best == null || compareTags(tag, best.tag) > 0) {
+                    if (signedChannel && (best == null || compareTags(tag, best.tag) > 0)) {
                         best = new Release(tag, entry.optString("name", tag), size, true);
+                    }
+                    if (pilotChannel && (pilotBest == null || compareTags(tag, pilotBest.tag) > 0)) {
+                        pilotBest = new Release(tag, entry.optString("name", tag), size, true);
                     }
                 }
                 String current = installedVersion();
                 if (best == null || compareVersions(best.tag, current) <= 0) {
                     latest = null;
                     downloaded = null;
-                    emit("current", "Seu DISTRILOG já está atualizado (" + current + ").", 100, current);
+                    if (pilotBest != null && compareVersions(pilotBest.tag, current) > 0) {
+                        String version = pilotBest.tag.replace("mobile-piloto-", "");
+                        emit("pilot", "Existe uma versão piloto " + version + ", mas ela foi assinada com chave temporária. " +
+                            "Não é possível instalar por cima da versão atual. Para atualização pelo próprio aplicativo, " +
+                            "a empresa precisa primeiro configurar uma chave permanente no GitHub Actions.", 0, version);
+                    } else {
+                        emit("current", "Nenhuma atualização assinada compatível disponível (" + current + ").", 100, current);
+                    }
                 } else {
                     latest = best;
                     downloaded = null;
