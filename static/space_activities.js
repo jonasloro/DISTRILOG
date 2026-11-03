@@ -25,8 +25,15 @@ function spaceOverview(record){
     '<small>'+fmtDateTime(record.started_at)+'</small></div><div><strong>'+esc(total)+'</strong>'+
     '<small>'+fmtSeconds(record.worked_seconds_live||record.worked_seconds)+'</small></div></article>';
 }
+function spaceRouteKind(){
+  return currentView === "storage-pallets" ? "DEVOLUCAO_PORTA_PALETES" : "AJUSTE_ESTOQUE";
+}
+function isStorageActivityView(){
+  return currentView === "storage-space" || currentView === "storage-pallets";
+}
 function spaceDraw(){
-  if(currentView!=="space-activities")return;
+  if(!isStorageActivityView())return;
+  if(!spaceFlow.active && !spaceFlow.completed)spaceFlow.type=spaceRouteKind();
   const a=spaceFlow.active;
   const canWork=["recebimento","qualidade","processamento","etiquetagem","estocagem","expedicao","devolucoes","supervisor","admin"].includes(currentUser?.role);
   let body="",footer="",step=1;
@@ -75,10 +82,11 @@ function spaceDraw(){
   }
   const stepNames=["Tipo","Rua e marca","Cronômetro","Quantidade"];
   const steps=stepNames.map((n,i)=>'<span class="'+(i+1===step?'current':'')+'">'+(i+1)+' · '+n+'</span>').join("");
-  const history=spaceFlow.history.length?spaceFlow.history.slice(0,15).map(spaceOverview).join(""):
+  const scopedHistory=spaceFlow.history.filter(item=>item.kind===spaceRouteKind());
+  const history=scopedHistory.length?scopedHistory.slice(0,15).map(spaceOverview).join(""):
     '<p class="muted">Nenhuma atividade anterior registrada.</p>';
-  $("mainContent").innerHTML='<section class="space-page"><header class="space-header"><div><small>OPERAÇÃO FÍSICA · DISTRILOG</small>'+
-    '<h1>Organização de espaço</h1><p>Atividades reais com rua, marca, tempo e quantidade obrigatória.</p></div>'+
+  $("mainContent").innerHTML=storageTabs(currentView)+'<section class="space-page"><header class="space-header"><div><small>ESTOCAGEM · OPERAÇÃO FÍSICA</small>'+
+    '<h1>'+esc(SPACE_LABELS[spaceRouteKind()])+'</h1><p>Rua, marca, tempo e quantidade movimentada no mesmo WMS.</p></div>'+
     '<button type="button" class="secondary" data-space-action="refresh">↻ Atualizar</button></header>'+
     '<div class="space-steps">'+steps+'</div><div class="space-stage">'+body+'</div>'+
     (footer?'<div class="space-flow-footer">'+footer+'</div>':'')+
@@ -86,23 +94,25 @@ function spaceDraw(){
   stopSpaceActivityTick();
   if(a&&a.status==="EM_ANDAMENTO"){
     spaceActivityTick=setInterval(()=>{
-      if(currentView!=="space-activities"){stopSpaceActivityTick();return}
+      if(!isStorageActivityView()){stopSpaceActivityTick();return}
       const clock=$("spaceTimer");if(clock)clock.textContent=spaceElapsed();
     },1000);
   }
 }
 async function renderSpaceActivities(){
   if(!currentUser)return;
-  setPage("Organização de espaço","Abertura de espaço e devolução ao porta-paletes · WMS");
+  setPage("Estocagem · "+SPACE_LABELS[spaceRouteKind()],"Atividade da Estocagem · registro compartilhado no WMS");
   try{
     const result=await Promise.all([api("/api/space-activities/active"),api("/api/space-activities?limit=20")]);
     spaceFlow.active=result[0].activity||null;
     spaceFlow.history=result[1].activities||[];
     spaceFlow.at=Date.now();
     if(spaceFlow.active)spaceFlow.completed=null;
+    if(spaceFlow.completed&&spaceFlow.completed.kind!==spaceRouteKind())spaceFlow.completed=null;
+    if(!spaceFlow.active && !spaceFlow.completed)spaceFlow.type=spaceRouteKind();
     spaceDraw();
   }catch(e){
-    if(currentView==="space-activities")$("mainContent").innerHTML=
+    if(isStorageActivityView())$("mainContent").innerHTML=storageTabs(currentView)+
       '<div class="notice error">Não foi possível consultar as atividades: '+esc(e.message)+
       ' <button type="button" class="secondary" data-space-action="refresh">Tentar novamente</button></div>';
   }
@@ -127,7 +137,7 @@ async function spaceAction(action){
   }
   if(action==="restart"){
     if(spaceFlow.active||spaceFlow.busy)return;
-    spaceFlow.type=null;spaceFlow.completed=null;spaceFlow.finish=false;spaceDraw();return;
+    spaceFlow.type=spaceRouteKind();spaceFlow.completed=null;spaceFlow.finish=false;spaceDraw();return;
   }
   if(action==="back"){spaceFlow.finish=false;spaceDraw();return}
   if(action==="finishStep"){spaceFlow.finish=true;spaceDraw();return}
@@ -137,7 +147,7 @@ async function spaceAction(action){
     await spaceOperation(async()=>{
       const r=await api("/api/space-activities",{method:"POST",body:JSON.stringify({kind,street,brand})});
       if(!r.ok||!r.activity)throw Error("Início não confirmado pelo servidor.");
-      spaceFlow.active=r.activity;spaceFlow.type=null;spaceFlow.finish=false;spaceFlow.at=Date.now();
+      spaceFlow.active=r.activity;spaceFlow.type=spaceRouteKind();spaceFlow.finish=false;spaceFlow.at=Date.now();
       await renderSpaceActivities();toast("Cronômetro registrado no DISTRILOG.");
     });
     return;
@@ -161,7 +171,7 @@ async function spaceAction(action){
       const r=await api("/api/space-activities/"+a.id+"/finish",
         {method:"POST",body:JSON.stringify({moved_quantity:Number(raw),quantity_unit:unit,notes})});
       if(!r.ok||!r.activity)throw Error("O servidor não confirmou a conclusão.");
-      spaceFlow.completed=r.activity;spaceFlow.active=null;spaceFlow.finish=false;spaceFlow.type=null;
+      spaceFlow.completed=r.activity;spaceFlow.active=null;spaceFlow.finish=false;spaceFlow.type=spaceRouteKind();
       spaceFlow.at=Date.now();
       const h=await api("/api/space-activities?limit=20").catch(()=>({activities:[]}));
       spaceFlow.history=h.activities||[];spaceDraw();toast("Quantidade e tempo salvos com sucesso.");
@@ -174,5 +184,5 @@ document.addEventListener("click",event=>{
   spaceAction(b.dataset.spaceAction).catch(err=>toast(err.message));
 });
 document.addEventListener("visibilitychange",()=>{
-  if(!document.hidden&&currentView==="space-activities"&&!spaceFlow.busy)renderSpaceActivities();
+  if(!document.hidden&&isStorageActivityView()&&!spaceFlow.busy)renderSpaceActivities();
 });
