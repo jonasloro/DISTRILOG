@@ -9,6 +9,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import io
+import json
 import re
 from collections import defaultdict
 from datetime import datetime
@@ -237,18 +238,29 @@ async def import_csv(request: Request, file: UploadFile = File(...)):
                 existing += 1
                 continue
             order_id = int(result["id"])
-            for (reference, description, barcode, variation, casulo), quantity in group["items"].items():
+            # Cada pedido gera apenas duas inserções em lote; evita milhares
+            # de round-trips Supabase em relatórios com muitos SKUs.
+            items = [
+                {"reference": ref, "description": desc, "barcode": barcode,
+                 "variation": variation, "casulo": casulo, "quantity": quantity}
+                for (ref, desc, barcode, variation, casulo), quantity in group["items"].items()
+            ]
+            if items:
                 con.execute(
                     """INSERT INTO distrilog.separation_order_items
                        (order_id,reference,description,barcode,variation,casulo,quantity)
-                       VALUES(?,?,?,?,?,?,?)""",
-                    (order_id, reference, description, barcode, variation, casulo, quantity),
+                       SELECT ?, x.reference,x.description,x.barcode,x.variation,x.casulo,x.quantity
+                       FROM jsonb_to_recordset(?::jsonb) AS x(
+                         reference TEXT, description TEXT, barcode TEXT,
+                         variation TEXT, casulo TEXT, quantity INTEGER)""",
+                    (order_id, json.dumps(items, ensure_ascii=False)),
                 )
-            for reference in group["references"]:
-                con.execute(
-                    "INSERT INTO distrilog.separation_order_references(order_id,reference) VALUES(?,?)",
-                    (order_id, reference),
-                )
+            con.execute(
+                """INSERT INTO distrilog.separation_order_references(order_id,reference)
+                   SELECT ?, t.ref_code
+                   FROM jsonb_array_elements_text(?::jsonb) AS t(ref_code)""",
+                (order_id, json.dumps(sorted(group["references"]), ensure_ascii=False)),
+            )
             imported += 1
             valid_qty += group["expected_qty"]
             excluded += group["excluded_street_qty"] + group["excluded_without_casulo_qty"]
