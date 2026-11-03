@@ -186,7 +186,7 @@ function setPage(title, subtitle) {
 }
 
 function activeNav(view) {
-  const parent = ({"processing-hub":"processing","processing-register":"processing","processing-triage":"processing","processing-entry":"processing",storage:"storage-hub",returns:"returns-hub","return-indicators":"returns-hub","return-history":"returns-hub",sgo:"settings",tasks:"settings",import:"settings",test:"settings"})[view] || view;
+  const parent = ({"processing-hub":"processing","processing-register":"processing","processing-triage":"processing","processing-entry":"processing",storage:"storage-hub","storage-space":"storage-hub","storage-pallets":"storage-hub",returns:"returns-hub","return-indicators":"returns-hub","return-history":"returns-hub",sgo:"settings",tasks:"settings",import:"settings",test:"settings"})[view] || view;
   document.querySelectorAll(".nav-item").forEach((button) => {
     button.classList.toggle("active", button.dataset.view === parent);
   });
@@ -219,7 +219,7 @@ async function goTo(view, stock3dFocus = null) {
     if (view === "storage-hub") await renderStorageHub();
     if (view === "address-map") await renderAddressMap();
     if (view === "stock-3d") renderStock3D(stock3dFocus);
-    if (view === "space-activities") await renderSpaceActivities();
+    if (view === "storage-space" || view === "storage-pallets") await renderSpaceActivities();
     if (view === "sgo") await renderSgo();
     if (view === "sgo-indicators") await renderSgoIndicators();
     if (view === "production") await renderProduction();
@@ -741,7 +741,7 @@ async function renderCards(scope) {
   ]);
   const metrics = dashboardData ? metricCardsHtml(scope, dashboardData.totals) : "";
   if (["receiving","quality","processing","labeling","storage"].includes(scope)) {
-    const tabs = storage ? moduleTabs([["Visão geral","storage-hub"],["Fila operacional","storage"]],"storage") : processing ? processingTabs("processing") : "";
+    const tabs = storage ? storageTabs("storage") : processing ? processingTabs("processing") : "";
     $("mainContent").innerHTML = tabs + metrics + processingQueueHtml(cards, scope);
     filterProductionQueue();
     return;
@@ -3095,10 +3095,22 @@ async function prodRenderQuadro(body){
 async function renderStorageHub() {
   setPage("Estocagem", "");
   const [cards,analytics]=await Promise.all([safeApi("/api/cards?scope=storage",[]),safeApi("/api/unified/stock-group-report/analytics",{groups:[],latest_report:null})]);
-  $("mainContent").innerHTML=`${moduleTabs([["Visão geral","storage-hub"],["Fila operacional","storage"]],"storage-hub")}<div class="hero-kpis storage-kpis">${heroKpi("Aguardando estocagem",cards.length,"Cards","⌂","blue","storage")}</div>
+  $("mainContent").innerHTML=`${storageTabs("storage-hub")}<div class="hero-kpis storage-kpis">${heroKpi("Aguardando estocagem",cards.length,"Cards","⌂","blue","storage")}</div>
+    <section class="storage-activity-shortcuts" aria-label="Atividades da Estocagem">
+      <button type="button" onclick="goTo('storage-space')"><span class="storage-shortcut-icon">▦</span><span><strong>Abertura de espaço</strong><small>Rua, marca, cronômetro e quantidade movimentada</small></span><em>Iniciar →</em></button>
+      <button type="button" onclick="goTo('storage-pallets')"><span class="storage-shortcut-icon">↩</span><span><strong>Devolução ao porta-paletes</strong><small>Registrar devolução física com tempo e quantidade</small></span><em>Iniciar →</em></button>
+    </section>
     <section class="dash-panel stock-report-panel"><header><b>⇧</b><strong>Relatório de estoque por grupo</strong><button class="panel-action" onclick="document.getElementById('stockGroupPdf').click()">Importar PDF</button><input id="stockGroupPdf" class="hidden" type="file" accept=".pdf" onchange="importStockGroupReport(this)"></header><div class="dash-panel-body">${analytics.groups?.length?`<div class="group-summary">${['FEMININO','MASCULINO','OUTROS'].map(g=>`<div><span>${g}</span><strong>${analytics.groups.filter(x=>x.gender===g).reduce((a,x)=>a+Number(x.quantity),0).toLocaleString(DISTRILOG_I18N.getLanguage())}</strong></div>`).join('')}</div>`:'<div class="empty-visual">Importe o PDF “Resumo de Estoque do Grupo” para recuperar a visão por gênero e grupo.</div>'}</div></section>`;
 }
 
+function storageTabs(current){
+  return moduleTabs([
+    ["Visão geral","storage-hub"],
+    ["Fila operacional","storage"],
+    ["Abertura de espaço","storage-space"],
+    ["Devolução ao porta-paletes","storage-pallets"]
+  ],current);
+}
 function moduleTabs(items,current){return `<div class="module-tabs">${items.map(([label,view])=>`<button class="${view===current?'active':''}" onclick="goTo('${view}')">${label}</button>`).join('')}</div>`;}
 function filterStockQuick(){const t=normalizeSearch($("stockQuickSearch")?.value||'');document.querySelectorAll('.stock-quick-row').forEach(r=>r.classList.toggle('hidden',t&&!r.dataset.search.includes(t)));}
 async function importStockGroupReport(input){if(!input.files?.[0])return;const form=new FormData();form.append('file',input.files[0]);try{const d=await api(`/api/unified/stock-group-report/import?user_id=${currentUser.id}`,{method:'POST',body:form});toast(`${d.groups} grupos e ${d.total_qty} peças importados.`);renderStorageHub();}catch(e){toast(e.message)}}
