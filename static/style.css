@@ -1563,3 +1563,20 @@ input:disabled,select:disabled,textarea:disabled{
  .card-stock3d-title{flex-wrap:wrap}.card-stock3d-location iframe{height:390px}
  .storage-activity-shortcuts>button{padding:13px}
 }
+
+/* Separação — cards compactos, sem alterar os mapas WMS existentes. */
+.separation-queue{display:grid;gap:12px;margin-top:12px}
+.separation-order{padding:15px;border:1px solid var(--border);border-radius:10px;background:var(--card)}
+.separation-order-head{display:flex;align-items:start;justify-content:space-between;gap:16px;flex-wrap:wrap}
+.separation-order-head h3{margin:3px 0 6px;font-size:18px}
+.separation-order-head small{color:var(--muted);font-size:12px}
+.separation-order-metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px;margin:15px 0 4px}
+.separation-order-metrics>div{padding:10px 12px;background:var(--bg);border:1px solid var(--border);border-radius:8px}
+.separation-order-metrics small{display:block;font-size:11px;color:var(--muted)}
+.separation-order-metrics b{display:block;margin-top:6px;font-size:19px;font-variant-numeric:tabular-nums}
+.separation-order-metrics b[id^="sepClock"]{font-family:Consolas,monospace}
+.separation-entry-list{max-height:350px;overflow-y:auto}
+.separation-entry-item{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:7px;padding:10px 0;border-bottom:1px solid var(--border);font-size:12px}
+.separation-entry-item strong{font-size:13px}
+.separation-entry-item span{color:var(--muted)}
+@media(max-width:850px){.separation-order-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}}
