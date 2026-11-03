@@ -8,6 +8,9 @@ on:
   workflow_dispatch:
 permissions:
   contents: write
+concurrency:
+  group: mobile-prototype-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   build:
     runs-on: ubuntu-24.04
@@ -95,6 +98,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          head="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/$GITHUB_REF_NAME" --jq .object.sha)"
+          if [[ "$head" != "$GITHUB_SHA" ]]; then
+            echo "::notice::Existe um commit mais recente. Não publicarei um APK desatualizado."
+            exit 0
+          fi
           if [[ "$SIGNED_RELEASE" == "true" ]]; then
             tag=mobile-prototipo-1.4.0
             title='DISTRILOG Mobile 1.4.0 - Atualização oficial assinada'
