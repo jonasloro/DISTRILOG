@@ -77,8 +77,8 @@ function header(){
    '<span style="margin-left:auto;font-size:10px;color:#abc3af;font-weight:850">'+esc(s.busy?'SINCRONIZANDO':'● WMS ONLINE')+'</span></header>';
 }
 function navbar(){
-  const tabs=[['queue','▤',tr('Fila','Cola')],['activities','⇄',tr('Atividades','Actividades')],['scan','▣','Rack'],['address','▦',tr('Estoque','Inventario')],['settings','⚙',tr('Ajustes','Ajustes')]];
-  return '<nav class="bottom-nav" aria-label="Navegação">'+tabs.map(x=>'<button data-action="nav" data-to="'+x[0]+'" class="'+(s.screen===x[0]||s.screen==='card'&&x[0]==='queue'?'on':'')+'"><span>'+x[1]+'</span>'+esc(x[2])+'</button>').join('')+'</nav>';
+  const tabs=[['queue','▤',tr('Fila','Cola')],['scan','▣','Rack'],['address','▦',tr('Estoque','Inventario')],['settings','⚙',tr('Ajustes','Ajustes')]];
+  return '<nav class="bottom-nav" aria-label="Navegação">'+tabs.map(x=>'<button data-action="nav" data-to="'+x[0]+'" class="'+(s.screen===x[0]||(s.screen==='card'||s.screen==='storage-activities')&&x[0]==='queue'?'on':'')+'"><span>'+x[1]+'</span>'+esc(x[2])+'</button>').join('')+'</nav>';
 }
 function roleBar(){
   return '<div class="role-row"><div class="role-user"><b>'+esc(s.user?.name||s.user?.username)+'</b><span>'+esc(role())+' • '+esc(API.endpoint().replace('https://',''))+'</span></div>'+
@@ -93,7 +93,7 @@ function render(){
   if(s.screen==='queue')view=queueView();
   else if(s.screen==='card')view=cardView();
   else if(s.screen==='scan')view=scanView();
-  else if(s.screen==='activities')view=window.DM_SPACE.view(s.user);
+  else if(s.screen==='storage-activities')view='<div class="storage-activity-back">'+button('‹ Voltar à Estocagem','backStorage','button light small')+'</div>'+window.DM_SPACE.view(s.user);
   else if(s.screen==='address')view=addressView();
   else if(s.screen==='history')view=historyView();
   else if(s.screen==='settings')view=settingsView();
@@ -145,8 +145,16 @@ function queueView(){
       '<div class="tile-footer"><span>'+number(c.item_count||0)+' '+tr('itens','artículos')+' · '+number(c.expected_total||0)+' '+tr('peças','piezas')+'</span>'+
       button(tr('Abrir Card','Abrir tarjeta')+' →','card','button small','data-id="'+esc(c.card_id||c.id)+'"')+'</div></article>';
   }).join(''):'<div class="empty">Nenhum card encontrado neste setor. Atualize para verificar novas movimentações.</div>';
-  const extra=s.sector==='entry'?note('Entrada: a conferência final usa as quantidades já registradas após Estocagem.'):'';
-  return intro+selector+search+extra+'<div class="section-head"><h2>'+esc(currentName(s.sector))+'</h2><span class="mini" id="queueCount">'+cards.length+'</span></div>'+
+  const extra=s.sector==='entry'?note('Entrada: a conferência final usa as quantidades já registradas após Estocagem.'):''; 
+  const storageOperations=s.sector==='storage'
+    ? '<section class="storage-sector-operations" aria-label="Atividades da Estocagem">'+
+      '<div class="section-head"><h2>Atividades de Estocagem</h2><span class="mini">Controle de tempo</span></div>'+
+      '<p class="muted t-sm">Registre a rua, a marca, o tempo trabalhado e a quantidade realmente movimentada.</p>'+
+      '<div class="storage-sector-actions">'+
+      '<button type="button" data-action="storageOpenSpace" class="storage-sector-action"><span>▦</span><strong>Abertura de espaço</strong><small>Organizar uma rua, liberar espaço e registrar o resultado.</small><b>Abrir atividade →</b></button>'+
+      '<button type="button" data-action="storageOpenReturn" class="storage-sector-action"><span>↩</span><strong>Devolução ao porta-paletes</strong><small>Registrar a devolução física com cronômetro e quantidade.</small><b>Abrir atividade →</b></button>'+
+      '</div></section>' : '';
+  return intro+selector+storageOperations+search+extra+'<div class="section-head"><h2>'+esc(currentName(s.sector))+'</h2><span class="mini" id="queueCount">'+cards.length+'</span></div>'+
     '<div id="queueItems">'+list+'</div>';
 }
 function scanView(){
@@ -662,6 +670,7 @@ async function loadCard(id){
 async function refresh(){
   if(s.screen==='card'&&s.selected)return loadCard(s.selected);
   if(s.screen==='address')return loadAddresses(s.selectedArea);
+  if(s.screen==='storage-activities'){await window.DM_SPACE.load(s.user);render();return;}
   if(s.screen==='history'){s.history=await API.get('/api/history?limit=100');render();return;}
   if(s.screen==='queue')return loadQueue();
   if(s.screen==='scan'){render();return;}
@@ -799,10 +808,20 @@ async function runAction(action,buttonElement){
     render();return;
   }
   if(action==='openHistory'){await loadHistory();return;}
+  if(action==='storageOpenSpace'||action==='storageOpenReturn'){
+    if(s.sector!=='storage')throw Error('Abra a Estocagem para executar esta atividade.');
+    await window.DM_SPACE.load(s.user);
+    if(!window.DM_SPACE.flow.active){
+      await window.DM_SPACE.act(action==='storageOpenSpace'?'adjust':'return',s.user);
+    }
+    s.screen='storage-activities';render();window.scrollTo(0,0);return;
+  }
+  if(action==='backStorage'){
+    s.sector='storage';s.screen='queue';await loadQueue();return;
+  }
   if(action==='nav'){
     const dest=buttonElement.dataset.to;
     if(dest==='queue')await loadQueue();
-    else if(dest==='activities'){await window.DM_SPACE.load(s.user);s.screen='activities';render();}
     else if(dest==='address')await loadAddresses(s.selectedArea);
     else if(dest==='history')await loadHistory();
     else if(dest==='scan'){s.screen='scan';render();}
