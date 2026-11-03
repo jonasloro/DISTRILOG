@@ -109,7 +109,7 @@ def test_full_timer_lifecycle_is_persistent_and_idempotent(isolated_postgres):
     assert finish_activity(activity_id, operator, {"moved_quantity": 12, "quantity_unit": "CAIXAS", "notes": "Conferido."})["unchanged"] is True
     with pytest.raises(HTTPException):
         finish_activity(activity_id, operator, {"moved_quantity": 99, "quantity_unit": "CAIXAS"})
-    assert activity_history(operator)["activities"][0]["id"] == activity_id
+    assert activity_history(operator, limit=30)["activities"][0]["id"] == activity_id
     with psycopg.connect(isolated_postgres) as con:
         event_names = [r[0] for r in con.execute(
             "SELECT event FROM distrilog.stock_space_activity_events WHERE activity_id=%s ORDER BY id",
@@ -120,6 +120,6 @@ def test_full_timer_lifecycle_is_persistent_and_idempotent(isolated_postgres):
 
 def test_team_history_is_manager_only(isolated_postgres):
     with pytest.raises(HTTPException) as exc:
-        activity_history(session(role="estocagem"), scope="team")
+        activity_history(session(role="estocagem"), scope="team", limit=30)
     assert exc.value.status_code == 403
-    assert isinstance(activity_history(session(user_id=61002, role="supervisor"), scope="team")["activities"], list)
+    assert isinstance(activity_history(session(user_id=61002, role="supervisor"), scope="team", limit=30)["activities"], list)

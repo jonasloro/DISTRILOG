@@ -5,6 +5,7 @@ import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
 import {SECTORS,positionKey,validPosition,unitsForSector,filterPositions,parseBindings,positionStats,isSketchup,isGLB,requireOfflineConversion,mayPublishModel} from './core.js';
 
 const $ = (id) => document.getElementById(id);
+if (new URLSearchParams(location.search).get('embedded') === '1') document.body.classList.add('embedded');
 const canvas = $('threeCanvas');
 const viewport = $('viewport');
 const state = {positions:[],selected:null,sector:'TODOS',query:'',searchMatches:null,anchors:{},modelName:null,modelHash:null,published:null,canManage:false,modelStatusError:null,focusAddresses:null,loadedModel:null,glbBytes:null,bind:false,lastRefresh:null,loaded:false};
@@ -174,11 +175,11 @@ function renderInventory(info){const c=$('inspectBody');c.replaceChildren();cons
 }
 function updateBindButtons(){const selected=!!state.selected;const editable=!isSharedModel()||state.canManage;$('bindButton').disabled=!selected||!modelRoot||!editable;$('removeBindButton').disabled=!selected||!state.anchors[state.selected]||!editable;$('bindButton').classList.toggle('active',state.bind);$('bindButton').textContent=state.bind?'Toque em um ponto do modelo...':'⌖ Vincular ao ponto 3D'}
 const sphere=new THREE.SphereGeometry(.18,12,8);
-function markerMaterial(occupied,selected){return new THREE.MeshBasicMaterial({color:selected?'#ffdb81':occupied?'#bbec78':'#75b8a0',depthTest:false})}
+function markerMaterial(occupied,selected,focused=false){return new THREE.MeshBasicMaterial({color:focused?(selected?'#ffd22f':'#ff9d3a'):selected?'#ffdb81':occupied?'#bbec78':'#75b8a0',depthTest:false})}
 function syncMarkers(){while(markers.children.length){const m=markers.children[0];markers.remove(m);m.material.dispose()}
   if(!modelRoot){updateBindButtons();return}
   const scale=modelRoot.userData.boundsSize||20;
-  for(const pos of state.positions){const pt=state.anchors[pos.address];if(!pt)continue;const m=new THREE.Mesh(sphere,markerMaterial(Number(pos.ocupado)>0,pos.address===state.selected));m.scale.setScalar(Math.max(.2,scale*.005));m.position.set(...pt);m.userData.address=pos.address;m.renderOrder=5;markers.add(m)}
+  for(const pos of state.positions){const pt=state.anchors[pos.address];if(!pt)continue;const focused=Boolean(state.focusAddresses&&state.focusAddresses.has(pos.address));const m=new THREE.Mesh(sphere,markerMaterial(Number(pos.ocupado)>0,pos.address===state.selected,focused));m.scale.setScalar(Math.max(.2,scale*(focused ? .009 : .005)));m.position.set(...pt);m.userData.address=pos.address;m.renderOrder=5;markers.add(m)}
   updateBindButtons();updateMetrics();}
 function pointerCoordinates(event){const rect=canvas.getBoundingClientRect();pointer.x=(event.clientX-rect.left)/rect.width*2-1;pointer.y=-(event.clientY-rect.top)/rect.height*2+1;raycaster.setFromCamera(pointer,camera)}
 canvas.addEventListener('pointerdown',e=>{lastPointer=[e.clientX,e.clientY]});
@@ -267,7 +268,7 @@ $('bindingsInput').addEventListener('change',async e=>{const file=e.target.files
   syncMarkers();drawList();toast('Vínculos importados e salvos com sucesso.');
 }catch(err){toast(err.message,true)}finally{$('bindingsInput').value=''}});
 $('publishModelButton').addEventListener('click',publishModel);
-$('clearFocusButton').addEventListener('click',()=>{state.focusAddresses=null;state.query='';state.searchMatches=null;$('searchInput').value='';$('clearFocusButton').classList.add('hidden');drawList()});
+$('clearFocusButton').addEventListener('click',()=>{state.focusAddresses=null;state.query='';state.searchMatches=null;$('searchInput').value='';$('clearFocusButton').classList.add('hidden');drawList();syncMarkers()});
 async function applyDeepLink(){
   const params=new URLSearchParams(window.location.search);
   const cardValue=params.get('card');
@@ -282,7 +283,7 @@ async function applyDeepLink(){
       if(!locations.length){toast('Este card ainda não possui mercadoria alocada no WMS'+(reference?' para essa referência':'')+'.',true);return}
       state.focusAddresses=new Set(locations.map(x=>x.address));
       $('clearFocusButton').classList.remove('hidden');
-      drawList();
+      drawList();syncMarkers();
       progress('Card #'+id+' · '+locations.length+' endereço(s) ativo(s) no WMS');
       await selectPosition(locations[0].address);
       if(!state.anchors[locations[0].address])toast('Endereço localizado no WMS; posição 3D ainda não calibrada.');
