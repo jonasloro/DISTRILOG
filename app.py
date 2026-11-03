@@ -27,6 +27,7 @@ from quality_module import init_quality_db, quality_card_data, register_quality_
 from processing_module import init_processing_db, processing_card_data, register_processing_routes
 from downstream_module import downstream_card_data, init_downstream_db, register_downstream_routes
 from production_module import init_production_db, register_production_routes
+from separation_module import init_separation_db, register_separation_routes
 from processing_module import ensure_worker_function_column
 from goat_module import init_goat_db, register_goat_routes
 from positions_module import init_positions_db, register_positions_routes, total_allocated, item_allocation_totals
@@ -1352,6 +1353,7 @@ def startup() -> None:
     init_stock_space_db()
     init_collab_db()
     init_unified_db()
+    init_separation_db()
     init_cleaning_db()
     init_processing_flow_db()
 
@@ -2884,6 +2886,7 @@ register_mission_routes(app)
 register_stock3d_routes(app)
 register_stock_space_routes(app)
 register_unified_routes(app)
+register_separation_routes(app)
 register_cleaning_routes(app)
 register_collab_routes(app)
 
