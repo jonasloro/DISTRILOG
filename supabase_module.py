@@ -178,7 +178,7 @@ def seed_usuarios_supabase(usuarios_padrao: list[tuple[str, str, str]]) -> None:
                 )
         con.commit()
 
-ALLOWED_ROLES = frozenset({"admin","supervisor","consulta","recebimento","qualidade","processamento","etiquetagem","estocagem","planejamento","expedicao","devolucoes"})
+ALLOWED_ROLES = frozenset({"admin","supervisor","consulta","recebimento","qualidade","processamento","etiquetagem","estocagem","planejamento","separacao","expedicao","devolucoes"})
 
 def validate_new_password(password: str) -> None:
     if not isinstance(password, str) or len(password) < 12 or len(password) > 128 or not re.search(r"[A-Za-z]", password) or not re.search(r"\d", password):
