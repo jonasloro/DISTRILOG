@@ -105,7 +105,7 @@ function sepFinishForm(){
     input('outWeight','Peso em kg *','','number','step="0.001" min="0.001" inputmode="decimal"')+
     selectYN('outZero','Teve 0 à esquerda? *')+
     selectYN('outPaused','Teve pausa? *',paused?'yes':'')+
-    '<div id="outPauseDetails">'+
+    '<div id="outPauseDetails" '+(paused?'':'hidden')+'>'+
       area('outFinalReason','Motivo da pausa (obrigatório se houve pausa)')+
       input('outPauseDuration','Duração da pausa em hh:mm:ss',fmt(o.accumulated_pause_seconds||0),'text','placeholder="00:00:00" inputmode="numeric"')+
     '</div>'+
