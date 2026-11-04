@@ -407,7 +407,7 @@ async def complete_order(order_id: int, request: Request):
         shipment = con.execute(
             """INSERT INTO shipments(document_no,destination,status,total_qty,created_by,created_at,
                volume_count,notes,updated_at)
-               VALUES(?,?,'EM_CONFERENCIA',?,?,now(),?,?,now()) RETURNING id""",
+               VALUES(?,?,'AGUARDANDO_CONFERENCIA',?,?,now(),?,?,now()) RETURNING id""",
             (row["document_no"], row["destination"], separated, request.state.auth_user_id,
              bags + boxes, notes),
         ).fetchone()
