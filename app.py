@@ -28,6 +28,7 @@ from processing_module import init_processing_db, processing_card_data, register
 from downstream_module import downstream_card_data, init_downstream_db, register_downstream_routes
 from production_module import init_production_db, register_production_routes
 from separation_module import init_separation_db, register_separation_routes
+from shipping_flow_module import init_shipping_flow_db, register_shipping_flow_routes
 from rack_module import register_rack_routes
 from processing_module import ensure_worker_function_column
 from goat_module import init_goat_db, register_goat_routes
@@ -1355,6 +1356,7 @@ def startup() -> None:
     init_collab_db()
     init_unified_db()
     init_separation_db()
+    init_shipping_flow_db()
     init_cleaning_db()
     init_processing_flow_db()
 
@@ -2888,6 +2890,7 @@ register_stock3d_routes(app)
 register_stock_space_routes(app)
 register_unified_routes(app)
 register_separation_routes(app)
+register_shipping_flow_routes(app)
 register_rack_routes(app, awaiting_arrival)
 register_cleaning_routes(app)
 register_collab_routes(app)
