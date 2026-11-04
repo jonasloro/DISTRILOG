@@ -160,7 +160,6 @@ async def require_authenticated_session(request: Request, call_next):
                             return JSONResponse({"detail": "Identidade da operação não corresponde à sessão."}, status_code=403)
     return await call_next(request)
 
-register_rack_routes(app, awaiting_arrival)  # Callable resolvida ao atender a requisição
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
 
@@ -2889,6 +2888,7 @@ register_stock3d_routes(app)
 register_stock_space_routes(app)
 register_unified_routes(app)
 register_separation_routes(app)
+register_rack_routes(app, awaiting_arrival)
 register_cleaning_routes(app)
 register_collab_routes(app)
 
