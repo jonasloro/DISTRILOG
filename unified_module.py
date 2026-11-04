@@ -428,7 +428,7 @@ def register_unified_routes(app) -> None:
         doc=str(data.get("document_no","")).strip();items=data.get("items") or []
         if not doc: con.close();raise HTTPException(400,"Informe o número do romaneio.")
         total=sum(max(0,as_int(i.get("quantity"))) for i in items)
-        status="EM_CONFERENCIA" if total>0 else "RASCUNHO"
+        status="AGUARDANDO_CONFERENCIA" if total>0 else "RASCUNHO"
         cur=con.execute(
             """INSERT INTO shipments(document_no,destination,status,total_qty,created_by,created_at,
                carrier,vehicle_plate,driver_name,scheduled_at,volume_count,notes,updated_at)
@@ -446,6 +446,7 @@ def register_unified_routes(app) -> None:
 
     @app.patch("/api/unified/shipments/{shipment_id}/filling")
     async def update_shipment_filling(shipment_id:int,request:Request):
+        raise HTTPException(409, "Conferência de peças desativada. Use as etapas de Lacres, Faturamento e Expedir.")
         data=await request.json();user_id=as_int(data.get("user_id"));con=db_connect();require_user(con,user_id,{"admin","supervisor","estocagem","expedicao"})
         shipment=con.execute("SELECT * FROM shipments WHERE id=?",(shipment_id,)).fetchone()
         if not shipment: con.close();raise HTTPException(404,"Romaneio não encontrado.")
@@ -481,6 +482,7 @@ def register_unified_routes(app) -> None:
 
     @app.patch("/api/unified/shipments/{shipment_id}")
     async def update_shipment(shipment_id:int,request:Request):
+        raise HTTPException(409, "Para expedir, conclua a Conferência de Lacres e o Faturamento no novo fluxo.")
         data=await request.json();user_id=as_int(data.get("user_id"));con=db_connect();require_user(con,user_id,{"admin","supervisor","estocagem","expedicao"})
         status=str(data.get("status","EXPEDIDO")).upper();shipment=con.execute("SELECT * FROM shipments WHERE id=?",(shipment_id,)).fetchone()
         if not shipment: con.close();raise HTTPException(404,"Romaneio não encontrado.")
@@ -499,7 +501,7 @@ def register_unified_routes(app) -> None:
         con=db_connect();require_user(con,user_id,{"admin","supervisor","estocagem","expedicao"})
         doc=parsed_doc or Path(file.filename or "romaneio").stem
         total=sum(as_int(i["quantity"]) for i in items)
-        cur=con.execute("INSERT INTO shipments(document_no,destination,status,total_qty,created_by,created_at) VALUES(?,?,?,?,?,?)",(doc,"","PREPARANDO",total,user_id,now()))
+        cur=con.execute("INSERT INTO shipments(document_no,destination,status,total_qty,created_by,created_at) VALUES(?,?,?,?,?,?)",(doc,"","AGUARDANDO_CONFERENCIA",total,user_id,now()))
         for item in items:
             con.execute("INSERT INTO shipment_items(shipment_id,barcode,description,quantity) VALUES(?,?,?,?)",(cur.lastrowid,item["barcode"],item["description"],item["quantity"]))
         add_movement(con,"EXPEDICAO",cur.lastrowid,"PDF_IMPORTADO",f"Romaneio {doc} importado do PDF com {len(items)} item(ns) e {total} peça(s).",user_id)
