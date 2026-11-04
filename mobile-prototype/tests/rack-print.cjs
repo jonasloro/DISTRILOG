@@ -11,11 +11,11 @@ const client=fs.readFileSync(path.join(root,'assets/mobile/native-client.js'),'u
 
 test('Racks are printed by official Android PrintManager from authenticated backend PDF',()=>{
   assert.match(java,/\/api\/racks\/cards\//);
-  assert.match(java,/\.pdf\?copies=2/);
+  assert.match(java,/\.pdf\?copies=1/);
   assert.match(java,/PrintManager/);
   assert.match(java,/RackPdfAdapter/);
   assert.match(java,/PrintDocumentAdapter/);
-  assert.match(java,/MediaSize\.ISO_A4/);
+  assert.match(java,/RACK_100X85/);
   assert.match(java,/\.header\("Cookie", cookies\)/);
   assert.match(java,/application\/pdf/);
   assert.match(java,/MAX_PDF_BYTES/);
