@@ -149,3 +149,9 @@ table.mobile-table{width:100%;border-collapse:collapse;font-size:12px}
  .storage-sector-actions{grid-template-columns:1fr}
  .storage-sector-action{min-height:130px;padding:13px 16px}
 }
+
+/* Expedição móvel: cronômetro e bloqueio explícito. */
+.mobile-shipping-clock{background:#0e1817;border:1px solid #3c5140;border-radius:13px;margin:16px 0;padding:16px;text-align:center}
+.mobile-shipping-clock span{display:block;color:#a6b6b5;font-size:12px}
+.mobile-shipping-clock strong{display:block;color:#cbf467;font-size:30px;font-family:Consolas,monospace;font-variant-numeric:tabular-nums}
+.mobile-ship-locked{background:#302a21;color:#ffdaa1;padding:8px 10px;border-radius:8px;font-size:12px}
