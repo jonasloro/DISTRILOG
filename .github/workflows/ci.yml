@@ -43,6 +43,7 @@ jobs:
           node --check static/i18n.js
           node --check static/goat_card_modal.js
           node --check static/app.js
+          node --check static/cleaning_ui.js
           node --check static/separation.js
           node --check static/space_activities.js
           node --check static/collab.js
@@ -50,6 +51,6 @@ jobs:
           node --check static/mission_weekly.js
           node --check static/mission.js
       - name: Mission frontend and archived history
-        run: node --test tests/test_i18n.cjs tests/test_mission_history.cjs tests/test_mission_weekly.cjs tests/test_space_frontend.cjs
+        run: node --test tests/test_i18n.cjs tests/test_mission_history.cjs tests/test_mission_weekly.cjs tests/test_space_frontend.cjs tests/test_cleaning_ui.cjs
       - name: WMS and chat integration checks
         run: python -m pytest tests -q
