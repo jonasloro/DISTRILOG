@@ -1,8 +1,8 @@
 /* A única fonte da etiqueta Rack é a API autenticada do DISTRILOG.
- * O PDF A4 abre no visualizador do navegador, pronto para impressão.
+ * A etiqueta 100x85 mm abre no visualizador do navegador, pronto para impressão.
  * Gerar a etiqueta não é confirmação física de impressão.
  */
-function printRack(cardId, copies = 2) {
+function printRack(cardId, copies = 1) {
   const id = Number(cardId);
   if (!Number.isSafeInteger(id) || id < 1 || ![1, 2].includes(copies)) {
     toast("Card ou quantidade de etiquetas inválidos.");
