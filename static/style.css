@@ -1580,3 +1580,40 @@ input:disabled,select:disabled,textarea:disabled{
 .separation-entry-item strong{font-size:13px}
 .separation-entry-item span{color:var(--muted)}
 @media(max-width:850px){.separation-order-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}}
+
+/* Expedição — fluxo compacto, legível e com trava por operador. */
+.shipping-flow-metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px}
+.shipping-flow-metrics>div{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:17px}
+.shipping-flow-metrics b{display:block;font-size:30px;font-variant-numeric:tabular-nums}
+.shipping-flow-metrics small{color:var(--muted)}
+.shipping-flow-queue{display:grid;grid-template-columns:repeat(auto-fit,minmax(315px,1fr));gap:12px;margin-top:16px}
+.shipping-flow-card{border:1px solid var(--border);border-radius:12px;padding:16px;background:var(--card);min-width:0}
+.shipping-flow-card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.shipping-flow-card-head h2,.shipping-flow-card-head h3{margin:4px 0;font-weight:900}
+.shipping-flow-card-head small,.shipping-flow-card-head p{color:var(--muted);font-size:12px}
+.shipping-flow-card-foot{border-top:1px solid var(--border);padding-top:12px;display:flex;align-items:center;justify-content:space-between;gap:10px}
+.shipping-flow-card-foot span{font-size:12px;color:var(--muted)}
+.shipping-step-badge{border-radius:20px;padding:6px 9px;background:#eef3f6;color:#254760;font-weight:900;font-size:11px;white-space:nowrap}
+.shipping-step-EXPEDIR{background:#e1f8e5;color:#186031}.shipping-step-EXPEDIDO{background:#d0f0db;color:#124f24}
+.shipping-step-DIVERGENCIA{background:#ffe4dd;color:#9c211a}
+.shipping-step-FATURAMENTO{background:#fff3d2;color:#6d4c10}
+.shipping-flow-steps{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:18px 0}
+.shipping-flow-steps span{background:var(--bg);border-radius:8px;padding:10px 6px;text-align:center;font-size:12px;color:var(--muted)}
+.shipping-flow-steps span.on{color:var(--text);border:2px solid var(--green);font-weight:900}
+.shipping-flow-clock{background:var(--bg);border:1px solid var(--border);border-radius:12px;text-align:center;padding:15px;margin:8px 0}
+.shipping-flow-clock small{display:block;color:var(--muted)}
+.shipping-flow-clock strong{font-size:32px;font-family:Consolas,monospace;font-variant-numeric:tabular-nums}
+.shipping-flow-facts{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:14px 0}
+.shipping-flow-facts span{font-size:11px;background:var(--bg);border:1px solid var(--border);padding:12px;border-radius:8px}
+.shipping-flow-facts b{display:block;font-size:17px;margin-bottom:3px}
+.shipping-flow-fields{margin-top:14px}.shipping-flow-fields textarea{width:100%;border:1px solid var(--border);padding:10px;border-radius:8px}
+.shipping-flow-history{border-top:1px solid var(--border);margin-top:20px;padding-top:10px;max-height:190px;overflow:auto}
+.shipping-flow-history h3{font-size:13px}.shipping-flow-history p{font-size:11px;color:var(--muted);line-height:1.5}
+.shipping-central-pulse{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:10px 0}
+.shipping-central-pulse>div{padding:10px;background:var(--bg);border-radius:8px;text-align:center}
+.shipping-central-pulse strong{display:block;font-size:23px}
+.shipping-central-pulse small{font-size:10px;color:var(--muted)}
+.shipping-quick-order{display:flex;align-items:center;gap:10px;padding:10px;width:100%;background:transparent;border-bottom:1px solid var(--border);text-align:left}
+.shipping-quick-order b{font-size:12px}.shipping-quick-order span{font-size:11px;flex:1;color:var(--muted)}
+.shipping-quick-order .shipping-step-badge{font-size:9px}
+@media(max-width:760px){.shipping-flow-metrics{grid-template-columns:repeat(2,1fr)}.shipping-flow-facts{grid-template-columns:repeat(2,1fr)}.shipping-flow-queue{grid-template-columns:1fr}.shipping-flow-card-head{flex-wrap:wrap}}
