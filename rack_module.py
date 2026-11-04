@@ -81,9 +81,9 @@ def _label(pdf: canvas.Canvas, card: dict) -> None:
     pdf.setFont("Helvetica", 7)
     pdf.drawString(6*mm, 36*mm, f"{card['item_lines']} itens na grade")
     info("FORNECEDOR / MARCA", card.get("supplier_or_brand"), 28)
-    info("NF", card.get("nf"), 19)
+    info("NF", card.get("nf"), 20)
     info("LOTE / COMPRA", str(card.get("lot") or "—") + " / " +
-         str(card.get("purchase_id") or "—"), 10)
+         str(card.get("purchase_id") or "—"), 13)
 
     qr = QrCodeWidget(code)
     bounds = qr.getBounds()
@@ -94,16 +94,12 @@ def _label(pdf: canvas.Canvas, card: dict) -> None:
     drawing.add(qr)
     renderPDF.draw(drawing, pdf, 65*mm, 40*mm)
 
-    barcode = code128.Code128(code, barWidth=0.29*mm, barHeight=12*mm,
+    barcode = code128.Code128(code, barWidth=0.29*mm, barHeight=7*mm,
                               humanReadable=False)
-    if barcode.width > 39*mm:
+    if barcode.width > 90*mm:
         raise ValueError("Código de Rack grande demais para a etiqueta.")
-    bx = 60*mm + (36*mm-barcode.width)/2
-    barcode.drawOn(pdf, bx, 21*mm)
-    pdf.setFont("Helvetica-Bold", 7.5)
-    pdf.drawCentredString(78*mm, 17*mm, code)
-    pdf.setFont("Helvetica", 6.5)
-    pdf.drawCentredString(78*mm, 10*mm, "LER QR OU CODIGO")
+    bx = (PAGE_W-barcode.width)/2
+    barcode.drawOn(pdf, bx, 4*mm)
 
 
 def build_rack_pdf(card: dict, copies: int = 1) -> bytes:
