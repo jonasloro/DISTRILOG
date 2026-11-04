@@ -41,6 +41,7 @@ jobs:
         run: |
           node --check mobile-prototype/app/src/main/assets/mobile/native-client.js
           node --check mobile-prototype/app/src/main/assets/mobile/activities.js
+          node --check mobile-prototype/app/src/main/assets/mobile/shipping.js
           node --check mobile-prototype/app/src/main/assets/mobile/outbound.js
           node --check mobile-prototype/app/src/main/assets/mobile/app.js
           node --test mobile-prototype/tests/*.cjs
@@ -85,6 +86,7 @@ jobs:
           unzip -l "$apk" | grep -F 'assets/mobile/index.html'
           unzip -l "$apk" | grep -F 'assets/mobile/app.js'
           unzip -l "$apk" | grep -F 'assets/mobile/activities.js'
+          unzip -l "$apk" | grep -F 'assets/mobile/shipping.js'
           unzip -l "$apk" | grep -F 'assets/mobile/outbound.js'
           unzip -l "$apk" | grep -F 'classes.dex'
           cp "$apk" DISTRILOG-Mobile-PROTOTIPO-INTEGRADO.apk
