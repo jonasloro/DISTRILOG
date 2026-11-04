@@ -5,6 +5,7 @@ e linhas sem casulo não viram peças para separar. Referências excluídas são
 registradas para o aviso de que a referência constou em um pedido.
 """
 from __future__ import annotations
+from contextlib import contextmanager
 
 import csv
 import hashlib
@@ -31,6 +32,20 @@ REQUIRED_COLUMNS = {
     "descricao", "codigo_barras", "composicoes_visualizacao",
     "quantidade", "casulo",
 }
+@contextmanager
+def separation_db():
+    """Garante commit ou rollback e SEMPRE devolve a conexão ao pool."""
+    con = db.connect()
+    try:
+        yield con
+        con.commit()
+    except BaseException:
+        con.rollback()
+        raise
+    finally:
+        con.close()
+
+
 MAX_IMPORT_BYTES = 10 * 1024 * 1024
 MAX_ROWS = 50_000
 DURATION_RE = re.compile(r"^([0-9]{1,4}):([0-5][0-9]):([0-5][0-9])$")
@@ -64,7 +79,7 @@ def validate_int(value: Any, label: str, *, minimum: int = 0) -> int:
 
 def init_separation_db() -> None:
     """Criação idempotente no schema operacional; acesso SQL só pelo backend."""
-    with db.connect() as con:
+    with separation_db() as con:
         con.executescript("""
             CREATE TABLE IF NOT EXISTS distrilog.separation_orders (
                 id BIGSERIAL PRIMARY KEY,
@@ -223,7 +238,7 @@ async def import_csv(request: Request, file: UploadFile = File(...)):
     groups = parse_report(raw)
     digest = hashlib.sha256(raw).hexdigest()
     imported, existing, valid_qty, excluded = 0, 0, 0, 0
-    with db.connect() as con:
+    with separation_db() as con:
         for (document, destination), group in groups.items():
             # Não substitui silenciosamente cronômetros ou entregas já criadas.
             result = con.execute(
@@ -274,7 +289,7 @@ async def import_csv(request: Request, file: UploadFile = File(...)):
 @router.get("/orders")
 def list_orders(request: Request):
     authorize(request, VIEWERS)
-    with db.connect() as con:
+    with separation_db() as con:
         rows = con.execute("""
             SELECT o.*, u.name operator_name,
                    COALESCE((SELECT count(*) FROM distrilog.separation_order_items i
@@ -295,7 +310,7 @@ def list_orders(request: Request):
 @router.get("/orders/{order_id}/items")
 def order_items(order_id: int, request: Request):
     authorize(request, VIEWERS)
-    with db.connect() as con:
+    with separation_db() as con:
         _order(con, order_id)
         return [dict(row) for row in con.execute(
             """SELECT reference,description,barcode,variation,casulo,quantity
@@ -307,7 +322,7 @@ def order_items(order_id: int, request: Request):
 @router.post("/orders/{order_id}/start")
 def start_order(order_id: int, request: Request):
     user_id = authorize(request, OPERATORS)
-    with db.connect() as con:
+    with separation_db() as con:
         row = _order(con, order_id, lock=True)
         if row["status"] != "PENDENTE":
             raise HTTPException(409, "O cronômetro só pode iniciar uma separação pendente.")
@@ -324,7 +339,7 @@ async def pause_order(order_id: int, request: Request):
     reason = str(body.get("reason") or "").strip()[:500] if isinstance(body, dict) else ""
     if not reason:
         raise HTTPException(422, "Informe o motivo da pausa.")
-    with db.connect() as con:
+    with separation_db() as con:
         row = _order(con, order_id, lock=True)
         _owner(request, row)
         if row["status"] != "EM_ANDAMENTO":
@@ -342,7 +357,7 @@ async def pause_order(order_id: int, request: Request):
 
 @router.post("/orders/{order_id}/resume")
 def resume_order(order_id: int, request: Request):
-    with db.connect() as con:
+    with separation_db() as con:
         row = _order(con, order_id, lock=True)
         _owner(request, row)
         if row["status"] != "PAUSADO" or row["pause_started_at"] is None:
@@ -381,7 +396,7 @@ async def complete_order(order_id: int, request: Request):
         raise HTTPException(422, "O peso deve ser maior que zero.")
     if not isinstance(body.get("zero_left"), bool) or not isinstance(body.get("had_pause"), bool):
         raise HTTPException(422, "Informe Sim ou Não para 0 à esquerda e pausa.")
-    with db.connect() as con:
+    with separation_db() as con:
         row = _order(con, order_id, lock=True)
         _owner(request, row)
         if row["status"] != "EM_ANDAMENTO":
@@ -432,7 +447,7 @@ async def complete_order(order_id: int, request: Request):
 @router.get("/entry-alerts")
 def entry_alerts(request: Request):
     authorize(request, VIEWERS)
-    with db.connect() as con:
+    with separation_db() as con:
         rows = con.execute("""
             SELECT upper(btrim(i.reference)) AS reference,
                    max(left(r.physical_completed_at,10)) AS entry_date,
