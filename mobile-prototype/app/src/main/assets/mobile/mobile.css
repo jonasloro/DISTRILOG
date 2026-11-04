@@ -155,3 +155,43 @@ table.mobile-table{width:100%;border-collapse:collapse;font-size:12px}
 .mobile-shipping-clock span{display:block;color:#a6b6b5;font-size:12px}
 .mobile-shipping-clock strong{display:block;color:#cbf467;font-size:30px;font-family:Consolas,monospace;font-variant-numeric:tabular-nums}
 .mobile-ship-locked{background:#302a21;color:#ffdaa1;padding:8px 10px;border-radius:8px;font-size:12px}
+
+
+/* Renata no APK: foco na tarefa, uma ação por vez e leitura mobile. */
+.clean-mobile-metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px;margin:16px 0}
+.clean-mobile-metrics>div{background:#1d2d25;border:1px solid #3a5041;border-radius:13px;padding:15px 10px;text-align:center}
+.clean-mobile-metrics strong{display:block;font-size:27px;color:#d6f8b3;font-variant-numeric:tabular-nums}
+.clean-mobile-metrics small{font-size:10px;color:#aec4ad}
+.clean-mobile-start,.clean-mobile-block{margin:16px 0;padding:17px;background:#192420;border:1px solid #34483b;border-radius:17px}
+.clean-mobile-start h2,.clean-mobile-block h2{font-size:17px;letter-spacing:-.015em;margin:0}
+.clean-mobile-areas{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;margin-top:13px}
+.clean-mobile-area{background:#213728;border:1px solid #4a684a;display:flex;flex-direction:column;align-items:stretch;text-align:left;gap:9px;border-radius:13px;color:#eaf4e6;padding:15px 12px;min-height:104px}
+.clean-mobile-area-head{display:flex;justify-content:space-between;gap:7px}
+.clean-mobile-area-head b{font-size:15px;overflow-wrap:anywhere}
+.clean-mobile-area-head span{font-size:16px;color:#d4f4a4}
+.clean-mobile-area small{font-size:11px;color:#c5e0bf;line-height:1.4;overflow-wrap:anywhere}
+.clean-mobile-area.occupied{background:#262c28;border-color:#39483c}
+.clean-mobile-area.occupied small{color:#b2bdaf}
+.clean-mobile-area:disabled{opacity:.8;cursor:not-allowed}
+.clean-mobile-area:focus-visible,.clean-mobile-chip:focus-visible{outline:3px solid #cbf467;outline-offset:2px}
+.clean-mobile-focus{margin:15px 0;padding:20px 18px;background:linear-gradient(145deg,#234a2e,#182b1f);border:1px solid #5b8558;border-radius:18px}
+.clean-mobile-top{display:flex;justify-content:space-between;align-items:center;gap:10px}
+.clean-mobile-tag{font-size:10px;font-weight:900;background:#396d40;border-radius:20px;padding:6px 9px;color:#e3f3d6}
+.clean-mobile-tag.paused{background:#6e5231;color:#ffdfab}
+.clean-mobile-focus h2{font-size:30px;margin:15px 0 5px}
+.clean-mobile-focus p{font-size:12px;color:#c0d6c1}
+.clean-mobile-time-label{display:block;margin:22px 0 4px;color:#c1e0b6;font-weight:900;letter-spacing:.12em;font-size:10px}
+.clean-mobile-clock{display:block;color:#f5ffe8;font-family:Consolas,monospace;font-size:44px;letter-spacing:.02em;font-variant-numeric:tabular-nums}
+.clean-mobile-pause,.clean-mobile-foot{font-size:11px;color:#b7cfae}
+.clean-mobile-note{padding:12px 0;border-top:1px solid #45654c;overflow-wrap:anywhere}
+.clean-mobile-actions{margin:20px 0 12px;display:grid;gap:10px}
+.clean-mobile-actions .button{min-height:52px}
+.clean-mobile-row,.clean-mobile-history{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 0;border-top:1px solid #2d4237}
+.clean-mobile-row:first-child,.clean-mobile-history:first-child{border-top:0}
+.clean-mobile-row b,.clean-mobile-history b{display:block;font-size:13px}
+.clean-mobile-row small,.clean-mobile-history small{display:block;font-size:10px;color:#afc2b0;margin-top:4px}
+.clean-mobile-live,.clean-mobile-stat,.clean-mobile-history strong{white-space:nowrap;color:#d6f7b8;font-family:Consolas,monospace;font-variant-numeric:tabular-nums;font-size:14px}
+.clean-mobile-periods{display:flex;gap:7px;overflow-x:auto;margin:10px 0 15px}
+.clean-mobile-chip{flex:1;min-width:max-content;background:#25382c;color:#bdd4b8;padding:9px 10px;border:1px solid #3d5442;border-radius:12px;font-size:11px;font-weight:800}
+.clean-mobile-chip.on{background:#3b5638;color:#d8fbb6;border-color:#bbeb83}
+@media(max-width:370px){.clean-mobile-areas{grid-template-columns:1fr}.clean-mobile-clock{font-size:38px}}
