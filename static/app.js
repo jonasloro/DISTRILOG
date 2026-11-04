@@ -3714,6 +3714,7 @@ async function renderCleaning() {
   const fetchedAt = Date.now();
   const mine = data.active.find((t) => Number(t.user_id) === Number(currentUser.id));
   const others = data.active.filter((t) => t !== mine);
+  const occupiedAreas = new Map(data.active.map(t => [t.area, t]));
   const canDelete = ["admin", "supervisor"].includes(currentUser.role);
   const maxAvg = Math.max(1, ...data.by_area.map((a) => a.avg_seconds));
   const when = (iso) => (iso ? new Date(iso).toLocaleString(DISTRILOG_I18N.getLanguage(), { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—");
@@ -3721,7 +3722,13 @@ async function renderCleaning() {
     ? `<div class="clean-active"><div><span class="clean-area-tag">${esc(mine.area)}</span><div class="muted">${mine.status === "PAUSADA" ? "Pausada" : "Em andamento"} · iniciada às ${when(mine.started_at)}</div></div>
          ${cleaningTimerHtml(mine, fetchedAt)}<div class="actions">${cleaningActionButtons(mine)}</div></div>`
     : `<div class="field"><label>Observação (opcional)</label><input id="cleaningNotes" maxlength="120" placeholder="Ex.: limpeza geral, vidros…"></div>
-       <div class="clean-areas">${data.areas.map((a) => `<button class="clean-area-btn" data-area="${esc(a)}" onclick="startCleaning(this.dataset.area)">${esc(a)}<small>Iniciar limpeza</small></button>`).join("")}</div>`;
+       <p class="muted">Escolha uma área disponível. Áreas ocupadas ficam bloqueadas até o responsável concluir.</p>
+       <div class="clean-areas">${data.areas.map((a) => {
+         const occupied = occupiedAreas.get(a);
+         return `<button class="clean-area-btn ${occupied ? "clean-area-occupied" : ""}" data-area="${esc(a)}"
+           ${occupied ? 'disabled aria-disabled="true"' : 'onclick="startCleaning(this.dataset.area)"'}>
+           <strong>${esc(a)}</strong><small>${occupied ? "🔒 " + esc(occupied.user_name) + " · " + (occupied.status === "PAUSADA" ? "pausada" : "em andamento") : "● Disponível — iniciar"}</small></button>`;
+       }).join("")}</div>`;
   const othersPanel = others.length
     ? `<section class="panel"><div class="panel-body"><h3 class="section-heading">Em andamento agora</h3>${others.map((t) => `<div class="clean-row"><b>${esc(t.area)}</b><span>${esc(t.user_name)}</span><span>${t.status === "PAUSADA" ? "Pausada" : "Em andamento"}</span>${cleaningTimerHtml(t, fetchedAt)}${canDelete || Number(t.user_id) === Number(currentUser.id) ? `<span class="actions">${cleaningActionButtons(t)}</span>` : ""}</div>`).join("")}</div></section>`
     : "";
@@ -3733,7 +3740,12 @@ async function renderCleaning() {
     ? data.recent.map((t) => `<tr><td>${when(t.finished_at)}</td><td><b>${esc(t.area)}</b></td><td>${esc(t.user_name)}</td><td><b>${fmtDurationShort(t.worked_seconds)}</b></td><td>${t.paused_seconds ? fmtDurationShort(t.paused_seconds) : "—"}</td><td>${esc(t.notes || "")}</td>${canDelete ? `<td><button class="secondary" onclick="deleteCleaning(${Number(t.id)})">Excluir</button></td>` : ""}</tr>`).join("")
     : `<tr><td colspan="${canDelete ? 7 : 6}" class="muted">Nenhuma limpeza concluída ainda.</td></tr>`;
   $("mainContent").innerHTML = `
-    <section class="panel"><div class="panel-body"><h3 class="section-heading">${mine ? "Minha limpeza" : "Iniciar uma limpeza"}</h3>${startPanel}</div></section>
+    <div class="clean-status-overview">
+      <div><strong>${data.areas.length - occupiedAreas.size}</strong><span>Áreas livres</span></div>
+      <div><strong>${data.active.filter(t=>t.status==="EM_ANDAMENTO").length}</strong><span>Em limpeza</span></div>
+      <div><strong>${data.active.filter(t=>t.status==="PAUSADA").length}</strong><span>Pausadas</span></div>
+    </div>
+    <section class="panel"><div class="panel-body"><h3 class="section-heading">${mine ? "Minha limpeza · " + esc(mine.area) : "Iniciar uma limpeza"}</h3>${startPanel}</div></section>
     ${othersPanel}
     <section class="panel"><div class="panel-body">
       <div class="clean-dash-head"><h3 class="section-heading">Média de tempo por área</h3>
