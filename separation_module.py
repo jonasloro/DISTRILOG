@@ -221,9 +221,10 @@ def _order(con: db.Connection, order_id: int, *, lock: bool = False) -> dict[str
 
 def _owner(request: Request, row: dict[str, Any]) -> int:
     user_id = authorize(request, OPERATORS)
-    if (row["operator_id"] is not None and int(row["operator_id"]) != user_id
-            and request.state.auth_role not in {"admin", "supervisor"}):
-        raise HTTPException(403, "Esta separação está atribuída a outro operador.")
+    # A reserva do cronômetro vale inclusive contra outros perfis de gestão:
+    # não é permitido que duas pessoas finalizem a mesma separação.
+    if row["operator_id"] is not None and int(row["operator_id"]) != user_id:
+        raise HTTPException(409, "Esta separação está assumida por outro operador.")
     return user_id
 
 
