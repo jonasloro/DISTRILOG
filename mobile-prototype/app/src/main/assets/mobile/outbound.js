@@ -55,8 +55,7 @@ async function load(kind){
     state.alerts=Array.isArray(alerts)?alerts:[];
     state.shipments=[];tick();
   }else if(kind==='shipping'){
-    const data=await API.get('/api/unified/shipments');
-    state.shipments=Array.isArray(data)?data:[];
+    await window.DM_SHIPPING.load();
   }else throw Error('Setor de saída inválido.');
 }
 function sepList(user){
@@ -119,58 +118,16 @@ function sepItems(){
       '<small>'+esc(i.casulo)+' · '+n(i.quantity)+' peças · '+esc(i.variation)+'</small></div>').join('')+
     button('Voltar ao pedido','back','button light full');
 }
-function shipList(user){
-  const rows=state.shipments;
-  const pending=rows.filter(x=>x.status!=='EXPEDIDO').length;
-  return '<div class="eyebrow">SAÍDA DE MERCADORIAS</div><h1 class="shell-title">Expedição</h1>'+
-    '<p class="shell-desc">Romaneios compartilhados com o DISTRILOG Web. Conferência e liberação permanecem no backend.</p>'+
-    '<div class="metric-row"><div class="stat"><span>Abertos</span><strong>'+pending+'</strong></div>'+
-    '<div class="stat"><span>Prontos</span><strong>'+rows.filter(x=>x.status==='PRONTO').length+'</strong></div>'+
-    '<div class="stat"><span>Expedidos</span><strong>'+rows.filter(x=>x.status==='EXPEDIDO').length+'</strong></div></div>'+
-    button('↻ Atualizar expedição','refresh')+
-    (rows.map(o=>'<article class="queue-card"><span class="eyebrow">'+esc(o.status)+'</span>'+
-      '<h3>Romaneio '+esc(o.document_no)+'</h3>'+
-      '<p class="muted t-sm">'+esc(o.destination||'Destino pendente')+' · '+n(o.total_qty)+' peças · '+n(o.volume_count)+' volumes</p>'+
-      '<div class="inline-stat"><span>Conferência</span><b>'+n(o.checked_qty)+' / '+n(o.total_qty)+'</b></div>'+
-      button(canDispatch(user)?'Preencher / Conferir':'Visualizar romaneio','shipOpen','button full','data-id="'+o.id+'"')+
-      '</article>').join('')||'<div class="empty">Nenhum romaneio registrado.</div>');
-}
-function shipmentDetail(user){
-  const payload=state.detail;
-  if(!payload?.shipment)return '<div class="empty">Romaneio não localizado.</div>';
-  const o=payload.shipment,canAct=canDispatch(user)&&o.status!=='EXPEDIDO';
-  const edit=canAct?'':'disabled';
-  return '<div class="eyebrow">EXPEDIÇÃO · '+esc(o.status)+'</div><h1 class="shell-title">Romaneio '+esc(o.document_no)+'</h1>'+
-    '<p class="shell-desc">Preenchimento e conferência. O encaminhamento da Separação não confirma automaticamente nenhuma peça.</p>'+
-    '<div class="surface">'+
-      input('outDest','Destino *',o.destination,'text',edit)+
-      input('outCarrier','Transportadora *',o.carrier,'text',edit)+
-      input('outPlate','Placa *',o.vehicle_plate,'text',edit)+
-      input('outDriver','Motorista *',o.driver_name,'text',edit)+
-      input('outScheduled','Saída prevista *',String(o.scheduled_at||'').slice(0,16),'datetime-local',edit)+
-      num('outVolumes','Total de volumes *',o.volume_count||'',false)+
-      area('outNotes','Observações',o.notes||'')+
-      '<h3>Conferência física</h3>'+
-      (payload.items||[]).map(i=>'<div class="line-row"><b>'+esc(i.description||i.barcode||'Item')+'</b>'+
-        '<small>Previsto: '+n(i.quantity)+' peças</small>'+
-        (canAct?num('outChecked'+i.id,'Peças conferidas *',i.checked_qty,true):'<p class="muted">'+n(i.checked_qty)+' conferidas</p>')+
-        '</div>').join('')+
-      (canAct?button('Salvar preenchimento e conferência','shipSave','button full'):'')+
-      (canAct&&o.status==='PRONTO'?button('Confirmar expedição','shipDispatch','button full'):'')+
-      button('Voltar','back','button light full')+
-    '</div>';
-}
 function view(kind,user){
   if(kind!==state.kind)return '<div class="empty">Atualize a fila para carregar os pedidos.</div>';
-  if(state.kind==='shipping'){
-    return state.mode==='shipDetail'?shipmentDetail(user):shipList(user);
-  }
+  if(state.kind==='shipping')return window.DM_SHIPPING.view(user);
   if(state.mode==='pauseForm')return sepPauseForm();
   if(state.mode==='finishForm')return sepFinishForm();
   if(state.mode==='items')return sepItems();
   return sepList(user);
 }
 async function action(name,btn,user){
+  if(state.kind==='shipping')return await window.DM_SHIPPING.action(name,btn,user);
   if(name==='back'){state.mode='list';state.selected=null;return;}
   if(name==='refresh'){await load(state.kind);return;}
   if(name==='start'){
@@ -218,41 +175,6 @@ async function action(name,btn,user){
     }
     await API.post('/api/separation/orders/'+state.selected+'/complete',body);
     await load('separation');return;
-  }
-  if(name==='shipOpen'){
-    state.selected=rowId(btn);
-    state.detail=await API.get('/api/unified/shipments/'+state.selected);
-    state.mode='shipDetail';return;
-  }
-  if(name==='shipSave'){
-    if(!canDispatch(user)||!state.detail)throw Error('Perfil não autorizado.');
-    const items=(state.detail.items||[]).map(i=>({
-      id:Number(i.id),checked_qty:positiveInt('outChecked'+i.id,'peças conferidas',true),
-      notes:i.notes||'',
-    }));
-    const body={
-      user_id:Number(user.id),
-      destination:text('outDest','o destino'),
-      carrier:text('outCarrier','a transportadora'),
-      vehicle_plate:text('outPlate','a placa'),
-      driver_name:text('outDriver','o motorista'),
-      scheduled_at:text('outScheduled','a saída prevista'),
-      volume_count:positiveInt('outVolumes','volumes'),
-      notes:get('outNotes').trim(),
-      items,
-    };
-    await API.patch('/api/unified/shipments/'+state.selected+'/filling',body);
-    state.detail=await API.get('/api/unified/shipments/'+state.selected);
-    return;
-  }
-  if(name==='shipDispatch'){
-    if(!canDispatch(user)||state.detail?.shipment?.status!=='PRONTO')
-      throw Error('Conclua antes o preenchimento e a conferência do romaneio.');
-    if(!window.confirm('Confirmar a saída física deste romaneio?'))return;
-    await API.patch('/api/unified/shipments/'+state.selected,{
-      user_id:Number(user.id),status:'EXPEDIDO',
-    });
-    await load('shipping');return;
   }
   throw Error('Ação de saída desconhecida.');
 }
