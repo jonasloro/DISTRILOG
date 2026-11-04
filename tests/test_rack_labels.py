@@ -18,11 +18,11 @@ SAMPLE = {
 
 
 def test_pdf_contains_correct_identification_and_expected_pieces():
-    raw = build_rack_pdf(SAMPLE)
+    raw = build_rack_pdf(SAMPLE, 2)
     assert raw.startswith(b"%PDF-")
     doc = PdfReader(BytesIO(raw))
-    assert len(doc.pages) == 1
-    text = doc.pages[0].extract_text()
+    assert len(doc.pages) == 2
+    text = '\n'.join(page.extract_text() for page in doc.pages)
     assert text.count("RACK-1045") >= 2
     assert text.count("120") >= 2
     assert "BLUSA REF-1045" in text
@@ -30,10 +30,12 @@ def test_pdf_contains_correct_identification_and_expected_pieces():
     assert "45678" in text
 
 
-def test_one_label_mode_keeps_a4_page():
+def test_one_label_mode_is_100_x_85_mm():
     raw = build_rack_pdf(SAMPLE, 1)
     doc = PdfReader(BytesIO(raw))
     assert len(doc.pages) == 1
+    assert abs(float(doc.pages[0].mediabox.width) - 100*72/25.4) < 0.5
+    assert abs(float(doc.pages[0].mediabox.height) - 85*72/25.4) < 0.5
     assert doc.pages[0].extract_text().count("RACK-1045") >= 1
 
 

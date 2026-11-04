@@ -428,7 +428,7 @@ def register_unified_routes(app) -> None:
         doc=str(data.get("document_no","")).strip();items=data.get("items") or []
         if not doc: con.close();raise HTTPException(400,"Informe o número do romaneio.")
         total=sum(max(0,as_int(i.get("quantity"))) for i in items)
-        status="EM_CONFERENCIA" if total>0 else "RASCUNHO"
+        status="AGUARDANDO_CONFERENCIA" if total>0 else "RASCUNHO"
         cur=con.execute(
             """INSERT INTO shipments(document_no,destination,status,total_qty,created_by,created_at,
                carrier,vehicle_plate,driver_name,scheduled_at,volume_count,notes,updated_at)
@@ -444,53 +444,17 @@ def register_unified_routes(app) -> None:
         add_movement(con,"EXPEDICAO",cur.lastrowid,"ROMANEIO_CRIADO",f"Romaneio {doc} criado com {total} peça(s).",user_id)
         con.commit();con.close();return {"ok":True,"shipment_id":cur.lastrowid}
 
+    # Contrato antigo mantido apenas para responder com orientação clara.
+    # Nenhum cliente pode contornar as etapas obrigatórias usando PATCH legado.
     @app.patch("/api/unified/shipments/{shipment_id}/filling")
-    async def update_shipment_filling(shipment_id:int,request:Request):
-        data=await request.json();user_id=as_int(data.get("user_id"));con=db_connect();require_user(con,user_id,{"admin","supervisor","estocagem","expedicao"})
-        shipment=con.execute("SELECT * FROM shipments WHERE id=?",(shipment_id,)).fetchone()
-        if not shipment: con.close();raise HTTPException(404,"Romaneio não encontrado.")
-        if shipment["status"]=="EXPEDIDO": con.close();raise HTTPException(400,"Um romaneio expedido não pode mais ser alterado.")
-        fields={
-            "document_no":str(data.get("document_no",shipment["document_no"] or "")).strip(),
-            "destination":str(data.get("destination",shipment["destination"] or "")).strip(),
-            "carrier":str(data.get("carrier",shipment["carrier"] or "")).strip(),
-            "vehicle_plate":str(data.get("vehicle_plate",shipment["vehicle_plate"] or "")).strip().upper(),
-            "driver_name":str(data.get("driver_name",shipment["driver_name"] or "")).strip(),
-            "scheduled_at":str(data.get("scheduled_at",shipment["scheduled_at"] or "")).strip(),
-            "volume_count":max(0,as_int(data.get("volume_count",shipment["volume_count"]))),
-            "notes":str(data.get("notes",shipment["notes"] or "")).strip(),
-        }
-        if not fields["document_no"]: con.close();raise HTTPException(400,"Informe o número do romaneio.")
-        for item in data.get("items") or []:
-            item_id=as_int(item.get("id"));row=con.execute("SELECT quantity FROM shipment_items WHERE id=? AND shipment_id=?",(item_id,shipment_id)).fetchone()
-            if not row: continue
-            checked=max(0,as_int(item.get("checked_qty")))
-            if checked>row["quantity"]: con.close();raise HTTPException(400,"A quantidade conferida não pode superar a prevista.")
-            con.execute("UPDATE shipment_items SET checked_qty=?,notes=? WHERE id=?",(checked,str(item.get("notes","")).strip(),item_id))
-        total=con.execute("SELECT COALESCE(SUM(quantity),0) n FROM shipment_items WHERE shipment_id=?",(shipment_id,)).fetchone()["n"]
-        checked=con.execute("SELECT COALESCE(SUM(checked_qty),0) n FROM shipment_items WHERE shipment_id=?",(shipment_id,)).fetchone()["n"]
-        required_complete=bool(fields["destination"] and fields["carrier"] and fields["vehicle_plate"] and fields["driver_name"] and fields["scheduled_at"] and fields["volume_count"]>0)
-        status="PRONTO" if required_complete and total>0 and checked==total else ("EM_CONFERENCIA" if total>0 else "RASCUNHO")
-        con.execute(
-            """UPDATE shipments SET document_no=?,destination=?,carrier=?,vehicle_plate=?,driver_name=?,scheduled_at=?,
-               volume_count=?,notes=?,total_qty=?,status=?,updated_at=? WHERE id=?""",
-            (fields["document_no"],fields["destination"],fields["carrier"],fields["vehicle_plate"],fields["driver_name"],fields["scheduled_at"],fields["volume_count"],fields["notes"],total,status,now(),shipment_id)
-        )
-        add_movement(con,"EXPEDICAO",shipment_id,"PREENCHIMENTO",f"Preenchimento salvo: {checked}/{total} peça(s), status {status}.",user_id)
-        con.commit();con.close();return {"ok":True,"status":status,"checked_qty":checked,"total_qty":total}
+    async def update_shipment_filling(shipment_id: int, request: Request):
+        raise HTTPException(409,
+            "Conferência por peças desativada. Use a Conferência de Lacres na Expedição.")
 
     @app.patch("/api/unified/shipments/{shipment_id}")
-    async def update_shipment(shipment_id:int,request:Request):
-        data=await request.json();user_id=as_int(data.get("user_id"));con=db_connect();require_user(con,user_id,{"admin","supervisor","estocagem","expedicao"})
-        status=str(data.get("status","EXPEDIDO")).upper();shipment=con.execute("SELECT * FROM shipments WHERE id=?",(shipment_id,)).fetchone()
-        if not shipment: con.close();raise HTTPException(404,"Romaneio não encontrado.")
-        if status=="EXPEDIDO":
-            checked=con.execute("SELECT COALESCE(SUM(checked_qty),0) n FROM shipment_items WHERE shipment_id=?",(shipment_id,)).fetchone()["n"]
-            missing=[label for label,value in [("destino",shipment["destination"]),("transportadora",shipment["carrier"]),("placa",shipment["vehicle_plate"]),("motorista",shipment["driver_name"]),("previsão de saída",shipment["scheduled_at"]),("volumes",shipment["volume_count"])] if not value]
-            if missing or shipment["total_qty"]<=0 or checked!=shipment["total_qty"]:
-                con.close();raise HTTPException(400,"Preenchimento incompleto. Revise dados do transporte e conferência de todas as peças.")
-        con.execute("UPDATE shipments SET status=?,completed_at=?,updated_at=? WHERE id=?",(status,now() if status=="EXPEDIDO" else None,now(),shipment_id))
-        add_movement(con,"EXPEDICAO",shipment_id,"STATUS",f"Expedição atualizada para {status}.",user_id);con.commit();con.close();return {"ok":True}
+    async def update_shipment(shipment_id: int, request: Request):
+        raise HTTPException(409,
+            "Para expedir, conclua Conferência de Lacres e Faturamento e confirme Expedir.")
 
     @app.post("/api/unified/shipments/import-pdf")
     async def import_shipment_pdf(user_id: int, file: UploadFile = File(...)):
@@ -499,7 +463,7 @@ def register_unified_routes(app) -> None:
         con=db_connect();require_user(con,user_id,{"admin","supervisor","estocagem","expedicao"})
         doc=parsed_doc or Path(file.filename or "romaneio").stem
         total=sum(as_int(i["quantity"]) for i in items)
-        cur=con.execute("INSERT INTO shipments(document_no,destination,status,total_qty,created_by,created_at) VALUES(?,?,?,?,?,?)",(doc,"","PREPARANDO",total,user_id,now()))
+        cur=con.execute("INSERT INTO shipments(document_no,destination,status,total_qty,created_by,created_at) VALUES(?,?,?,?,?,?)",(doc,"","AGUARDANDO_CONFERENCIA",total,user_id,now()))
         for item in items:
             con.execute("INSERT INTO shipment_items(shipment_id,barcode,description,quantity) VALUES(?,?,?,?)",(cur.lastrowid,item["barcode"],item["description"],item["quantity"]))
         add_movement(con,"EXPEDICAO",cur.lastrowid,"PDF_IMPORTADO",f"Romaneio {doc} importado do PDF com {len(items)} item(ns) e {total} peça(s).",user_id)
