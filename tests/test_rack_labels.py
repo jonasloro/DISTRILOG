@@ -94,8 +94,7 @@ def test_card_without_arrival_cannot_print():
     assert exc.value.status_code == 409
 
 
-def test_router_does_not_accept_unauthenticated_roles():
-    assert any(route.path == "/api/racks/cards/{card_id}.pdf" for route in router.routes) is False
-    # Router factory is invoked only when the FastAPI application is configured;
-    # authentication middleware sets auth_role, not client JSON.
+def test_roles_are_restricted():
+    # Authentication middleware supplies the role; the client never sends it.
     assert "consulta" not in __import__("rack_module").PRINT_ROLES
+    assert "recebimento" in __import__("rack_module").PRINT_ROLES
