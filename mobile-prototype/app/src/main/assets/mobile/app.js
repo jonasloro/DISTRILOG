@@ -95,8 +95,8 @@ function header(){
    (['available','pilot'].includes(updateState.type)?'<button type="button" class="mobile-update-badge" data-action="openUpdates">'+(updateState.type==='pilot'?'⬆ Novo piloto':'⬆ Atualização disponível')+'</button>':'')+'</header>';
 }
 function navbar(){
-  const tabs=[['queue','▤',tr('Fila','Cola')],['scan','▣','Rack'],['address','▦',tr('Estoque','Inventario')],['settings','⚙',tr('Ajustes','Ajustes')]];
-  return '<nav class="bottom-nav" aria-label="Navegação">'+tabs.map(x=>'<button data-action="nav" data-to="'+x[0]+'" class="'+(s.screen===x[0]||(s.screen==='card'||s.screen==='storage-activities')&&x[0]==='queue'?'on':'')+'"><span>'+x[1]+'</span>'+esc(x[2])+'</button>').join('')+'</nav>';
+  const tabs=[['queue','▤',tr('Fila','Cola')],['cleaning','✦','Renata'],['scan','▣','Rack'],['address','▦',tr('Estoque','Inventario')],['settings','⚙',tr('Ajustes','Ajustes')]];
+  return '<nav class="bottom-nav" aria-label="Navegação">'+tabs.map(x=>'<button data-action="nav" data-to="'+x[0]+'" class="'+((s.screen===x[0]&&x[0]!=='queue')||(s.screen==='queue'&&x[0]==='cleaning'&&s.sector==='cleaning')||(s.screen==='queue'&&x[0]==='queue'&&s.sector!=='cleaning')||(s.screen==='card'||s.screen==='storage-activities')&&x[0]==='queue'?'on':'')+'"><span>'+x[1]+'</span>'+esc(x[2])+'</button>').join('')+'</nav>';
 }
 function roleBar(){
   return '<div class="role-row"><div class="role-user"><b>'+esc(s.user?.name||s.user?.username)+'</b><span>'+esc(role())+' • '+esc(API.endpoint().replace('https://',''))+'</span></div>'+
@@ -862,7 +862,14 @@ async function runAction(action,buttonElement){
   }
   if(action==='nav'){
     const dest=buttonElement.dataset.to;
-    if(dest==='queue')await loadQueue();
+    if(dest==='queue'){
+      if(s.sector==='cleaning')s.sector=s.previousSector||'receiving';
+      await loadQueue();
+    }
+    else if(dest==='cleaning'){
+      if(s.sector!=='cleaning')s.previousSector=s.sector;
+      s.sector='cleaning';await loadQueue();
+    }
     else if(dest==='address')await loadAddresses(s.selectedArea);
     else if(dest==='history')await loadHistory();
     else if(dest==='scan'){s.screen='scan';render();}
