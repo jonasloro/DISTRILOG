@@ -28,6 +28,7 @@ from processing_module import init_processing_db, processing_card_data, register
 from downstream_module import downstream_card_data, init_downstream_db, register_downstream_routes
 from production_module import init_production_db, register_production_routes
 from separation_module import init_separation_db, register_separation_routes
+from rack_module import register_rack_routes
 from processing_module import ensure_worker_function_column
 from goat_module import init_goat_db, register_goat_routes
 from positions_module import init_positions_db, register_positions_routes, total_allocated, item_allocation_totals
@@ -159,6 +160,7 @@ async def require_authenticated_session(request: Request, call_next):
                             return JSONResponse({"detail": "Identidade da operação não corresponde à sessão."}, status_code=403)
     return await call_next(request)
 
+register_rack_routes(app, awaiting_arrival)  # Callable resolvida ao atender a requisição
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
 
