@@ -6,6 +6,10 @@
 'use strict';
 const API=window.DM_API;
 const KEY='distrilog_mobile_real_account_v1';
+window.DM_RACK_PRINT_EVENT=function(event){
+  if(!event||typeof event.message!=='string')return;
+  flash(event.message,event.type==='error');
+};
 const SECTORS=[
   {id:'receiving',pt:'Recebimento',es:'Recepción',icon:'▣',role:'recebimento'},
   {id:'quality',pt:'Qualidade',es:'Calidad',icon:'◇',role:'qualidade'},
@@ -157,6 +161,8 @@ function queueView(){
       '<div class="chips">'+pill(c.current_sector||currentName(s.sector))+
       (access?pill('Setor autorizado','tone-ready'):pill('Consulta','warm'))+'</div>'+
       '<div class="tile-footer"><span>'+number(c.item_count||0)+' '+tr('itens','artículos')+' · '+number(c.expected_total||0)+' '+tr('peças','piezas')+'</span>'+
+      (s.sector==='receiving'&&!c.in_transit&&['admin','supervisor','recebimento'].includes(role()) ?
+        button('▣ Imprimir Rack','printRack','button light small','data-id="'+esc(c.card_id||c.id)+'"') : '')+
       button(tr('Abrir Card','Abrir tarjeta')+' →','card','button small','data-id="'+esc(c.card_id||c.id)+'"')+'</div></article>';
   }).join(''):'<div class="empty">Nenhum card encontrado neste setor. Atualize para verificar novas movimentações.</div>';
   const extra=s.sector==='entry'?note('Entrada: a conferência final usa as quantidades já registradas após Estocagem.'):''; 
@@ -291,6 +297,8 @@ function cardView(){
     '<div class="mobile-card-summary"><div><small>'+esc(c.current_sector||'—')+' • '+esc(c.brand||c.supplier||'—')+'</small>'+
     '<strong>'+esc(c.purchase_id||'')+'</strong></div>'+
     '<small>'+number(c.expected_total||0)+' peças · '+esc(c.receiving?.volumes??'—')+' volumes</small></div>';
+  const rackAction=!c.in_transit&&['admin','supervisor','recebimento','qualidade','processamento','etiquetagem','estocagem'].includes(role())?
+    '<div class="actions">'+button('▣ Imprimir Rack','printRack','button light full','data-id="'+esc(c.id)+'"')+'</div>':'';
   const tabs='<div class="mobile-task-picker">'+panels.map(([id,label])=>
     '<button data-action="cardPanel" data-to="'+id+'" class="'+(id===panel?'on':'')+'">'+label+'</button>').join('')+'</div>';
   let content='';
@@ -860,6 +868,13 @@ async function runAction(action,buttonElement){
   if(action==='taskNext'){s.cardStep=Math.min(taskStages(s.card).length,s.cardStep+1);render();window.scrollTo(0,0);return;}
   if(action==='backQueue'){await loadQueue();return;}
   if(action==='scanNative'){API.scan();return;}
+  if(action==='printRack'){
+    const id=Number(buttonElement?.dataset.id);
+    if(!Number.isSafeInteger(id)||id<=0)throw Error('Card inválido para impressão.');
+    if(!['admin','supervisor','recebimento','qualidade','processamento','etiquetagem','estocagem'].includes(role()))
+      throw Error('Perfil sem permissão para imprimir Rack.');
+    API.printRack(id);return;
+  }
   if(action==='resolveScan'){await resolveCode(val('scanManual'));return;}
   if(action==='area'){await loadAddresses(buttonElement.dataset.to);return;}
   if(action==='inventory'){await loadInventory(buttonElement.dataset.address);return;}
