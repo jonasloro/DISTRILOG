@@ -7,6 +7,7 @@ do banco em cada impressão, não confiados ao cliente.
 from __future__ import annotations
 
 from io import BytesIO
+from contextlib import closing
 from typing import Callable
 
 from fastapi import APIRouter, HTTPException, Request
@@ -174,7 +175,7 @@ def register_rack_routes(app, is_awaiting_arrival: Callable) -> None:
             raise HTTPException(403, "Seu perfil não possui permissão para imprimir Racks.")
         if copies not in (1, 2):
             raise HTTPException(422, "É permitido imprimir uma ou duas etiquetas.")
-        with db.connect() as con:
+        with closing(db.connect()) as con:
             card = _card_data(con, card_id, is_awaiting_arrival=is_awaiting_arrival)
         pdf = build_rack_pdf(card, copies)
         return Response(
