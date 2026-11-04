@@ -5,6 +5,7 @@ const fs=require('node:fs');
 const vm=require('node:vm');
 const path=require('node:path');
 const root=path.resolve(__dirname,'../app/src/main/assets/mobile');
+const shippingScript=fs.readFileSync(path.join(root,'shipping.js'),'utf8');
 const script=fs.readFileSync(path.join(root,'outbound.js'),'utf8');
 const ui=fs.readFileSync(path.join(root,'app.js'),'utf8');
 const html=fs.readFileSync(path.join(root,'index.html'),'utf8');
@@ -22,11 +23,8 @@ function harness(){
       if(p==='/api/separation/orders')return orders();
       if(p==='/api/separation/entry-alerts')return [{reference:'REF-X',days_since_entry:4}];
       if(p==='/api/separation/orders/7/items')return [{reference:'REF-A',casulo:'010-01',quantity:3}];
-      if(p==='/api/unified/shipments')return [{id:9,status:'EM_CONFERENCIA',document_no:'123',total_qty:3,checked_qty:0,volume_count:0}];
-      if(p==='/api/unified/shipments/9')return {
-        shipment:{id:9,status:'EM_CONFERENCIA',document_no:'123',destination:'',total_qty:3,volume_count:0},
-        items:[{id:17,description:'Resumo',quantity:3,checked_qty:0}],
-      };
+      if(p==='/api/shipping/queue')return [{id:9,stage:'CONFERENCIA',document_no:'123',total_qty:3,volume_count:0}];
+      if(p==='/api/shipping/9')return {id:9,stage:'CONFERENCIA',document_no:'123',destination:'',total_qty:3,volume_count:0,events:[]};
       throw Error('Rota inesperada '+p);
     },
     async post(p,body){
@@ -38,7 +36,7 @@ function harness(){
     async patch(p,body){calls.push(['PATCH',p,body]);return {ok:true};}
   };
   const ctx={window:{DM_API:api,confirm:()=>true},document:{getElementById:id=>fields.get(id)||null},Date,Math,Number,String,Promise,Set,Map};
-  vm.createContext(ctx);vm.runInContext(script,ctx);
+  vm.createContext(ctx);vm.runInContext(shippingScript,ctx);vm.runInContext(script,ctx);
   return {flow:ctx.window.DM_OUTBOUND,fields,calls,rows};
 }
 test('Separação e Expedição estão disponíveis no APK, fora do módulo Recebimento',()=>{
@@ -80,7 +78,7 @@ test('expedição recebe seus próprios romaneios, sem permitir ação a outro s
   await flow.load('shipping');
   assert.match(flow.view('shipping',{id:1,role:'expedicao'}),/Expedição/);
   await flow.action('shipOpen',{dataset:{id:'9'}},{id:1,role:'expedicao'});
-  assert.match(flow.view('shipping',{id:1,role:'expedicao'}),/Conferência física/);
-  await assert.rejects(()=>flow.action('shipSave',{}, {id:1,role:'recebimento'}),/não autorizado/);
+  assert.match(flow.view('shipping',{id:1,role:'expedicao'}),/Conferência de lacres/);
+  await assert.rejects(()=>flow.action('shipClaim',{}, {id:1,role:'recebimento'}),/não permitida/);
   assert.equal(calls.some(c=>c[0]==='PATCH'),false);
 });
