@@ -1173,4 +1173,10 @@ boot().catch(err=>{s.screen='login';render();flash(publicError(err),true);});
 // Advisory check on app open; no automatic installation or third-party pages.
 setTimeout(()=>{if(window.DISTRILOG&&s.screen!=='updates')API.checkUpdates();},6500);
 if(typeof setInterval==='function')setInterval(()=>{if(s.screen==='queue'&&s.sector==='separation')window.DM_OUTBOUND.tick();},1000);
+if(typeof setInterval==='function')setInterval(()=>{
+  if(s.screen==='queue'&&s.sector==='shipping')window.DM_SHIPPING.tick();
+},1000);
+if(typeof setInterval==='function')setInterval(()=>{
+  if(s.screen==='queue'&&s.sector==='shipping')window.DM_SHIPPING.keepAlive(s.user).catch(e=>flash(e.message,true));
+},30000);
 })();
