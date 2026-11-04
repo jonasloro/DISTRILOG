@@ -6,6 +6,7 @@ Uma linha por romaneio impede dois operadores de assumir o mesmo trabalho.
 from __future__ import annotations
 
 from datetime import datetime, timezone, timedelta
+from contextlib import contextmanager
 from fastapi import APIRouter, HTTPException, Request
 import db
 
@@ -16,9 +17,27 @@ VIEWERS = OPERATORS | {"consulta", "recebimento", "qualidade", "processamento",
 STAGES = ("CONFERENCIA", "FATURAMENTO", "EXPEDIR", "EXPEDIDO", "DIVERGENCIA")
 LEASE_SECONDS = 300  # Renovado pelo cliente a cada 30 s; queda de conexão libera após 5 min.
 
+@contextmanager
+def shipping_db():
+    """Transação com devolução obrigatória da conexão ao pool.
+
+    db.Connection.__exit__ confirma transações mas NÃO fecha a conexão.
+    Usar with db.connect() diretamente causa exaustão do pool em operações.
+    """
+    con = db.connect()
+    try:
+        yield con
+        con.commit()
+    except BaseException:
+        con.rollback()
+        raise
+    finally:
+        con.close()
+
+
 
 def init_shipping_flow_db() -> None:
-    with db.connect() as con:
+    with shipping_db() as con:
         con.executescript("""
           CREATE TABLE IF NOT EXISTS distrilog.shipping_workflows(
             shipment_id BIGINT PRIMARY KEY REFERENCES distrilog.shipments(id) ON DELETE CASCADE,
@@ -155,7 +174,7 @@ def _view(con, sid: int) -> dict:
 @router.get("/queue")
 def queue(request: Request):
     _user(request)
-    with db.connect() as con:
+    with shipping_db() as con:
         ids = [r["id"] for r in con.execute(
             "SELECT id FROM distrilog.shipments ORDER BY id DESC LIMIT 250"
         ).fetchall()]
@@ -165,7 +184,7 @@ def queue(request: Request):
 @router.get("/{shipment_id}")
 def detail(shipment_id: int, request: Request):
     _user(request)
-    with db.connect() as con:
+    with shipping_db() as con:
         result = _view(con, shipment_id)
         result["events"] = [dict(r) for r in con.execute(
             """SELECT e.stage,e.event,e.details,e.created_at,u.name AS actor
@@ -179,7 +198,7 @@ def detail(shipment_id: int, request: Request):
 @router.post("/{shipment_id}/claim")
 def claim(shipment_id: int, request: Request):
     uid = _user(request, write=True)
-    with db.connect() as con:
+    with shipping_db() as con:
         shipment, row = _lock(con, shipment_id)
         now = _now()
         if row["stage"] not in ("CONFERENCIA", "FATURAMENTO"):
@@ -207,7 +226,7 @@ def claim(shipment_id: int, request: Request):
 @router.post("/{shipment_id}/heartbeat")
 def heartbeat(shipment_id: int, request: Request):
     uid = _user(request, write=True)
-    with db.connect() as con:
+    with shipping_db() as con:
         _, row = _lock(con, shipment_id)
         _assert_owner(row, uid, _now())
         con.execute(
@@ -220,7 +239,7 @@ def heartbeat(shipment_id: int, request: Request):
 @router.post("/{shipment_id}/release")
 def release(shipment_id: int, request: Request):
     uid = _user(request, write=True)
-    with db.connect() as con:
+    with shipping_db() as con:
         _, row = _lock(con, shipment_id)
         now = _now()
         _assert_owner(row, uid, now)
@@ -245,7 +264,7 @@ async def complete(shipment_id: int, request: Request):
     body = await request.json()
     if not isinstance(body, dict):
         raise HTTPException(422, "Dados inválidos.")
-    with db.connect() as con:
+    with shipping_db() as con:
         shipment, row = _lock(con, shipment_id)
         now = _now()
         _assert_owner(row, uid, now)
@@ -299,7 +318,7 @@ async def resolve_divergence(shipment_id: int, request: Request):
     reason = str(body.get("reason") or "").strip() if isinstance(body, dict) else ""
     if len(reason) < 5 or len(reason) > 500:
         raise HTTPException(422, "Justifique a liberação para uma nova conferência.")
-    with db.connect() as con:
+    with shipping_db() as con:
         _, row = _lock(con, shipment_id)
         if row["stage"] != "DIVERGENCIA":
             raise HTTPException(409, "O romaneio não possui divergência aberta.")
@@ -319,7 +338,7 @@ async def resolve_divergence(shipment_id: int, request: Request):
 @router.post("/{shipment_id}/dispatch")
 def dispatch(shipment_id: int, request: Request):
     uid = _user(request, write=True)
-    with db.connect() as con:
+    with shipping_db() as con:
         shipment, row = _lock(con, shipment_id)
         if row["stage"] != "EXPEDIR" or shipment["status"] == "EXPEDIDO":
             raise HTTPException(409, "O faturamento deve estar concluído e o pedido ainda não pode ter sido expedido.")
