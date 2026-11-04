@@ -327,7 +327,7 @@ function cardView(){
       esc(h.description||h.event_type||'Movimentação')+'</b><small>'+
       esc(h.created_at||'')+' · '+esc(h.user_name||'')+'</small></div>').join('')||
     '<p class="muted">Nenhum evento registrado.</p>');
-  return '<div class="mobile-task">'+basics+tabs+content+'</div>';
+  return '<div class="mobile-task">'+basics+rackAction+tabs+content+'</div>';
 }
 
 function allowOperation(sector){
