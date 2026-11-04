@@ -6,6 +6,11 @@ on:
       - 'mobile-prototype/**'
       - '.github/workflows/mobile-prototype-apk.yml'
   workflow_dispatch:
+  pull_request:
+    branches: [mobile-native-prototipo-integrado]
+    paths:
+      - 'mobile-prototype/**'
+      - '.github/workflows/mobile-prototype-apk.yml'
 permissions:
   contents: write
 concurrency:
