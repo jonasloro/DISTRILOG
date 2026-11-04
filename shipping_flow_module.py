@@ -149,23 +149,25 @@ def _assert_owner(row: dict, uid: int, now: datetime) -> None:
         raise HTTPException(409, "Esta etapa não está atribuída a você ou a reserva expirou. Atualize a fila.")
 
 
+_VIEW_SQL = """
+    SELECT s.id,s.document_no,s.destination,s.total_qty,s.volume_count,
+           s.carrier,s.vehicle_plate,s.driver_name,s.scheduled_at,s.notes,
+           s.status AS legacy_status,s.completed_at,
+           COALESCE(w.stage,CASE WHEN s.status='EXPEDIDO' THEN 'EXPEDIDO' ELSE 'CONFERENCIA' END) AS stage,
+           w.owner_user_id,w.owner_started_at,w.owner_heartbeat_at,
+           COALESCE(w.conference_seconds,0) AS conference_seconds,
+           COALESCE(w.billing_seconds,0) AS billing_seconds,
+           w.seals_checked,w.seals_ok,w.seal_notes,w.invoice_number,w.invoice_notes,
+           w.dispatched_at,w.dispatched_by,u.name AS owner_name,
+           (SELECT COUNT(*) FROM distrilog.shipment_items si WHERE si.shipment_id=s.id) AS item_lines
+    FROM distrilog.shipments s
+    LEFT JOIN distrilog.shipping_workflows w ON w.shipment_id=s.id
+    LEFT JOIN distrilog.users u ON u.id=w.owner_user_id
+"""
+
+
 def _view(con, sid: int) -> dict:
-    row = con.execute(
-        """SELECT s.id,s.document_no,s.destination,s.total_qty,s.volume_count,
-                  s.carrier,s.vehicle_plate,s.driver_name,s.scheduled_at,s.notes,
-                  s.status AS legacy_status,s.completed_at,
-                  COALESCE(w.stage,CASE WHEN s.status='EXPEDIDO' THEN 'EXPEDIDO' ELSE 'CONFERENCIA' END) AS stage,
-                  w.owner_user_id,w.owner_started_at,w.owner_heartbeat_at,
-                  COALESCE(w.conference_seconds,0) AS conference_seconds,
-                  COALESCE(w.billing_seconds,0) AS billing_seconds,
-                  w.seals_checked,w.seals_ok,w.seal_notes,w.invoice_number,w.invoice_notes,
-                  w.dispatched_at,w.dispatched_by,u.name AS owner_name,
-                  (SELECT COUNT(*) FROM distrilog.shipment_items si WHERE si.shipment_id=s.id) AS item_lines
-           FROM distrilog.shipments s
-           LEFT JOIN distrilog.shipping_workflows w ON w.shipment_id=s.id
-           LEFT JOIN distrilog.users u ON u.id=w.owner_user_id
-           WHERE s.id=?""", (sid,)
-    ).fetchone()
+    row = con.execute(_VIEW_SQL + " WHERE s.id=?", (sid,)).fetchone()
     if not row:
         raise HTTPException(404, "Romaneio não encontrado.")
     return dict(row)
@@ -175,10 +177,10 @@ def _view(con, sid: int) -> dict:
 def queue(request: Request):
     _user(request)
     with shipping_db() as con:
-        ids = [r["id"] for r in con.execute(
-            "SELECT id FROM distrilog.shipments ORDER BY id DESC LIMIT 250"
-        ).fetchall()]
-        return [_view(con, int(sid)) for sid in ids]
+        # Uma consulta independente da quantidade de romaneios:
+        # evita 250 roundtrips no pool/Supabase.
+        rows = con.execute(_VIEW_SQL + " ORDER BY s.id DESC LIMIT 250").fetchall()
+        return [dict(row) for row in rows]
 
 
 @router.get("/{shipment_id}")
