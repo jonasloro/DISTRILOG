@@ -71,7 +71,7 @@ final class RackPrinter {
         io.execute(() -> {
             notifyUi("loading", "Buscando a etiqueta Rack oficial no servidor...");
             try {
-                final String url = endpoint + "/api/racks/cards/" + cardId + ".pdf?copies=2";
+                final String url = endpoint + "/api/racks/cards/" + cardId + ".pdf?copies=1";
                 Request.Builder builder = new Request.Builder().get()
                     .url(url).header("Accept", "application/pdf");
                 String cookies = CookieManager.getInstance().getCookie(endpoint);
@@ -114,7 +114,7 @@ final class RackPrinter {
                         PrintManager manager = (PrintManager) activity.getSystemService(Context.PRINT_SERVICE);
                         if (manager == null) throw new IllegalStateException("Serviço de impressão indisponível.");
                         PrintAttributes attrs = new PrintAttributes.Builder()
-                            .setMediaSize(PrintAttributes.MediaSize.ISO_A4)
+                            .setMediaSize(new PrintAttributes.MediaSize("RACK_100X85", "Etiqueta Rack 100 x 85 mm", 3937, 3346))
                             .setColorMode(PrintAttributes.COLOR_MODE_MONOCHROME)
                             .setMinMargins(new PrintAttributes.Margins(0, 0, 0, 0))
                             .build();
@@ -133,7 +133,7 @@ final class RackPrinter {
 
     void close() { io.shutdownNow(); }
 
-    /** One pre-rendered A4 PDF page. Never redraws or modifies server data. */
+    /** One pre-rendered 100x85 mm PDF page. Never redraws server data. */
     private static final class RackPdfAdapter extends PrintDocumentAdapter {
         private final byte[] pdf;
         private final int id;
