@@ -40,11 +40,13 @@ public final class BackendBridge {
         .readTimeout(27, TimeUnit.SECONDS).build();
     private volatile String endpoint;
     private final NativeUpdater updater;
+    private final RackPrinter rackPrinter;
 
     public BackendBridge(MainActivity activity, WebView webView) {
         this.activity = activity;
         this.webView = webView;
         this.updater = new NativeUpdater(activity, webView);
+        this.rackPrinter = new RackPrinter(activity, webView);
         this.prefs = activity.getSharedPreferences("distrilog_native_backend_v1", Context.MODE_PRIVATE);
         String saved = prefs.getString("endpoint", "");
         this.endpoint = validEndpoint(saved) ? saved : "";
@@ -189,6 +191,11 @@ public final class BackendBridge {
 
     @JavascriptInterface public void scan() { activity.launchScanner(); }
 
+    // No arbitrary URL or document bytes are passed from the WebView.
+    @JavascriptInterface public void printRack(int cardId) {
+        rackPrinter.print(cardId, endpoint);
+    }
+
     // The updater only accesses DISTRILOG's pinned GitHub release channel.
     // No remote URL or filesystem path is accepted from JavaScript.
     @JavascriptInterface public String appVersion() { return updater.installedVersion(); }
@@ -196,5 +203,5 @@ public final class BackendBridge {
     @JavascriptInterface public void downloadUpdate() { updater.download(); }
     @JavascriptInterface public void installUpdate() { updater.install(); }
 
-    public void close() { updater.close(); queue.shutdownNow(); }
+    public void close() { rackPrinter.close(); updater.close(); queue.shutdownNow(); }
 }
