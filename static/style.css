@@ -1617,3 +1617,14 @@ input:disabled,select:disabled,textarea:disabled{
 .shipping-quick-order b{font-size:12px}.shipping-quick-order span{font-size:11px;flex:1;color:var(--muted)}
 .shipping-quick-order .shipping-step-badge{font-size:9px}
 @media(max-width:760px){.shipping-flow-metrics{grid-template-columns:repeat(2,1fr)}.shipping-flow-facts{grid-template-columns:repeat(2,1fr)}.shipping-flow-queue{grid-template-columns:1fr}.shipping-flow-card-head{flex-wrap:wrap}}
+
+/* Renatinha — disponibilidade visível por área, sem botões operacionais ambíguos. */
+.clean-status-overview{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-bottom:14px}
+.clean-status-overview>div{border:1px solid var(--border);background:var(--card);border-radius:12px;padding:14px 17px}
+.clean-status-overview strong{display:block;font-size:28px;font-variant-numeric:tabular-nums}
+.clean-status-overview span{font-size:12px;color:var(--muted)}
+.clean-area-btn{transition:border-color .15s ease,transform .15s ease}
+.clean-area-btn:not(:disabled):hover{border-color:var(--green);transform:translateY(-1px)}
+.clean-area-btn.clean-area-occupied{opacity:.7;border-color:#6f7d90;cursor:not-allowed}
+.clean-area-btn strong{display:block}.clean-area-btn small{display:block;margin-top:6px}
+@media(max-width:600px){.clean-status-overview{gap:7px}.clean-status-overview>div{padding:12px 10px}.clean-status-overview strong{font-size:22px}}
