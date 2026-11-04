@@ -160,10 +160,20 @@ async def start_task(request: Request):
     con = db_connect()
     try:
         user = _user(con, data.get("user_id"))
+        # Serializa início por área em TODOS os processos Render. A trava
+        # transacional cai no commit/rollback; duas pessoas não conseguem
+        # iniciar limpeza simultânea na mesma área.
+        con.execute("SELECT pg_advisory_xact_lock(hashtextextended(?,0))", (f"renata:{area}",))
         if con.execute(
             "SELECT 1 FROM cleaning_tasks WHERE user_id=? AND status<>'CONCLUIDA'", (int(user["id"]),)
         ).fetchone():
-            raise HTTPException(400, "Você já tem uma limpeza em andamento. Conclua ou pause antes de iniciar outra.")
+            raise HTTPException(409, "Você já possui uma limpeza aberta. Conclua-a antes de iniciar outra.")
+        occupied = con.execute(
+            "SELECT user_name FROM cleaning_tasks WHERE area=? AND status IN ('EM_ANDAMENTO','PAUSADA')",
+            (area,),
+        ).fetchone()
+        if occupied:
+            raise HTTPException(409, f"Área já assumida por {occupied['user_name']}. Outra pessoa não pode iniciar.")
         now = _iso(_now())
         cur = con.execute(
             """INSERT INTO cleaning_tasks(area,user_id,user_name,status,notes,started_at,created_at)
