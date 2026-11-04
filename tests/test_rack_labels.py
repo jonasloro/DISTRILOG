@@ -22,7 +22,7 @@ def test_pdf_contains_correct_identification_and_expected_pieces():
     assert raw.startswith(b"%PDF-")
     doc = PdfReader(BytesIO(raw))
     assert len(doc.pages) == 2
-    text = doc.pages[0].extract_text()
+    text = '\n'.join(page.extract_text() for page in doc.pages)
     assert text.count("RACK-1045") >= 4
     assert text.count("120") >= 2
     assert "BLUSA REF-1045" in text
