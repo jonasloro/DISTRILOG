@@ -20,6 +20,7 @@ const SECTORS=[
   {id:'entry',pt:'Entrada',es:'Entrada',icon:'⇥',role:'processamento'},
   {id:'separation',pt:'Separação',es:'Separación',icon:'◷',role:'separacao'},
   {id:'shipping',pt:'Expedição',es:'Expedición',icon:'▧',role:'expedicao'},
+  {id:'cleaning',pt:'Renata',es:'Limpieza',icon:'✦',role:'limpeza'},
   {id:'cadastro',pt:'Cadastro',es:'Registro',icon:'▤',role:'processamento'}
 ];
 const ALLOC_SECTORS=['RM','QA','PR','ET','EC'];
@@ -150,6 +151,7 @@ function queueView(){
     '<div class="metric-row"><div class="stat"><span>Cards</span><strong>'+number(cards.length)+'</strong></div><div class="stat"><span>Aguardando</span><strong>'+number(ready)+'</strong></div><div class="stat"><span>Peças previstas</span><strong>'+number(total)+'</strong></div></div>';
   const selector='<div class="selector" id="sectorTabs">'+SECTORS.map(x=>'<button class="'+(s.sector===x.id?'on':'')+'" data-action="sector" data-to="'+x.id+'">'+x.icon+' '+esc(currentName(x.id))+'</button>').join('')+'</div>';
   if(s.sector==='separation'||s.sector==='shipping')return selector+window.DM_OUTBOUND.view(s.sector,s.user);
+  if(s.sector==='cleaning')return selector+window.DM_CLEANING.view(s.user);
   const search='<label class="search-bar"><span>⌕</span><input id="queueSearch" type="search" placeholder="'+esc(tr('Buscar referência, card ou compra','Buscar referencia, tarjeta o compra'))+'" value="'+esc(s.search)+'"></label>';
   const list=cards.length?cards.map(c=>{
     const ref=c.reference_list||c.reference||c.purchase_id||('Card #'+c.id);
@@ -628,6 +630,10 @@ async function loadQueue(){
     await window.DM_OUTBOUND.load(sector,s.user);
     s.screen='queue';render();window.scrollTo(0,0);return;
   }
+  if(sector==='cleaning'){
+    await window.DM_CLEANING.init(s.user);
+    s.screen='queue';render();window.scrollTo(0,0);return;
+  }
   if(sector==='entry'){
     const response=await API.get('/api/processing/entry/queue?user_id='+q(s.user.id));
     s.cards=(response.pending||[]).map(entry=>({
@@ -786,6 +792,11 @@ async function runAction(action,buttonElement){
   if(action==='checkUpdates'){API.checkUpdates();return;}
   if(action.startsWith('outbound-')){
     await window.DM_OUTBOUND.action(action.slice('outbound-'.length),buttonElement,s.user);
+    render();window.scrollTo(0,0);return;
+  }
+  if(action.startsWith('clean-')){
+    if(s.sector!=='cleaning'||s.screen!=='queue')throw Error('Abra a área Renata para executar a limpeza.');
+    await window.DM_CLEANING.action(action.slice('clean-'.length),buttonElement,s.user);
     render();window.scrollTo(0,0);return;
   }
   if(action==='downloadUpdate'){API.downloadUpdate();return;}
@@ -1173,6 +1184,7 @@ boot().catch(err=>{s.screen='login';render();flash(publicError(err),true);});
 // Advisory check on app open; no automatic installation or third-party pages.
 setTimeout(()=>{if(window.DISTRILOG&&s.screen!=='updates')API.checkUpdates();},6500);
 if(typeof setInterval==='function')setInterval(()=>{if(s.screen==='queue'&&s.sector==='separation')window.DM_OUTBOUND.tick();},1000);
+if(typeof setInterval==='function')setInterval(()=>{if(s.screen==='queue'&&s.sector==='cleaning')window.DM_CLEANING.tick();},1000);
 if(typeof setInterval==='function')setInterval(()=>{
   if(s.screen==='queue'&&s.sector==='shipping')window.DM_SHIPPING.tick();
 },1000);
