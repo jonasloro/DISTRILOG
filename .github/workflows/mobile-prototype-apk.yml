@@ -1,0 +1,135 @@
+name: DISTRILOG Mobile - Prototipo Integrado (APK)
+on:
+  push:
+    branches: [mobile-native-prototipo-integrado, feature/mobile-estocagem-atividades-internas]
+    paths:
+      - 'mobile-prototype/**'
+      - '.github/workflows/mobile-prototype-apk.yml'
+  workflow_dispatch:
+  pull_request:
+    branches: [mobile-native-prototipo-integrado]
+    paths:
+      - 'mobile-prototype/**'
+      - '.github/workflows/mobile-prototype-apk.yml'
+permissions:
+  contents: write
+concurrency:
+  group: mobile-prototype-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    env:
+      MOBILE_SIGNING_KEYSTORE_B64: ${{ secrets.MOBILE_SIGNING_KEYSTORE_B64 }}
+      MOBILE_SIGNING_STORE_PASSWORD: ${{ secrets.MOBILE_SIGNING_STORE_PASSWORD }}
+      MOBILE_SIGNING_KEY_ALIAS: ${{ secrets.MOBILE_SIGNING_KEY_ALIAS }}
+      MOBILE_SIGNING_KEY_PASSWORD: ${{ secrets.MOBILE_SIGNING_KEY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+      - name: Validate JavaScript files and updater
+        run: |
+          node --check mobile-prototype/app/src/main/assets/mobile/native-client.js
+          node --check mobile-prototype/app/src/main/assets/mobile/activities.js
+          node --check mobile-prototype/app/src/main/assets/mobile/cleaning.js
+          node --check mobile-prototype/app/src/main/assets/mobile/shipping.js
+          node --check mobile-prototype/app/src/main/assets/mobile/outbound.js
+          node --check mobile-prototype/app/src/main/assets/mobile/app.js
+          node --test mobile-prototype/tests/*.cjs
+      - name: Configure secure long-lived signing key
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "$MOBILE_SIGNING_KEYSTORE_B64" ]] && \
+             [[ -n "$MOBILE_SIGNING_STORE_PASSWORD" ]] && \
+             [[ -n "$MOBILE_SIGNING_KEY_ALIAS" ]] && \
+             [[ -n "$MOBILE_SIGNING_KEY_PASSWORD" ]]; then
+            umask 077
+            printf '%s' "$MOBILE_SIGNING_KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/distrilog-company.jks"
+            echo "MOBILE_SIGNING_KEYSTORE_PATH=$RUNNER_TEMP/distrilog-company.jks" >> "$GITHUB_ENV"
+            echo "SIGNED_RELEASE=true" >> "$GITHUB_ENV"
+          else
+            echo "SIGNED_RELEASE=false" >> "$GITHUB_ENV"
+            echo "::warning::Assinatura permanente não configurada. Publicando piloto; não será anunciado como atualização oficial."
+          fi
+      - name: Build Android APK
+        working-directory: mobile-prototype
+        shell: bash
+        run: |
+          if [[ "$SIGNED_RELEASE" == "true" ]]; then
+            gradle --no-daemon --stacktrace :app:assembleRelease
+          else
+            gradle --no-daemon --stacktrace :app:assembleDebug
+          fi
+      - name: Check APK certificate and local UI
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$SIGNED_RELEASE" == "true" ]]; then
+            apk=mobile-prototype/app/build/outputs/apk/release/app-release.apk
+          else
+            apk=mobile-prototype/app/build/outputs/apk/debug/app-debug.apk
+          fi
+          test -s "$apk"
+          signer="$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -1)"
+          "$signer" verify --verbose "$apk"
+          "$signer" verify --print-certs "$apk" | grep 'certificate SHA-256 digest'
+          unzip -l "$apk" | grep -F 'assets/mobile/index.html'
+          unzip -l "$apk" | grep -F 'assets/mobile/app.js'
+          unzip -l "$apk" | grep -F 'assets/mobile/activities.js'
+          unzip -l "$apk" | grep -F 'assets/mobile/cleaning.js'
+          unzip -l "$apk" | grep -F 'assets/mobile/shipping.js'
+          unzip -l "$apk" | grep -F 'assets/mobile/outbound.js'
+          unzip -l "$apk" | grep -F 'classes.dex'
+          cp "$apk" DISTRILOG-Mobile-PROTOTIPO-INTEGRADO.apk
+          sha256sum DISTRILOG-Mobile-PROTOTIPO-INTEGRADO.apk > DISTRILOG-Mobile-PROTOTIPO-INTEGRADO.apk.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DISTRILOG-MOBILE-1.6.0-APK
+          path: |
+            DISTRILOG-Mobile-PROTOTIPO-INTEGRADO.apk
+            DISTRILOG-Mobile-PROTOTIPO-INTEGRADO.apk.sha256
+          retention-days: 14
+          if-no-files-found: error
+      - name: Publish signed update or clearly labeled pilot
+        if: success() && github.ref_name == 'mobile-native-prototipo-integrado'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          head="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/$GITHUB_REF_NAME" --jq .object.sha)"
+          if [[ "$head" != "$GITHUB_SHA" ]]; then
+            echo "::notice::Existe um commit mais recente. Não publicarei um APK desatualizado."
+            exit 0
+          fi
+          if [[ "$SIGNED_RELEASE" == "true" ]]; then
+            tag=mobile-prototipo-1.6.0
+            title='DISTRILOG Mobile 1.6.0 - Atualização oficial assinada'
+            notes='Atualização assinada com chave permanente. O app valida SHA-256, versão, ID e assinatura.'
+          else
+            tag=mobile-piloto-1.6.0
+            title='DISTRILOG Mobile 1.6.0 - Piloto (assinatura temporária)'
+            notes='Piloto com atualizador instalado, mas ainda sem assinatura permanente. A atualização por cima da versão anterior exige a mesma chave de assinatura, que deve ser configurada como GitHub Secret.'
+          fi
+          apk=DISTRILOG-Mobile-PROTOTIPO-INTEGRADO.apk
+          hash=DISTRILOG-Mobile-PROTOTIPO-INTEGRADO.apk.sha256
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "$apk" "$hash" --clobber
+          else
+            gh release create "$tag" "$apk" "$hash" \
+              --title "$title" --notes "$notes" --prerelease --target "$GITHUB_SHA"
+          fi
+      - name: Remove ephemeral signing key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/distrilog-company.jks"
