@@ -40,6 +40,10 @@ def postgres():
             status TEXT,total_qty INTEGER,created_by BIGINT,created_at TEXT,
             completed_at TEXT,carrier TEXT,vehicle_plate TEXT,driver_name TEXT,
             scheduled_at TEXT,volume_count INTEGER,notes TEXT,updated_at TEXT)""")
+        for name in ("carrier","vehicle_plate","driver_name","scheduled_at","notes","updated_at"):
+            con.execute(f"ALTER TABLE distrilog.shipments ADD COLUMN IF NOT EXISTS {name} TEXT")
+        con.execute("ALTER TABLE distrilog.shipments ADD COLUMN IF NOT EXISTS volume_count INTEGER")
+        con.execute("ALTER TABLE distrilog.shipments ADD COLUMN IF NOT EXISTS completed_at TEXT")
         con.execute("""INSERT INTO distrilog.users(id,name,role)
             VALUES(88101,'Expedição A','expedicao'),(88102,'Expedição B','expedicao'),
                   (88103,'Gestor','supervisor')
