@@ -6,6 +6,11 @@ on:
       - 'mobile-prototype/**'
       - '.github/workflows/mobile-prototype-apk.yml'
   workflow_dispatch:
+  pull_request:
+    branches: [mobile-native-prototipo-integrado]
+    paths:
+      - 'mobile-prototype/**'
+      - '.github/workflows/mobile-prototype-apk.yml'
 permissions:
   contents: write
 concurrency:
@@ -81,11 +86,12 @@ jobs:
           unzip -l "$apk" | grep -F 'assets/mobile/app.js'
           unzip -l "$apk" | grep -F 'assets/mobile/activities.js'
           unzip -l "$apk" | grep -F 'assets/mobile/outbound.js'
+          unzip -l "$apk" | grep -F 'classes.dex'
           cp "$apk" DISTRILOG-Mobile-PROTOTIPO-INTEGRADO.apk
           sha256sum DISTRILOG-Mobile-PROTOTIPO-INTEGRADO.apk > DISTRILOG-Mobile-PROTOTIPO-INTEGRADO.apk.sha256
       - uses: actions/upload-artifact@v4
         with:
-          name: DISTRILOG-MOBILE-1.4.0-APK
+          name: DISTRILOG-MOBILE-1.5.0-APK
           path: |
             DISTRILOG-Mobile-PROTOTIPO-INTEGRADO.apk
             DISTRILOG-Mobile-PROTOTIPO-INTEGRADO.apk.sha256
@@ -104,12 +110,12 @@ jobs:
             exit 0
           fi
           if [[ "$SIGNED_RELEASE" == "true" ]]; then
-            tag=mobile-prototipo-1.4.0
-            title='DISTRILOG Mobile 1.4.0 - Atualização oficial assinada'
+            tag=mobile-prototipo-1.5.0
+            title='DISTRILOG Mobile 1.5.0 - Atualização oficial assinada'
             notes='Atualização assinada com chave permanente. O app valida SHA-256, versão, ID e assinatura.'
           else
-            tag=mobile-piloto-1.4.0
-            title='DISTRILOG Mobile 1.4.0 - Piloto (assinatura temporária)'
+            tag=mobile-piloto-1.5.0
+            title='DISTRILOG Mobile 1.5.0 - Piloto (assinatura temporária)'
             notes='Piloto com atualizador instalado, mas ainda sem assinatura permanente. A atualização por cima da versão anterior exige a mesma chave de assinatura, que deve ser configurada como GitHub Secret.'
           fi
           apk=DISTRILOG-Mobile-PROTOTIPO-INTEGRADO.apk
